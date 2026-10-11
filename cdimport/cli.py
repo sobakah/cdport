@@ -1,0 +1,82 @@
+"""Command-line entry point."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+from . import app, config, ui
+from .config import __version__
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="cdimport",
+        description="Rip an audio CD to tagged FLAC with cyanrip, revise the tags in a tag editor, "
+                    "embed lyrics with lyrembed and move the album into the music library.",
+    )
+    parser.add_argument("folder", nargs="?", type=Path,
+                        help="continue with an album ripped earlier (tags, lyrics, finish) instead of a disc")
+    parser.add_argument("--version", action="version", version=f"cdimport {__version__}")
+    parser.add_argument("-c", "--config", type=Path, metavar="FILE",
+                        help=f"config file (default: {config.default_config_path()})")
+    parser.add_argument("-w", "--work-dir", metavar="DIR", help="working folder for this run (default: config work_dir, asked on first use)")
+    parser.add_argument("-l", "--library", metavar="DIR", help="music library for this run (default: config library_dir, asked on first use)")
+    parser.add_argument("-d", "--device", metavar="DEV", help="CD drive, e.g. /dev/sr0")
+    parser.add_argument("--editor", metavar="NAME",
+                        help="tag editor from the config's 'editors' (eartag, kid3, picard) or 'skip'")
+    parser.add_argument("--lyrics", choices=("auto", "interactive", "skip"),
+                        help="lyrics mode for this run (default: ask)")
+    parser.add_argument("--install-cyanrip", action="store_true",
+                        help="install cyanrip, or update and rebuild a source build, before starting")
+    parser.add_argument("--color", choices=("auto", "always", "never"), help="override colour handling")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    try:
+        cfg, warnings = config.load_config(args.config)
+    except config.ConfigError as exc:
+        ui.error(str(exc))
+        return 2
+    if args.work_dir:
+        cfg["work_dir"] = args.work_dir
+    if args.library:
+        cfg["library_dir"] = args.library
+    if args.color:
+        cfg["color"] = args.color
+    if args.editor and args.editor != "skip" and args.editor not in cfg["editors"]:
+        parser.error(f"unknown editor '{args.editor}' (known: {', '.join(cfg['editors'])}, skip)")
+
+    ui.setup_color(cfg["color"])
+    for message in warnings:
+        ui.warn(f"Warning: {message}")
+
+    options = app.Options(folder=args.folder, device=args.device or "",
+                          lyrics=args.lyrics or "", editor=args.editor or "",
+                          install_cyanrip=args.install_cyanrip)
+    session = app.new_session(cfg, options, args.config)
+    try:
+        return app.run(session)
+    except app.Quit as stop:
+        _resume_hint(session)
+        return stop.code
+    except KeyboardInterrupt:
+        print()
+        ui.warn("Stopped.")
+        _resume_hint(session)
+        return 130
+
+
+def _resume_hint(session: app.Session) -> None:
+    album = session.album
+    if album and album.next_step() and album.path.exists():
+        ui.info(f"Finished steps are saved. Run cdimport again to continue with {album.folder.name}.")
+
+
+if __name__ == "__main__":  # pragma: no cover
+    sys.exit(main())

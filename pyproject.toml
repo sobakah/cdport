@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cdimport"
+dynamic = ["version"]
+description = "Interactive CLI that rips an audio CD with cyanrip, hands it to a tag editor and embeds lyrics with lyrembed"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+# Only used to check tags after editing; without it that check is skipped.
+dependencies = ["mutagen>=1.45"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "pyflakes>=3"]
+
+[project.scripts]
+cdimport = "cdimport.cli:main"
+cdimport-cover = "cdimport.covertool:main"
+
+[tool.setuptools]
+packages = ["cdimport"]
+
+[tool.setuptools.dynamic]
+version = { attr = "cdimport.config.__version__" }

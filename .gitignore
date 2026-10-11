@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+
+# Personal config in a checkout
+/config.json
+
+# Personal notes kept outside the repo (~/Software/Claude/Projects/cdimport)
+/COMMIT_MSG*.txt
+/RELEASE_NOTES*.md

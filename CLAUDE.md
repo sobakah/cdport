@@ -1,0 +1,256 @@
+# CLAUDE.md
+
+Guidance for Claude Code working in this repository.
+
+## What this is
+
+`cdimport` is an interactive terminal program that turns an audio CD into a
+tagged, lyrics-embedded FLAC album by driving existing tools in sequence:
+
+```
+cdimport
+ ├─ 0. Tools      cyanrip, a tag editor, lyrembed: find them, offer to install
+ ├─ 1. Disc       audio CD in the drive? preview the MusicBrainz match
+ ├─ 2. Rip        cyanrip → FLAC with tags, cover, AccurateRip log
+ ├─ 3. Tags       Ear Tag (or another editor) for manual revision
+ ├─ 4. Lyrics     lyrembed, automatic or interactive
+ └─ 5. Finish     offer to move the album into the music library, summary
+```
+
+It replaces the maintainer's manual workflow: copy WAVs off the CD, convert
+them with `~/Software/Git-Repos/wav-to-flac`, tag them in Ear Tag, then run
+lyrembed. It is glue: it does not rip, tag or fetch lyrics itself.
+
+**Status:** 0.1.0 code written 2026-10-11: steps 1–5 on Linux, and step 0
+installs cyanrip (package manager, or source build on Fedora;
+`install.py`). Not yet tested end to end against a real CD, and the source
+build has not run for real (the dnf step needs the maintainer's sudo).
+Editor and lyrembed are only detected, not installed. `cyanrip.channel`
+("release" default, or "master") and the update check at start are
+built (`install.update_offer`, cache `~/.cache/cdimport/cyanrip-update.json`).
+
+Layout: `cdimport/` package (`app.py` runs the steps, one module per step:
+`disc`, `rip`, `tags`, `lyrics`, `library`; `state`, `tools`, `proc`,
+`config`, `ui`, `cli`, `install`, `cover` (Cover Art Archive/MusicBrainz,
+no UI) and `covertool` (the cover step and the `cdimport-cover` command)),
+`run.py` and `cover.py` launchers, `tests/test_cdimport.py`.
+`config.example.json` is generated from `DEFAULT_CONFIG` and `SETTING_HELP`
+in `config.py`. After adding or changing a setting, update both and
+regenerate it (see `config.write_example`); a test fails until then.
+
+## Decisions made by the maintainer
+
+- **Separate programs that hand off to each other**, not one program that
+  does everything. cdimport calls `cyanrip`, the editor and `lyrembed` as
+  subprocesses; it never imports lyrembed (that keeps it working with a pipx
+  install and keeps the tools independent).
+- **Linux first.** Windows is an afterthought, but do not make choices that
+  rule it out (no fish/bash, no hard-coded `/dev` paths outside the Linux
+  backend).
+- **Python**, like lyrembed (Python 3.10+).
+- **Everything in English**: code, docs, UI text.
+- **Working folder** and **music library** have no defaults (decided
+  2026-10-11): on first use cdimport asks for both, prefilled with `~/Temp`
+  and the desktop's music folder (`XDG_MUSIC_DIR`, `~/Musik` for the
+  maintainer), and saves them as `work_dir`/`library_dir` in the config.
+  `-w`/`-l` override them for one run. Rips land in the working folder
+  first. At the end, *offer* to move the album to the library; never
+  overwrite an existing album.
+- **Rip logs stay out of the library** (maintainer's request, 2026-10-11):
+  after the move, `*.log` goes to `<work_dir>/logs/` (`library.keep_logs_out`,
+  numbered "name (2).log" instead of overwriting). The `.cue` stays with
+  the album.
+- **A running rip is locked** (`<staging>.lock`, flock): another cdimport
+  must not offer to delete it as an interrupted rip. Found 2026-10-11 when
+  a test run did exactly that while the maintainer was ripping.
+- **Lyrics mode** chosen by the user each run: automatic (`lyrembed DIR
+  --auto`) or interactive (`lyrembed DIR`).
+- **Tag editor**: Ear Tag by default, others selectable (Kid3, Picard),
+  configurable as a command template, or skip.
+
+### Installing cyanrip
+
+Never install silently: show the exact command, ask, and use `sudo` only for
+system package managers. A missing optional tool disables exactly its step.
+
+| Platform | Route |
+|---|---|
+| Debian/Ubuntu and derivatives | `apt install cyanrip` |
+| Arch | AUR only (`yay -S cyanrip`) |
+| openSUSE Tumbleweed | `zypper install cyanrip` |
+| Alpine / Void / FreeBSD / NixOS | `apk` / `xbps-install` / `pkg` / `nix` |
+| Distros without a package (**Fedora**) | **user chooses the folder** for the source; clone, build with meson into `~/.local`, remember the folder in the config |
+| Windows (later) | **latest exe from GitHub releases first** (release build; GitHub publishes no nightly or master exe); scoop if available |
+
+Detect the distro from `/etc/os-release` (`ID`, `ID_LIKE`), the platform from
+`sys.platform`. Packaging status was taken from Repology on 2026-10-11
+(`https://repology.org/api/v1/project/cyanrip`); re-check rather than trust it.
+
+Fedora build dependencies (all in Fedora 45, `ffmpeg-devel` in RPM Fusion):
+`meson ninja-build gcc ffmpeg-devel libcdio-paranoia-devel
+libmusicbrainz5-devel libcurl-devel`, optional `qrencode-devel
+libchromaprint-devel`. cdimport checks them with pkg-config against the
+versions in cyanrip's `src/meson.build` and installs only what is missing.
+On 2026-10-11 the maintainer's PC lacked `meson ninja-build
+libmusicbrainz5-devel libcurl-devel` (all in the `fedora` repo, checked with
+dnf repoquery); FFmpeg 9 and libcdio-paranoia headers were installed.
+
+### Update notification for cyanrip
+
+At most once a day, result cached (e.g. `~/.cache/cdimport/`):
+
+- **Self-built:** compare `cyanrip -v` (version and commit) with
+  `git ls-remote` of GitHub (newest `vX.Y.Z` tag, `master` commit); behind
+  → offer to rebuild. Built that way instead of `git fetch` in the source
+  folder, so it also works for a cyanrip built by hand.
+- **Channel mismatch** (a release installed, `channel: master`): offer the
+  master build on every start, not once a day.
+- **Distro package:** the package manager handles updates. Only say when
+  GitHub has a newer release than the installed version.
+- **Windows exe:** compare with GitHub's latest release, offer the download.
+
+## Facts checked on 2026-10-11
+
+Behaviour depends on third-party tools; re-verify before relying on these.
+
+**cyanrip** (github.com/cyanreg/cyanrip)
+- Last release v0.9.3.1 (2024-06-05), but very active: ~95 commits since
+  July 2026, `master` is at `0.9.4-rc3`. As of 2026-10-10 it also writes the
+  MusicBrainz recording ID as `musicbrainz_trackid`, which lyrembed reads.
+- **Drive offset is mandatory for ripping** (0.9.4-rc3, checked
+  2026-10-11): without `-s` cyanrip exits 1 with "Offset is unset! To
+  continue with an offset of 0, run with -s 0!", although `-h` says
+  "default: 0". `-I` works without it. cdimport asks before the first rip
+  (measure with `-f`, enter, or 0 for one rip) and saves `cyanrip.offset`.
+- The maintainer's ASUS SDRW-08D2S-U is "[Purged]" in AccurateRip's drive
+  list (no constant offset across drives of that name), so it must be
+  measured. `cyanrip -f` with the 6-track disc in the drive on 2026-10-11
+  failed: "No track had AccuRip entry, cannot find offset!"; it wrote no
+  files. Needs a disc that is in the AccurateRip database. Later that day,
+  with another disc, it found **+6** (confidence 10), saved as
+  `cyanrip.offset: 6` in the maintainer's config.
+- `cyanrip -f` ends with `Drive offset of +6 found (confidence: N)!`, where
+  N counts the tracks that confirmed it (`src/cyanrip_main.c`). cdimport
+  parses that line and saves the offset without asking from N >= 4
+  (`app.MIN_OFFSET_CONFIDENCE`); below, it asks.
+- Relevant options: `-I` print disc info and MusicBrainz match without
+  ripping; `-R` pick a MusicBrainz release (index or ID); `-D`/`-F` directory
+  and file naming schemes (use `-D` to know the output folder instead of
+  guessing); `-Q` eject on success; `-o flac` (default); `-W` disable
+  automatic deemphasis; `-K` disable ReplayGain; `-N` no MusicBrainz;
+  `-d` device; `-s` drive offset; `-f` find drive offset.
+- Defaults compared with wav-to-flac (`COMPRESSION_LEVEL=8`, bit-exact only):
+  - FLAC compression is fixed at 11 (FFmpeg-specific level, not adjustable).
+  - **Preemphasis:** on discs flagged with it, cyanrip applies a deemphasis
+    filter by default, which changes the audio data. `-W` keeps it as-is.
+    **Decided 2026-10-11: use cyanrip's default** (deemphasis on, config
+    `cyanrip.deemphasis: true`); players ignore the flag, so bit-exact
+    rips of such discs sound too bright. `false` passes `-W`.
+  - ReplayGain tags are written by default (tags only). Make it configurable.
+  - Output is 16-bit for normal CDs (more only with HDCD `-H` or deemphasis).
+- Not packaged for Fedora, RPM Fusion, Terra or Flathub. The repo has a
+  Flatpak manifest (`com.github.cyanreg.cyanrip.yaml`), but the maintainer
+  chose the native source build for Fedora.
+
+**Ear Tag** (Flatpak `app.drey.EarTag`, 1.0.3 installed)
+- Registers `HANDLES_OPEN`, so files can be passed on the command line
+  (`flatpak run app.drey.EarTag FILE...`). Whether it accepts a folder is
+  untested.
+- Its sandbox only has `xdg-download` and `xdg-music`, so files in `~/Temp`
+  are invisible to it. cdimport passes them with `flatpak run
+  --file-forwarding app.drey.EarTag @@ FILES @@` (document portal). Whether
+  Ear Tag can save through the portal is untested.
+- Single-instance GApplication: if a window is already open, the launch
+  command returns at once. Do not wait for the process; ask the user to
+  press Enter when done editing. Afterwards re-read the tags and warn about
+  tracks without artist or title (lyrembed's search needs both).
+
+**Cover art** (checked 2026-10-11)
+- cyanrip embeds only an image the Cover Art Archive marks as *front*. For
+  P1Harmony "때깔 (Killin' It)" (색깔 (Superb) ver., release 5c580fb1-…) the
+  only image is untyped, so cyanrip logged `Album Art: none`; the release
+  group has a front cover from another edition. cdimport (`cover.py`)
+  offers both, or a file, when tracks lack a picture, embeds the 1200 px
+  version as front cover (never replacing a picture) and saves `cover.jpg`
+  unless one exists. Offered whenever cdimport works on an album: after a
+  rip and each time an album is opened again (resumed or `cdimport
+  FOLDER`), at whatever step. Tracks without a picture get the offer;
+  when all have one, keep (default) or change it. Changing swaps only the
+  front-cover picture (type 3) and replaces cover.jpg/.png.
+- Also a separate command, `cdimport-cover FOLDER... [-r] [--release ID]`.
+  Without a release ID in the tags it searches release groups by the album
+  and album-artist tags (again without a trailing "(...)" when nothing is
+  found) and asks which hit is right. MusicBrainz gets at most one request
+  per second and a 503 is retried twice; its User-Agent is
+  `cdimport/<version>` without contact details (never put the maintainer's
+  email there without asking). A 503 seen 2026-10-11 was temporary.
+
+**lyrembed** (`~/Software/Git-Repos/lyrembed`, installed with pipx)
+- 2026-10-11: Fedora moved `/usr/bin/python3` to 3.15 and removed 3.14, so
+  every pipx venv built on 3.14 (lyrembed, keepbest, media-optimizer) fails
+  with "bad interpreter". cdimport crashed on it; now step 0 runs
+  `lyrembed --version` / `cyanrip -v`, reports such a tool with the repair
+  command (`pipx reinstall NAME`), and any tool that cannot start returns
+  127 instead of raising.
+- Exit codes: 0 done/quit, 1 batch failures, 2 unusable input, 130 Ctrl+C.
+- Batch mode (`--auto`) never prompts; `--dry-run`, `--overwrite`,
+  `--color never` exist.
+- Planned in lyrembed, not built yet: "automatic, then prompt only for the
+  tracks it could not decide". When it exists, offer it as a third lyrics
+  mode.
+- **Romanization in batch mode** was added to lyrembed on 2026-10-11 at the
+  maintainer's request (released as lyrembed 1.0.1): `settings.auto_romanize` (default false) and `--romanize` /
+  `--no-romanize` for `--auto`, reusing its bulk-action `auto_romanize`.
+  cdimport asks in automatic mode; Enter passes no flag, so lyrembed's own
+  setting decides. It only asks when `lyrembed --help` lists `--romanize`
+  (`lyrics.can_romanize`); older versions would reject the flag.
+
+**Disc detection (Linux)**
+- udev reports audio discs: `ID_CDROM_MEDIA_TRACK_COUNT_AUDIO` in
+  `udevadm info -q property -n /dev/srN`. Alternative without external
+  commands: the `CDROM_DISC_STATUS` ioctl via `fcntl`.
+- Tested 2026-10-11 on the maintainer's external ASUS SDRW-08D2S-U
+  (`/dev/sr0`, 6-track audio CD): udev and the ioctl both report it as audio.
+- Windows (later): `GetDriveTypeW == DRIVE_CDROM` via `ctypes`; audio CDs
+  show `.cda` files.
+
+## Planned behaviour worth building in from the start
+
+- **Resumable:** a small state file per album records finished steps; an
+  interrupted run offers to continue (e.g. with tagging) next time.
+- **Config file** for working folder, library, editor commands, cyanrip
+  options, default lyrics mode, cyanrip source and build folders.
+- **Ctrl+C** at any step stops cleanly and leaves a resumable state.
+- No disc in the drive → wait, or let the user pick an existing folder to
+  continue with steps 3–5 (covers albums ripped earlier).
+
+## Environment of the maintainer
+
+Fedora 45, fish shell, VS Code. FFmpeg 9 and `cd-paranoia` installed;
+`meson`, `ninja-build`, `libmusicbrainz5-devel`, `libcurl-devel` not yet.
+**Verified 2026-10-11:** v0.9.3.1 does not compile against FFmpeg 9
+(`AVCodec has no member ch_layouts` in `cyanrip_encode.c`); master
+(0.9.4-rc3, b40c1f0) builds. The maintainer's config therefore needs
+`"cyanrip": {"channel": "master"}`. `cyanrip -v` prints
+`cyanrip 0.9.4-rc3 (b40c1f0)`. The repository's `nightly` tag is from
+2020 (261 commits behind master), and GitHub has no nightly release, only
+versioned ones with a Windows exe. So the channel is called "master", not
+"nightly" (maintainer's decision, 2026-10-11).
+
+## Conventions (shared with lyrembed)
+
+- **Errors are reported, never swallowed.** No bare `except: pass`.
+- **Optional dependencies stay optional.** A missing tool or package disables
+  exactly one feature and says so where it is used.
+- **Never install, delete or overwrite without asking.**
+- **Tests never touch the network or real hardware.** Mock subprocess calls,
+  the drive and HTTP.
+- **Type hints and docstrings** on public functions. Docstrings say *why*.
+- **Verify claims, do not assert them.** Run it before stating that it works.
+
+## Notes outside the repo
+
+Commit message drafts and release notes go to
+`~/Software/Claude/Projects/cdimport/` (`COMMIT_MSG_<version>.txt`,
+`RELEASE_NOTES_<version>.md`), never into the repository. Version tags have
+no `v` prefix and three parts (`0.1.0`), like lyrembed.

@@ -1,0 +1,74 @@
+{
+  "_about": [
+    "cdimport does NOT read this file. It lists every setting with its built-in default.",
+    "To change settings, create ~/.config/cdimport/config.json (or pass --config FILE)",
+    "with only the keys you want to change; everything else keeps its default. Example:",
+    "{ \"library_dir\": \"~/Music\", \"cyanrip\": { \"offset\": 6 } }",
+    "Keys starting with an underscore, like this one, are comments and ignored."
+  ],
+  "_work_dir": "Folder where rips land first and where unfinished albums are looked for. Empty: cdimport asks on first use and saves the answer here. -w DIR overrides it for one run.",
+  "work_dir": "",
+  "_library_dir": "Your music library; at the end cdimport offers to move the album there. Empty: cdimport asks on first use (suggesting the desktop's music folder) and saves the answer here. -l DIR overrides it for one run.",
+  "library_dir": "",
+  "_library_layout": "Where an album goes inside the library: {albumartist} comes from the tags, {folder} is the album folder's own name. '/' separates folder levels; the values are made safe as folder names, so 'AC/DC' cannot add a level.",
+  "library_layout": "{albumartist}/{folder}",
+  "_lyrics_mode": "\"ask\" (each run, automatic preselected), \"auto\" (lyrembed --auto: embed confident matches without questions), \"interactive\" (choose for each track) or \"skip\".",
+  "lyrics_mode": "ask",
+  "_editor": "Tag editor to offer by default: a key from \"editors\", or \"skip\".",
+  "editor": "eartag",
+  "_editors": "Tag editors, by key. \"commands\" lists alternatives; the first whose program (and, for 'flatpak run', the app) is installed is used. An argument that is exactly \"{files}\" becomes one argument per track; \"{dir}\" is replaced by the album folder. Flatpak editors get the files via --file-forwarding and @@ ... @@, because their sandbox may not see the working folder. Add your own entries here; the built-in ones stay.",
+  "editors": {
+    "eartag": {
+      "name": "Ear Tag",
+      "commands": [
+        ["flatpak", "run", "--file-forwarding", "app.drey.EarTag", "@@", "{files}", "@@"]
+      ]
+    },
+    "kid3": {
+      "name": "Kid3",
+      "commands": [
+        ["kid3", "{dir}"],
+        ["flatpak", "run", "--file-forwarding", "org.kde.kid3", "@@", "{dir}", "@@"]
+      ]
+    },
+    "picard": {
+      "name": "MusicBrainz Picard",
+      "commands": [
+        ["picard", "{files}"],
+        ["flatpak", "run", "--file-forwarding", "org.musicbrainz.Picard", "@@", "{files}", "@@"]
+      ]
+    }
+  },
+  "cyanrip": {
+    "_channel": "\"release\" installs the latest release (a distribution package where there is one, else a source build of the newest vX.Y.Z tag). \"master\" builds the master branch from source into ~/.local, also on systems with a package; use it when the release does not build against your FFmpeg. At start cdimport offers to update an outdated cyanrip, and to switch a release to master.",
+    "channel": "release",
+    "_path": "Path to the cyanrip program. Empty: search PATH, then ~/.local/bin (with channel master ~/.local/bin first, where that build goes).",
+    "path": "",
+    "_device": "CD drive, e.g. /dev/sr0. Empty: the drive cdimport finds an audio CD in.",
+    "device": "",
+    "_offset": "Drive read offset in samples (-s). cyanrip refuses to rip without one, so with null cdimport asks before the first rip: measure it with cyanrip -f (needs a disc in the AccurateRip database; saved without asking when at least 4 tracks confirm it), type it in, or use 0 for one rip.",
+    "offset": null,
+    "_deemphasis": "true (cyanrip's default) undoes preemphasis on discs flagged with it, since players ignore the flag. false passes -W: bit-exact, but such discs then sound too bright.",
+    "deemphasis": true,
+    "_replaygain": "Write ReplayGain tags (tags only, the audio is unchanged). false passes -K.",
+    "replaygain": true,
+    "_eject": "Eject the disc after a successful rip (-Q).",
+    "eject": true,
+    "_dir_scheme": "Album folder naming scheme (-D), relative to the working folder; see cyanrip's README. Empty: cyanrip's own default, which adds \" [FLAC]\".",
+    "dir_scheme": "{album}{if #releasecomment# > #0# (|releasecomment|)}",
+    "_extra_args": "More cyanrip options, one list element per argument, e.g. [\"-H\"].",
+    "extra_args": []
+  },
+  "lyrembed": {
+    "_path": "Path to the lyrembed program. Empty: search PATH, then ~/.local/bin.",
+    "path": "",
+    "_extra_args": "More lyrembed options, e.g. [\"--color\", \"never\"].",
+    "extra_args": []
+  },
+  "_cyanrip_source_dir": "Source checkout of a cyanrip built by cdimport (Fedora). Set by the installer; prefilled when rebuilding.",
+  "cyanrip_source_dir": "",
+  "_cyanrip_build_dir": "Meson build folder of that source build. Set by the installer.",
+  "cyanrip_build_dir": "",
+  "_color": "\"auto\", \"always\" or \"never\". auto honours NO_COLOR and non-terminal output.",
+  "color": "auto"
+}
