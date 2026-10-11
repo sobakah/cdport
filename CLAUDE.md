@@ -28,6 +28,9 @@ build has not run for real (the dnf step needs the maintainer's sudo).
 Editor and lyrembed are only detected, not installed. `cyanrip.channel`
 ("release" default, or "master") and the update check at start are
 built (`install.update_offer`, cache `~/.cache/cdimport/cyanrip-update.json`).
+0.2.0 (2026-10-11): asks for another run after the summary, links the
+embedded cover and MusicBrainz search hits, offers an interactive lyrembed
+check after automatic lyrics.
 
 Layout: `cdimport/` package (`app.py` runs the steps, one module per step:
 `disc`, `rip`, `tags`, `lyrics`, `library`; `state`, `tools`, `proc`,
