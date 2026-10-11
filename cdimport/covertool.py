@@ -32,6 +32,7 @@ def offer(folder: Path, release_id: str = "") -> None:
         return
     replace = not without
     if replace:
+        _show_preview(flac)
         answer = ui.choose(f"Cover ({present} in every track)", [
             ("k", "keep it"),
             ("c", "change it (replaces the embedded front cover and cover.jpg/.png)"),
@@ -66,6 +67,17 @@ def offer(folder: Path, release_id: str = "") -> None:
         return
 
 
+def _show_preview(flac: list[Path]) -> None:
+    """A link to the embedded cover, like the one each downloadable cover gets."""
+    try:
+        path = cover.preview(flac)
+    except OSError as exc:
+        ui.warn(f"Cannot show the current cover: {exc}")
+        return
+    if path:
+        ui.info(f"Current cover: {path.as_uri()}")
+
+
 def _lookup(release_id: str, first_tags: dict[str, str]) -> list[cover.Candidate]:
     """Covers for the release, or for the album the user picks from a search."""
     try:
@@ -82,7 +94,8 @@ def _lookup(release_id: str, first_tags: dict[str, str]) -> list[cover.Candidate
         if not albums:
             ui.dim("MusicBrainz found no such album.")
             return []
-        options = [(str(i), label) for i, (_, label) in enumerate(albums, 1)] + [("n", "none of these")]
+        options = [(str(i), f"{label}\n      {cover.group_page(group)}")
+                   for i, (group, label) in enumerate(albums, 1)] + [("n", "none of these")]
         answer = ui.choose("Which album is it", options, default="1")
         if answer == "n":
             return []

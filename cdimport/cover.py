@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -19,7 +20,8 @@ from pathlib import Path
 
 from .config import __version__
 
-MB_URL = "https://musicbrainz.org/ws/2"
+MB_SITE = "https://musicbrainz.org"
+MB_URL = f"{MB_SITE}/ws/2"
 CAA_URL = "https://coverartarchive.org"
 USER_AGENT = f"cdimport/{__version__}"
 # Ten tracks each carry a copy, so the original (often several MB) is too big.
@@ -202,6 +204,35 @@ def current(files: list[Path]) -> str:
                 kind = picture.mime.split("/")[-1].upper() if picture.mime else "picture"
                 return f"{kind}, {len(picture.data) // 1024} KB"
     return "no front cover (other pictures only)"
+
+
+def group_page(group_id: str) -> str:
+    """The album's MusicBrainz page, so a search hit can be checked before picking it."""
+    return f"{MB_SITE}/release-group/{group_id}"
+
+
+def preview(files: list[Path]) -> Path | None:
+    """Write the first embedded front cover to a temporary file and return it.
+
+    The keep-or-change question shows it as a link, so the user can look at
+    the cover they would keep. cover.jpg may be missing or differ from what
+    the tracks carry (a tag editor can change one without the other).
+    """
+    from mutagen.flac import FLAC
+
+    for f in files:
+        if f.suffix.lower() != ".flac":
+            continue
+        for picture in FLAC(f).pictures:
+            if picture.type == FRONT_COVER:
+                try:
+                    _, ext = image_type(picture.data)
+                except CoverError:
+                    return None
+                path = Path(tempfile.gettempdir()) / f"cdimport-cover-preview{ext}"
+                path.write_bytes(picture.data)
+                return path
+    return None
 
 
 def embed(files: list[Path], data: bytes, replace: bool = False) -> int:

@@ -82,7 +82,8 @@ Art Archive marks as front cover), cdimport offers what the archive has for
 the release or another edition of the album, or a picture file of your own.
 It embeds the choice in every FLAC without a picture and saves it as
 `cover.jpg`. When every track has a cover, it asks whether to keep it
-(Enter) or change it.
+(Enter) or change it, with a link to the embedded cover to look at. Every
+offered cover, and every album a MusicBrainz search finds, comes with a link.
 
 Every album folder in the working folder gets a
 small `.cdimport.json` recording the finished steps. When a run is stopped
@@ -94,12 +95,16 @@ At the end cdimport offers to move the album to
 an existing folder. The rip log (`*.log`, cyanrip's AccurateRip record) does
 not go into the library: it is kept in `logs/` in the working folder, under a
 new name if an older log has the same one. The cue sheet stays with the
-album.
+album. After the summary cdimport asks whether to start another run (next
+disc or album); Enter ends it.
 
 In automatic lyrics mode cdimport asks whether to romanize the lyrics
 (Hangul, Kana, Hanzi to Latin letters). Enter keeps lyrembed's own setting
 (`settings.auto_romanize`); `y`/`n` pass `--romanize`/`--no-romanize`. This
-needs lyrembed 1.0.1 or newer; older versions are not asked.
+needs lyrembed 1.0.1 or newer; older versions are not asked. After an
+automatic run cdimport offers to check the result: `l` opens the album in
+lyrembed's interactive mode, which shows every track, including the ones that
+just got lyrics. Enter continues with the next step.
 
 ## Cover art on its own: cdimport-cover
 

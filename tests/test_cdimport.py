@@ -415,13 +415,24 @@ def run_cli(tmp_path, monkeypatch, argv, *, lyrembed=None, editor=None):
 
 
 def test_existing_folder_to_library(tmp_path, monkeypatch, album_dir):
-    # Tags: continue; Finish: move (default).
-    answers = feed_input(monkeypatch, ["c", ""])
+    # Tags: continue; Finish: move (default); no other run (default).
+    answers = feed_input(monkeypatch, ["c", "", ""])
     code = run_cli(tmp_path, monkeypatch, [str(album_dir), "--lyrics", "skip"])
     assert code == 0 and answers == []
     moved = tmp_path / "lib" / "IU" / "Album"
     assert (moved / "01.flac").exists()
     assert not (moved / STATE_FILE_NAME).exists()
+
+
+def test_another_run_after_the_summary(tmp_path, monkeypatch, album_dir, capsys):
+    # First run: the folder; then another run, which offers nothing and asks
+    # for an album folder (cyanrip is missing); empty goes back and ends.
+    answers = feed_input(monkeypatch, ["c", "k", "y"])
+    monkeypatch.setattr(app.ui, "ask_path", lambda prompt, prefill="": "")
+    assert run_cli(tmp_path, monkeypatch, [str(album_dir), "--lyrics", "skip"]) == 0
+    assert answers == []
+    out = capsys.readouterr().out
+    assert out.count("Summary") == 1 and "only an album ripped earlier" in out
 
 
 def test_auto_lyrics_failure_falls_back_to_interactive(tmp_path, monkeypatch, album_dir):
@@ -432,7 +443,7 @@ def test_auto_lyrics_failure_falls_back_to_interactive(tmp_path, monkeypatch, al
         return lyrics.EXIT_BATCH_FAILURES if mode == "auto" else lyrics.EXIT_OK
     monkeypatch.setattr(app.lyrics, "run_lyrembed", fake_run)
     # Tags: continue; lyrics: auto; then: interactive; finish: keep.
-    feed_input(monkeypatch, ["c", "a", "i", "k"])
+    feed_input(monkeypatch, ["c", "a", "i", "k", ""])
     code = run_cli(tmp_path, monkeypatch, [str(album_dir)], lyrembed="lyrembed")
     assert code == 0
     assert modes == ["auto", "interactive"]
@@ -452,7 +463,7 @@ def test_ctrl_c_leaves_resumable_state(tmp_path, monkeypatch, album_dir, capsys)
 
     # Next run without a folder offers the unfinished album first.
     monkeypatch.setattr(app.lyrics, "run_lyrembed", lambda *a: lyrics.EXIT_OK)
-    feed_input(monkeypatch, ["1", "k"])
+    feed_input(monkeypatch, ["1", "", "k", ""])  # resume; lyrics: continue; keep; no other run
     assert run_cli(tmp_path, monkeypatch, ["--lyrics", "auto"], lyrembed="lyrembed") == 0
     assert not (album_dir / STATE_FILE_NAME).exists()
 
@@ -468,7 +479,7 @@ def test_editor_is_opened_and_tags_rechecked(tmp_path, monkeypatch, album_dir):
     monkeypatch.setattr(app.tags.proc, "launch", fake_launch)
     # Tags: open (default), Enter when done, continue, refuse "continue anyway",
     # continue again and accept; finish: keep.
-    feed_input(monkeypatch, ["", "", "c", "n", "c", "y", "k"])
+    feed_input(monkeypatch, ["", "", "c", "n", "c", "y", "k", ""])
     code = run_cli(tmp_path, monkeypatch, [str(album_dir), "--lyrics", "skip"], editor=editor)
     assert code == 0
     assert launched_with == [["eartag", str(album_dir / "01.flac"), str(album_dir / "02.flac")]]
@@ -1127,6 +1138,19 @@ def test_offer_cover_embeds_the_choice_once(tmp_path, monkeypatch):
     assert answers == [] and len(FLAC(folder / "01.flac").pictures) == 1
 
 
+def test_keep_or_change_links_the_embedded_cover(tmp_path, monkeypatch, capsys):
+    folder = tmp_path / "Album"
+    folder.mkdir()
+    make_flac(folder / "01.flac")
+    cover.embed(tags.audio_files(folder), JPEG)
+    monkeypatch.setattr(cover.tempfile, "gettempdir", lambda: str(tmp_path))
+    feed_input(monkeypatch, [""])  # keep
+    covertool.offer(folder)
+    preview = tmp_path / "cdimport-cover-preview.jpg"
+    assert preview.read_bytes() == JPEG
+    assert f"Current cover: {preview.as_uri()}" in capsys.readouterr().out
+
+
 def test_cover_from_own_file_and_bad_files(tmp_path, monkeypatch):
     folder = tmp_path / "Album"
     folder.mkdir()
@@ -1145,7 +1169,7 @@ def test_cover_from_own_file_and_bad_files(tmp_path, monkeypatch):
 
 
 # --- cdimport-cover ----------------------------------------------------------
-def test_search_by_tags_when_there_is_no_release_id(tmp_path, monkeypatch):
+def test_search_by_tags_when_there_is_no_release_id(tmp_path, monkeypatch, capsys):
     folder = tmp_path / "Floral Shoppe"
     folder.mkdir()
     make_flac(folder / "01.flac", album='Floral "Shoppe"', albumartist="Macintosh Plus")
@@ -1165,6 +1189,7 @@ def test_search_by_tags_when_there_is_no_release_id(tmp_path, monkeypatch):
     monkeypatch.setattr(cover, "http_get", http_get)
     feed_input(monkeypatch, ["", ""])  # which album: the first; cover: the first
     covertool.offer(folder)
+    assert "https://musicbrainz.org/release-group/g1" in capsys.readouterr().out
     import urllib.parse
     query = urllib.parse.unquote(asked[0].split("query=")[1].split("&")[0])
     assert query == 'releasegroup:"Floral \\"Shoppe\\"" AND artist:"Macintosh Plus"'
@@ -1297,7 +1322,7 @@ def test_log_is_kept_in_the_working_folder_not_the_library(tmp_path, monkeypatch
     (album_dir / "Album.cue").write_text("FILE ...")
     (tmp_path / "work" / "logs").mkdir()
     (tmp_path / "work" / "logs" / "Album.log").write_text("an older rip")
-    feed_input(monkeypatch, ["c", ""])  # tags: continue; finish: move
+    feed_input(monkeypatch, ["c", "", ""])  # tags: continue; finish: move; no other run
     assert run_cli(tmp_path, monkeypatch, [str(album_dir), "--lyrics", "skip"]) == 0
     moved = tmp_path / "lib" / "IU" / "Album"
     assert sorted(p.name for p in moved.iterdir()) == ["01.flac", "Album.cue"]
@@ -1334,7 +1359,7 @@ def test_automatic_lyrics_asks_about_romanization(tmp_path, monkeypatch, album_d
                         lambda lyr, cfg, folder, mode, romanize=None: passed.append(romanize) or lyrics.EXIT_OK)
     album = state.load(album_dir)
     album.mark("tags")
-    feed_input(monkeypatch, [answer])  # Enter = lyrembed's own setting
+    feed_input(monkeypatch, [answer, ""])  # Enter = lyrembed's own setting; then continue
     assert app.lyrics_step(session, album)
     assert passed == [expected]
 
@@ -1347,5 +1372,24 @@ def test_old_lyrembed_is_not_asked_and_gets_no_flag(tmp_path, monkeypatch, album
                         lambda lyr, cfg, folder, mode, romanize=None: passed.append(romanize) or lyrics.EXIT_OK)
     album = state.load(album_dir)
     album.mark("tags")
-    feed_input(monkeypatch, [])
+    feed_input(monkeypatch, [""])  # lyrics embedded: continue
     assert app.lyrics_step(session, album) and passed == [None]
+
+
+@pytest.mark.parametrize("batch_code, answers", [
+    (lyrics.EXIT_OK, ["l"]),                      # all embedded; check them
+    (lyrics.EXIT_BATCH_FAILURES, ["c", "l"]),     # some undecided; continue; check
+])
+def test_automatic_lyrics_can_be_checked_interactively(tmp_path, monkeypatch, album_dir, batch_code, answers):
+    session = app.new_session(default_cfg(), app.Options(lyrics="auto"), tmp_path / "config.json")
+    session.lyrembed = "lyrembed"
+    codes = [batch_code, lyrics.EXIT_OK]
+    modes = []
+    monkeypatch.setattr(app.lyrics, "run_lyrembed",
+                        lambda lyr, cfg, folder, mode, romanize=None: modes.append(mode) or codes.pop(0))
+    album = state.load(album_dir)
+    album.mark("tags")
+    left = feed_input(monkeypatch, answers)
+    assert app.lyrics_step(session, album)
+    assert left == [] and modes == ["auto", "interactive"]
+    assert "lyrics" in state.load(album_dir).done

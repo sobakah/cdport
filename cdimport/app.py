@@ -62,17 +62,25 @@ def run(session: Session) -> int:
     """The whole program after argument parsing; returns the exit code."""
     ask_missing_folders(session)
     check_tools(session)
-    offer_staging_cleanup(session)
 
-    if session.options.folder:
-        album = open_folder(session.options.folder)
-    else:
-        album = offer_resume(session) or disc_and_rip(session)
-    if album is None:
-        return 1 if session.failed else 0
-    session.album = album
-    continue_album(session, album)
-    summary(session, album)
+    folder = session.options.folder
+    while True:
+        offer_staging_cleanup(session)
+        session.album = None
+        session.logs = []
+        if folder:
+            album = open_folder(folder)
+            folder = None  # the folder from the command line is for the first run only
+        else:
+            album = offer_resume(session) or disc_and_rip(session)
+        if album is None:
+            break
+        session.album = album
+        continue_album(session, album)
+        summary(session, album)
+        print()
+        if not ui.confirm("Start another run (next disc or album)?", default=False):
+            break
     return 1 if session.failed else 0
 
 
@@ -642,6 +650,8 @@ def lyrics_step(session: Session, album: AlbumState) -> bool:
         code = lyrics.run_lyrembed(session.lyrembed, session.cfg, album.folder, mode, romanize)
         if code == lyrics.EXIT_OK:
             album.mark("lyrics")
+            if mode == "auto":
+                offer_lyrics_check(session, album)
             return True
         if code == lyrics.EXIT_INTERRUPTED:
             raise KeyboardInterrupt
@@ -651,6 +661,7 @@ def lyrics_step(session: Session, album: AlbumState) -> bool:
                                         ("c", "continue without them")], default="i")
             if answer == "c":
                 album.mark("lyrics")
+                offer_lyrics_check(session, album)
                 return True
             mode = "interactive"
             continue
@@ -664,6 +675,28 @@ def lyrics_step(session: Session, album: AlbumState) -> bool:
         elif answer == "q":
             session.failed = True
             return False
+
+
+def offer_lyrics_check(session: Session, album: AlbumState) -> None:
+    """After automatic mode, let the user look over what it embedded.
+
+    Interactive lyrembed shows every track, including those that now have
+    lyrics, so it doubles as the review. The step is already marked done:
+    the lyrics are embedded whatever happens in the check.
+    """
+    answer = ui.choose("Lyrics embedded", [
+        ("c", "continue"),
+        ("l", "check them: open the album in lyrembed (interactive)"),
+    ], default="c")
+    if answer == "c":
+        return
+    cmd = lyrics.lyrembed_command(session.lyrembed, session.cfg, album.folder, "interactive")
+    ui.dim(proc.format_command(cmd))
+    code = lyrics.run_lyrembed(session.lyrembed, session.cfg, album.folder, "interactive")
+    if code == lyrics.EXIT_INTERRUPTED:
+        raise KeyboardInterrupt
+    if code != lyrics.EXIT_OK:
+        ui.warn(f"lyrembed ended with exit code {code}; the lyrics embedded before stay.")
 
 
 def ask_romanize(session: Session) -> bool | None:

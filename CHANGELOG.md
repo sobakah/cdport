@@ -3,6 +3,19 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+* **Another run:** after the summary cdimport asks whether to start another
+  run (next disc or album) instead of ending.
+* **Check automatic lyrics:** after `lyrembed --auto`, cdimport offers to
+  open the album in interactive lyrembed to look over what was embedded.
+* **Cover links everywhere:** the keep-or-change question links the
+  embedded cover (written to a temporary preview file), and each album in a
+  MusicBrainz search links its MusicBrainz page. Offered covers already had
+  links.
+
 ## [0.1.0] — 2026-10-11
 
 First pre-release. Not yet tested end to end against a real CD from start
