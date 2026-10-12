@@ -11,7 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from cdimport import app, cli, config, cover, covertool, disc, install, library, lyrics, proc, rip, state, tags, tools, ui  # noqa: E402
+from cdimport import app, cli, config, cover, covertool, disc, install, library, lyrics, musicbrainz, proc, rip, state, tags, tools, ui  # noqa: E402
 from cdimport.config import STAGING_PREFIX, STATE_FILE_NAME  # noqa: E402
 
 
@@ -805,7 +805,7 @@ def test_rip_error_repeats_cyanrips_reason(tmp_path, monkeypatch):
 def test_failed_rip_offers_to_try_again(tmp_path, monkeypatch):
     session = offset_session(tmp_path, offset=6)
     session.work_dir = tmp_path / "work"
-    monkeypatch.setattr(app.rip, "preview", lambda *a, **k: (0, []))
+    monkeypatch.setattr(app.rip, "preview", lambda *a, **k: rip.Preview(0, []))
     attempts = []
 
     def fake_rip(cyanrip, cfg, work_dir, **kwargs):
@@ -820,6 +820,127 @@ def test_failed_rip_offers_to_try_again(tmp_path, monkeypatch):
     album = app.preview_and_rip(session, "/dev/sr0")
     assert album is not None and album.folder == session.work_dir / "Album"
     assert len(attempts) == 2 and not session.failed
+
+
+# --- discs MusicBrainz does not know ------------------------------------------
+# cyanrip 0.9.4-rc3 (b40c1f0), -I for a disc without a MusicBrainz entry.
+UNKNOWN_DISC = [
+    "Unable to find release info for this CD, and metadata hasn't been manually added!",
+    "Please help improve the MusicBrainz DB by submitting the disc info via the following URL:",
+    "https://musicbrainz.org/cdtoc/attach?toc=1+6+150000+150+20000+40000+60000+80000+100000&tracks=6&id=abc-",
+    "\u2588\u2588\u2580\u2580 QR code",
+    "To continue add metadata via -a or -t, or ignore via -N!",
+]
+
+
+def test_typed_tags_become_escaped_a_and_t_options():
+    tags = rip.ManualTags("Killin' It: Vol=1", "P1Harmony", "2024", {1: "A:B", 2: ""})
+    assert rip.tag_args(tags) == ["-a", "album=Killin\\' It\\: Vol\\=1:album_artist=P1Harmony:date=2024",
+                                  "-t", "1=title=A\\:B"]
+    assert rip.tag_args(rip.ManualTags(album="X")) == ["-a", "album=X"]
+    args = rip.cyanrip_args(default_cfg(), tags=tags, info_only=True)
+    assert args[args.index("-a") + 1].startswith("album=") and "-I" in args
+
+
+def test_preview_finds_the_submission_link_and_track_numbers(monkeypatch):
+    calls = []
+    monkeypatch.setattr(rip.proc, "run_tail",
+                        lambda cmd, cwd=None, lines=3, keep_bytes=8192: calls.append(cmd) or (1, UNKNOWN_DISC))
+    shown = rip.preview("cyanrip", default_cfg())
+    assert shown.needs_tags and shown.disc_unknown and shown.tracks == (1, 6)
+    assert shown.submission_url == UNKNOWN_DISC[2]
+    # A release picked by ID: tags are there, the disc ID still is not.
+    forced = rip.parse_preview(0, ["The disc isn't on MusicBrainz yet, consider attaching it to the release "
+                                   "via the following URL.", "MusicBrainz URL:", UNKNOWN_DISC[2]])
+    assert forced.disc_unknown and not forced.needs_tags
+    known = rip.parse_preview(0, ["MusicBrainz URL:", UNKNOWN_DISC[2], "Album: X"])
+    assert not known.disc_unknown and not known.needs_tags
+
+
+def test_parse_release_answer():
+    mbid = "5c580fb1-7c31-4785-afde-68098dc5caa2"
+    assert musicbrainz.parse_release("2") == "2"
+    assert musicbrainz.parse_release(f"https://musicbrainz.org/release/{mbid.upper()}/discids") == mbid
+    assert musicbrainz.parse_release(mbid) == mbid
+    assert musicbrainz.parse_release("Killin It") == ""
+
+
+def test_search_releases_labels_and_track_counts(monkeypatch):
+    asked = []
+
+    def http_get(url, timeout=20):
+        asked.append(url)
+        if "Deluxe" in url:
+            return b'{"releases": []}'
+        return json.dumps({"releases": [
+            {"id": "r1", "title": "Album", "date": "2024-01-02", "country": "KR", "disambiguation": "CD ver.",
+             "artist-credit": [{"name": "A", "joinphrase": " & "}, {"name": "B"}],
+             "media": [{"format": "CD", "track-count": 6}, {"format": "CD", "track-count": 1}]}]}).encode()
+    monkeypatch.setattr(cover, "http_get", http_get)
+    found = musicbrainz.search_releases("Album (Deluxe)", "A")
+    assert len(asked) == 2  # again without the edition note
+    assert found[0].label == "Album - A & B (2024, KR, CD ver.) · CD 6 tracks + CD 1 track"
+    assert found[0].track_counts == [6, 1] and found[0].page == "https://musicbrainz.org/release/r1"
+
+
+def unknown_disc_session(tmp_path, monkeypatch):
+    """A session whose disc MusicBrainz does not know until a release or tags are given."""
+    session = offset_session(tmp_path, offset=6)
+    session.work_dir = tmp_path / "work"
+    previews = []
+
+    def preview(cyanrip, cfg, **kwargs):
+        previews.append(kwargs)
+        if kwargs["release"] or kwargs["tags"] or kwargs["no_musicbrainz"]:
+            return rip.parse_preview(0, ["The disc isn't on MusicBrainz yet, consider attaching it.",
+                                         UNKNOWN_DISC[2]])
+        return rip.parse_preview(1, UNKNOWN_DISC)
+    ripped = []
+
+    def fake_rip(cyanrip, cfg, work_dir, **kwargs):
+        ripped.append(kwargs)
+        folder = work_dir / "Album"
+        folder.mkdir(parents=True)
+        return folder, None
+    monkeypatch.setattr(app.rip, "preview", preview)
+    monkeypatch.setattr(app.rip, "rip", fake_rip)
+    return session, previews, ripped
+
+
+def test_unknown_disc_search_picks_the_release(tmp_path, monkeypatch, capsys):
+    session, previews, ripped = unknown_disc_session(tmp_path, monkeypatch)
+    monkeypatch.setattr(musicbrainz, "search_releases", lambda album, artist: [
+        musicbrainz.Release("r5", "Other - X · CD 10 tracks", [10]),
+        musicbrainz.Release("r6", "Album - X · CD 6 tracks", [6])])
+    # No "r" while cyanrip needs tags; Enter searches. Album, artist, the 2nd hit, then rip.
+    answers = feed_input(monkeypatch, ["r", "", "Album", "X", "2", "r"])
+    album = app.preview_and_rip(session, "/dev/sr0")
+    assert answers == [] and album is not None
+    assert ripped[0]["release"] == "r6" and ripped[0]["tags"] is None
+    out = capsys.readouterr().out
+    assert "Please type one of" in out  # "r" was not offered
+    assert "same track count as the disc\n      https://musicbrainz.org/release/r6" in out
+    assert UNKNOWN_DISC[2] in out and "attach the disc ID" in out
+
+
+def test_unknown_disc_with_typed_tags(tmp_path, monkeypatch):
+    session, previews, ripped = unknown_disc_session(tmp_path, monkeypatch)
+    # Tags: album, artist, no date, six titles (the third left empty); then rip.
+    answers = feed_input(monkeypatch, ["t", "Album", "X", "", "One", "Two", "", "Four", "Five", "Six", "r"])
+    assert app.preview_and_rip(session, "/dev/sr0") is not None and answers == []
+    tags = ripped[0]["tags"]
+    assert (tags.album, tags.artist, tags.date) == ("Album", "X", "")
+    assert tags.titles == {1: "One", 2: "Two", 4: "Four", 5: "Five", 6: "Six"}
+    assert previews[-1]["tags"] is tags
+
+
+def test_release_by_link_and_bad_answers(tmp_path, monkeypatch, capsys):
+    session, previews, ripped = unknown_disc_session(tmp_path, monkeypatch)
+    link = "https://musicbrainz.org/release/5c580fb1-7c31-4785-afde-68098dc5caa2"
+    feed_input(monkeypatch, ["m", "nonsense", "m", link, "r"])
+    app.preview_and_rip(session, "/dev/sr0")
+    assert ripped[0]["release"] == "5c580fb1-7c31-4785-afde-68098dc5caa2"
+    assert "neither a list number" in capsys.readouterr().out
 
 
 # --- release / master --------------------------------------------------------

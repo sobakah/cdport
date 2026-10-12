@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import shutil
 from collections.abc import Iterator
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -19,8 +21,40 @@ class RipError(Exception):
     """The rip failed or its result cannot be found."""
 
 
+@dataclass
+class ManualTags:
+    """Tags typed in by the user, for a disc MusicBrainz does not know.
+
+    cyanrip refuses to rip such a disc without them (or -N); it names the
+    album folder and the files from them.
+    """
+    album: str = ""
+    artist: str = ""
+    date: str = ""
+    titles: dict[int, str] = field(default_factory=dict)  # track number -> title
+
+
+def _escape(value: str) -> str:
+    # cyanrip parses -a/-t with FFmpeg's av_dict_parse_string ("key=value:..."),
+    # and its own check for keyless entries understands backslash escapes but
+    # not quotes, so a backslash is the only safe way to keep ":" in a title.
+    return re.sub(r"([\\':=])", r"\\\1", value)
+
+
+def tag_args(tags: ManualTags) -> list[str]:
+    """cyanrip's -a (album) and -t (per track) options for typed-in tags."""
+    album = [f"{key}={_escape(value)}" for key, value in
+             (("album", tags.album), ("album_artist", tags.artist), ("date", tags.date)) if value]
+    args = ["-a", ":".join(album)] if album else []
+    for number, title in sorted(tags.titles.items()):
+        if title:
+            args += ["-t", f"{number}=title={_escape(title)}"]
+    return args
+
+
 def cyanrip_args(cfg: dict[str, Any], *, device: str = "", release: str = "",
-                 no_musicbrainz: bool = False, info_only: bool = False) -> list[str]:
+                 no_musicbrainz: bool = False, info_only: bool = False,
+                 tags: ManualTags | None = None) -> list[str]:
     """cyanrip options from the config and this run's choices (without the program)."""
     opts = cfg["cyanrip"]
     args: list[str] = []
@@ -33,6 +67,8 @@ def cyanrip_args(cfg: dict[str, Any], *, device: str = "", release: str = "",
         args.append("-N")
     elif release:
         args += ["-R", release]
+    if tags:
+        args += tag_args(tags)
     if info_only:
         args.append("-I")
     else:
@@ -48,13 +84,46 @@ def cyanrip_args(cfg: dict[str, Any], *, device: str = "", release: str = "",
     return args
 
 
+@dataclass
+class Preview:
+    """What cyanrip -I said about the disc."""
+    code: int
+    tail: list[str]                  # the last lines, for an error message
+    submission_url: str = ""         # MusicBrainz page to add this disc's ID
+    disc_unknown: bool = False       # MusicBrainz has no release with this disc ID
+    needs_tags: bool = False         # cyanrip will not rip without -a/-t, -R or -N
+    tracks: tuple[int, int] | None = None  # first and last track number
+
+
+# cyanrip's messages (src/musicbrainz.c, master b40c1f0). Matching its text
+# is fragile, so missing them only hides the hints; the rip still works.
+_SUBMISSION_URL = re.compile(r"https://musicbrainz\.org/cdtoc/attach\?\S+")
+_TOC = re.compile(r"[?&]toc=(\d+)\+(\d+)\+")
+_DISC_UNKNOWN = ("Unable to find", "matching stub", "isn't on MusicBrainz yet")
+_NEEDS_TAGS = "add metadata via -a or -t"
+
+
 def preview(cyanrip: str, cfg: dict[str, Any], *, device: str = "", release: str = "",
-            no_musicbrainz: bool = False) -> tuple[int, list[str]]:
-    """Show the disc and its MusicBrainz match (cyanrip -I) on the terminal;
-    returns the exit code and cyanrip's last lines."""
+            no_musicbrainz: bool = False, tags: ManualTags | None = None) -> Preview:
+    """Show the disc and its MusicBrainz match (cyanrip -I) on the terminal,
+    and pick out what cdimport needs from it."""
     cmd = [cyanrip] + cyanrip_args(cfg, device=device, release=release,
-                                   no_musicbrainz=no_musicbrainz, info_only=True)
-    return proc.run_tail(cmd)
+                                   no_musicbrainz=no_musicbrainz, info_only=True, tags=tags)
+    # The submission link comes early, followed by the track list and a QR
+    # code, so keep all of cyanrip's output, not only the end.
+    code, lines = proc.run_tail(cmd, lines=100_000, keep_bytes=1 << 20)
+    return parse_preview(code, lines)
+
+
+def parse_preview(code: int, lines: list[str]) -> Preview:
+    text = "\n".join(lines)
+    url = _SUBMISSION_URL.search(text)
+    toc = _TOC.search(url.group(0)) if url else None
+    return Preview(code, lines[-3:],
+                   submission_url=url.group(0) if url else "",
+                   disc_unknown=any(phrase in text for phrase in _DISC_UNKNOWN),
+                   needs_tags=_NEEDS_TAGS in text,
+                   tracks=(int(toc.group(1)), int(toc.group(2))) if toc else None)
 
 
 def explain(lines: list[str]) -> str:
@@ -169,14 +238,16 @@ def remove_empty_dirs(root: Path) -> bool:
 
 
 def rip(cyanrip: str, cfg: dict[str, Any], work_dir: Path, *, device: str = "",
-        release: str = "", no_musicbrainz: bool = False) -> tuple[Path, Path | None]:
+        release: str = "", no_musicbrainz: bool = False,
+        tags: ManualTags | None = None) -> tuple[Path, Path | None]:
     """Rip the disc into the working folder.
 
     Returns the album folder and, when cyanrip left other files next to it,
     the staging folder that still holds them.
     """
     staging = new_staging_dir(work_dir)
-    cmd = [cyanrip] + cyanrip_args(cfg, device=device, release=release, no_musicbrainz=no_musicbrainz)
+    cmd = [cyanrip] + cyanrip_args(cfg, device=device, release=release, no_musicbrainz=no_musicbrainz,
+                                   tags=tags)
     with hold_lock(staging):
         code, tail = proc.run_tail(cmd, cwd=staging)
         if code != 0:

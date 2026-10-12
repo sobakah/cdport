@@ -77,6 +77,26 @@ working folder, where rips land first (suggested: `~/Temp`), and the music
 library (suggested: your desktop's music folder, e.g. `~/Music` or
 `~/Musik`). `-w DIR` and `-l DIR` use other folders for one run.
 
+### Discs MusicBrainz does not know
+
+cyanrip looks the disc up by its disc ID. When MusicBrainz has no release with
+that ID, cyanrip will not rip without tags, and cdimport offers:
+
+- `s` search MusicBrainz for the release by album and artist. Each hit shows
+  its media and track counts (the disc's count is marked) and a link.
+- `m` a release ID or a pasted MusicBrainz release link. cyanrip takes the
+  tags from that release even though the disc ID is not attached to it.
+- `t` type in the tags: album, album artist, year, track titles (cyanrip's
+  `-a`/`-t`). The tag step can refine them.
+- `n` rip without MusicBrainz metadata.
+
+It also shows cyanrip's link for adding the disc ID to MusicBrainz (needs a
+MusicBrainz account). Open it while logged in, search for the release, select
+the edition with the same number of tracks and attach the disc ID; if the
+release is missing, add it there. Enter an edit note and submit. Once the edit
+is applied (it may wait up to 7 days for votes), cyanrip finds the disc by
+itself, for you and everyone else.
+
 If the tracks have no embedded cover (cyanrip only takes an image the Cover
 Art Archive marks as front cover), cdimport offers what the archive has for
 the release or another edition of the album, or a picture file of your own.

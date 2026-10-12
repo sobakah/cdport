@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import config, covertool, disc, install, library, lyrics, proc, rip, state, tags, tools, ui
+from . import config, cover, covertool, disc, install, library, lyrics, musicbrainz, proc, rip, state, tags, tools, ui
 from .config import expand
 from .state import AlbumState
 
@@ -371,29 +371,52 @@ def describe_rip_settings(cfg: dict[str, Any]) -> str:
 def preview_and_rip(session: Session, device: str) -> AlbumState | None:
     """Show the MusicBrainz match, let the user correct it, then rip.
 
+    For a disc MusicBrainz does not know, the user can search for the release
+    (cyanrip takes its tags by ID), type the tags in, or rip without any.
     A failed rip is reported with cyanrip's reason and offered again; None
     means back to disc detection.
     """
     assert session.cyanrip
     release = ""
     no_mb = False
+    typed: rip.ManualTags | None = None
     while True:
         print()
-        code, tail = rip.preview(session.cyanrip, session.cfg, device=device, release=release,
-                                 no_musicbrainz=no_mb)
-        if code != 0:
-            ui.warn(f"cyanrip -I exited with code {code}:{rip.explain(tail) or ' see above.'}")
+        shown = rip.preview(session.cyanrip, session.cfg, device=device, release=release,
+                            no_musicbrainz=no_mb, tags=typed)
+        if shown.needs_tags:
+            ui.warn("MusicBrainz does not know this disc, and cyanrip does not rip it without tags.")
+        elif shown.code != 0:
+            ui.warn(f"cyanrip -I exited with code {shown.code}:{rip.explain(shown.tail) or ' see above.'}")
+        if shown.disc_unknown and shown.submission_url and not no_mb:
+            explain_submission(shown.submission_url)
         ui.dim(f"Rip settings: {describe_rip_settings(session.cfg)}")
-        answer = ui.choose("Rip this disc", [
-            ("r", "rip"),
-            ("m", "pick another MusicBrainz release (list number or release ID)"),
+        options = [] if shown.needs_tags else [("r", "rip")]
+        options += [
+            ("s", "search MusicBrainz for the release (album and artist)"),
+            ("m", "pick a MusicBrainz release (list number, release ID or link)"),
+            ("t", "type in the tags (album, artist, year, track titles)"),
             ("n", "rip without MusicBrainz metadata"),
             ("b", "back to disc detection"),
             ("q", "quit"),
-        ], default="r")
+        ]
+        answer = ui.choose("Rip this disc", options, default="s" if shown.needs_tags else "r")
+        if answer == "s":
+            found = search_release(typed, shown.tracks)
+            if found:
+                release, no_mb = found, False
+            continue
         if answer == "m":
-            release = ui.ask("Release number or ID")
-            no_mb = False
+            text = ui.ask("Release number, ID or link (empty to go back)")
+            if text:
+                found = musicbrainz.parse_release(text)
+                if found:
+                    release, no_mb = found, False
+                else:
+                    ui.warn("That is neither a list number nor a MusicBrainz release ID or link.")
+            continue
+        if answer == "t":
+            typed = ask_tags(typed, shown.tracks)
             continue
         if answer == "n":
             no_mb = True
@@ -409,7 +432,7 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
         session.work_dir.mkdir(parents=True, exist_ok=True)
         try:
             folder, leftover = rip.rip(session.cyanrip, session.cfg, session.work_dir,
-                                       device=device, release=release, no_musicbrainz=no_mb)
+                                       device=device, release=release, no_musicbrainz=no_mb, tags=typed)
         except rip.RipError as exc:
             ui.error(str(exc))
             answer = ui.choose("Then", [("r", "back to the disc preview, to try again"),
@@ -425,7 +448,72 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
         ui.success(f"Ripped to {folder}")
         if leftover:
             ui.warn(f"cyanrip also left files in {leftover}; check them.")
+        if shown.disc_unknown and shown.submission_url:
+            ui.info(f"To add this disc to MusicBrainz later: {shown.submission_url}")
         return album
+
+
+def explain_submission(url: str) -> None:
+    """How to tell MusicBrainz about the disc, so the next lookup finds it."""
+    ui.info("MusicBrainz has no release with this disc's ID. To add it (needs a MusicBrainz account):")
+    ui.info(f"  1. Open this link while logged in:\n     {url}")
+    ui.info("  2. Search for the release by artist or title. If it is listed, select it\n"
+            "     (the edition with the same number of tracks) and attach the disc ID.\n"
+            "     If it is not, add the release there.")
+    ui.info("  3. Enter an edit note (e.g. barcode or catalog number) and submit.")
+    ui.dim("The edit may need up to 7 days of voting; after that cyanrip finds the disc by itself.\n"
+           "Until then, s or m below rips with the release's tags all the same.")
+
+
+def search_release(typed: rip.ManualTags | None, tracks: tuple[int, int] | None) -> str:
+    """A release ID from a MusicBrainz search, or "" when none was picked."""
+    album = ui.ask("Album title (empty to go back)", typed.album if typed else "")
+    if not album:
+        return ""
+    artist = ui.ask("Artist (optional)", typed.artist if typed else "")
+    try:
+        found = musicbrainz.search_releases(album, artist)
+    except cover.CoverError as exc:
+        ui.warn(f"Cannot search MusicBrainz: {exc}")
+        return ""
+    if not found:
+        ui.warn("MusicBrainz found no such release.")
+        return ""
+    count = tracks[1] - tracks[0] + 1 if tracks else None
+    options = []
+    for i, r in enumerate(found, 1):
+        same = "  ← same track count as the disc" if count in r.track_counts else ""
+        options.append((str(i), f"{r.label}{same}\n      {r.page}"))
+    options.append(("n", "none of these"))
+    answer = ui.choose("Which release is it", options, default="1")
+    return "" if answer == "n" else found[int(answer) - 1].id
+
+
+def ask_tags(previous: rip.ManualTags | None, tracks: tuple[int, int] | None) -> rip.ManualTags | None:
+    """Tags for cyanrip's -a/-t; None when the user leaves the album empty.
+
+    Only what cyanrip needs to name the folder and files. The tag step can
+    add the rest (per-track artists, genre) afterwards.
+    """
+    prev = previous or rip.ManualTags()
+    album = ui.ask("Album (empty: no tags of your own)", prev.album)
+    if not album:
+        return None
+    artist = ui.ask("Album artist", prev.artist)
+    date = ui.ask("Year or date (optional)", prev.date)
+    if tracks:
+        numbers = range(tracks[0], tracks[1] + 1)
+    else:
+        count = ui.ask("Number of tracks (empty: no track titles)")
+        numbers = range(1, int(count) + 1) if count.isdigit() else range(0)
+    titles = {}
+    if numbers:
+        ui.dim('A track without a title is called "Unknown track".')
+    for n in numbers:
+        title = ui.ask(f"Track {n} title", prev.titles.get(n, ""))
+        if title:
+            titles[n] = title
+    return rip.ManualTags(album, artist, date, titles)
 
 
 # cyanrip's confidence is the number of tracks that confirmed the offset.

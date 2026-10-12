@@ -35,6 +35,7 @@ check after automatic lyrics.
 Layout: `cdimport/` package (`app.py` runs the steps, one module per step:
 `disc`, `rip`, `tags`, `lyrics`, `library`; `state`, `tools`, `proc`,
 `config`, `ui`, `cli`, `install`, `cover` (Cover Art Archive/MusicBrainz,
+no UI), `musicbrainz` (release search for discs MusicBrainz does not know,
 no UI) and `covertool` (the cover step and the `cdimport-cover` command)),
 `run.py` and `cover.py` launchers, `tests/test_cdimport.py`.
 `config.example.json` is generated from `DEFAULT_CONFIG` and `SETTING_HELP`
@@ -136,6 +137,21 @@ Behaviour depends on third-party tools; re-verify before relying on these.
   N counts the tracks that confirmed it (`src/cyanrip_main.c`). cdimport
   parses that line and saves the offset without asking from N >= 4
   (`app.MIN_OFFSET_CONFIDENCE`); below, it asks.
+- **Disc not on MusicBrainz** (0.9.4-rc3, checked 2026-10-12 with a
+  3-track disc): `-I` exits 1 with "Unable to find release info for this
+  CD", prints the `https://musicbrainz.org/cdtoc/attach?toc=FIRST+LAST+...`
+  link and "To continue add metadata via -a or -t, or ignore via -N!".
+  With `-R <release MBID>` it takes the release's tags anyway
+  (`mb_release_by_id`, says "The disc isn't on MusicBrainz yet"). `-a`/`-t`
+  are parsed with FFmpeg's `av_dict_parse_string` ("key=value:key=value",
+  `-t N=title=...`); cyanrip's `append_missing_keys` only understands
+  backslash escapes, so `rip.tag_args` escapes `\ ' : =` with a backslash
+  (round trip checked against libavutil). Keys: `album`, `album_artist`,
+  `date`, `title`. cdimport reads the link and track range from all of
+  `-I`'s output (`rip.parse_preview`); the link comes before the track list.
+- Attaching a disc ID on MusicBrainz ("Add disc ID", edit type 55): 7-day
+  voting period, accepted on expiry; MusicBrainz's guide shows it applied at
+  once in its example. Steps from musicbrainz.org/doc/How_to_Add_Disc_IDs.
 - Relevant options: `-I` print disc info and MusicBrainz match without
   ripping; `-R` pick a MusicBrainz release (index or ID); `-D`/`-F` directory
   and file naming schemes (use `-D` to know the output folder instead of

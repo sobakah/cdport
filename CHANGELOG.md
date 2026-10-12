@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+* **Discs MusicBrainz does not know:** search MusicBrainz for the release
+  (rips with its tags via `-R`, even before the disc ID is attached), paste
+  a release link, or type in album, artist, year and track titles (cyanrip's
+  `-a`/`-t`). The link for adding the disc ID to MusicBrainz is shown with
+  the steps, and again after the rip.
+
 ## [0.2.0] — 2026-10-11
 
 ### Added

@@ -80,7 +80,8 @@ def _use_pty() -> bool:
     return sys.platform != "win32" and sys.stdout.isatty()
 
 
-def run_tail(cmd: list[str], cwd: Path | None = None, lines: int = 3) -> tuple[int, list[str]]:
+def run_tail(cmd: list[str], cwd: Path | None = None, lines: int = 3,
+             keep_bytes: int = 8192) -> tuple[int, list[str]]:
     """Like run(), and also return the last lines the tool printed.
 
     Those lines usually say why a tool failed, and cdimport repeats them in
@@ -88,6 +89,7 @@ def run_tail(cmd: list[str], cwd: Path | None = None, lines: int = 3) -> tuple[i
     pseudo-terminal that cdimport copies to the real one: it still sees a
     terminal, so its progress display and output buffering stay as they are.
     Without a terminal (or on Windows) this is plain run() with no lines.
+    Only the last keep_bytes of output are searched for those lines.
     """
     if not _use_pty():
         return run(cmd, cwd), []
@@ -114,7 +116,7 @@ def run_tail(cmd: list[str], cwd: Path | None = None, lines: int = 3) -> tuple[i
                 break
             sys.stdout.buffer.write(data)
             sys.stdout.flush()
-            tail = (tail + data)[-8192:]
+            tail = (tail + data)[-keep_bytes:]
         code = proc.wait()
     except KeyboardInterrupt:
         _let_finish(proc)
