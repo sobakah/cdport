@@ -1,6 +1,7 @@
 """Tests for cdimport. No network, no drive, no real external tools."""
 
 import copy
+import os
 import json
 import subprocess
 import sys
@@ -16,10 +17,13 @@ from cdimport.config import STAGING_PREFIX, STATE_FILE_NAME  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def private_dirs(tmp_path, monkeypatch):
-    """Keep the update-check cache and config search away from the real home."""
+def private_dirs(tmp_path, tmp_path_factory, monkeypatch):
+    """Keep the update-check cache, config search and drive locks away from
+    the real home, so a test run never sees (or blocks) a real rip."""
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config-home"))
+    # Not inside tmp_path: some tests expect it to hold only what they made.
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path_factory.mktemp("runtime")))
 
 
 def default_cfg():
@@ -217,6 +221,65 @@ def test_ioctl_status_maps_codes(monkeypatch):
         raise PermissionError("denied")
     monkeypatch.setattr(disc.os, "open", denied)
     assert disc._ioctl_status("/dev/sr0") == "unknown"
+
+
+def test_drive_lock_keeps_a_second_cdimport_off_the_drive(tmp_path):
+    assert disc.busy("/dev/sr0") is None
+    with disc.hold("/dev/sr0"):
+        assert disc.busy("/dev/sr0") == f"/dev/sr0 is in use by another cdimport (process {os.getpid()})"
+        assert disc.busy("/dev/sr1") is None
+        with pytest.raises(disc.DriveBusy):
+            with disc.hold("/dev/sr0"):
+                pass
+    assert disc.busy("/dev/sr0") is None
+    # Another name for the same drive shares its lock.
+    (tmp_path / "sr7").write_text("")
+    (tmp_path / "cdrom").symlink_to(tmp_path / "sr7")
+    with disc.hold(str(tmp_path / "sr7")):
+        assert disc.busy(str(tmp_path / "cdrom"))
+
+
+def test_drive_lock_held_by_another_process(tmp_path):
+    import subprocess
+    child = ("import sys, time; from cdimport import disc\n"
+             "with disc.hold('/dev/sr0'):\n    print('locked', flush=True); time.sleep(30)\n")
+    proc_ = subprocess.Popen([sys.executable, "-c", child], stdout=subprocess.PIPE, text=True,
+                             cwd=Path(__file__).resolve().parent.parent)
+    try:
+        assert proc_.stdout.readline().strip() == "locked"
+        assert f"(process {proc_.pid})" in disc.busy("/dev/sr0")
+    finally:
+        proc_.kill()
+        proc_.wait()
+    assert disc.busy("/dev/sr0") is None  # the lock ends with the process
+
+
+def test_find_disc_leaves_a_busy_drive_alone(tmp_path, monkeypatch, capsys):
+    session = offset_session(tmp_path)
+    drives = [disc.Drive("/dev/sr0", "ASUS", "audio", 6), disc.Drive("/dev/sr1", "LG", "audio", 10)]
+    monkeypatch.setattr(app.disc, "find_drives", lambda: list(drives))
+    with disc.hold("/dev/sr0"):
+        assert app.find_disc(session) == "/dev/sr1"  # the only free one, no question
+        drives.pop()
+        feed_input(monkeypatch, ["q"])
+        with pytest.raises(app.Quit):
+            app.find_disc(session)
+    out = capsys.readouterr().out
+    assert "/dev/sr0 is in use by another cdimport" in out and "wait for a disc or a free drive" in out
+
+
+def test_disc_step_holds_the_drive_until_the_rip_is_done(tmp_path, monkeypatch):
+    session = offset_session(tmp_path)
+    monkeypatch.setattr(app, "find_disc", lambda s: "/dev/sr0")
+    seen = []
+
+    def preview_and_rip(session, device):
+        seen.append(disc.busy(device))
+        return state.AlbumState(tmp_path)
+    monkeypatch.setattr(app, "preview_and_rip", preview_and_rip)
+    app.disc_and_rip(session)
+    assert seen[0] and "another cdimport" in seen[0]
+    assert disc.busy("/dev/sr0") is None
 
 
 # --- tools -------------------------------------------------------------------

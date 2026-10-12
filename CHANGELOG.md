@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+* **Parallel runs:** a cdimport working with a disc (preview, offset
+  measurement, rip) now locks the drive. Another cdimport leaves a locked
+  drive alone instead of running `cyanrip -I` on it during a rip, and offers
+  to wait until it is free. The lock is per user
+  (`$XDG_RUNTIME_DIR/cdimport/drive-sr0.lock`) and ends with the process.
+
 ## [0.4.0] — 2026-10-12
 
 ### Changed

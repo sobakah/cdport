@@ -6,8 +6,11 @@ Only Linux has a backend so far. Elsewhere detection reports None
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
+import tempfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,6 +53,77 @@ class Drive:
         return f"{name}: {labels.get(self.status, self.status)}"
 
 
+class DriveBusy(Exception):
+    """Another cdimport is using the drive; the message says which process."""
+
+
+def lock_dir() -> Path:
+    """Where drive locks live: per user, shared by every cdimport of that
+    user whatever its working folder (-w), and emptied at logout."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime and Path(runtime).is_dir():
+        return Path(runtime) / "cdimport"
+    uid = os.getuid() if hasattr(os, "getuid") else 0
+    return Path(tempfile.gettempdir()) / f"cdimport-{uid}"
+
+
+def lock_path(device: str) -> Path:
+    # /dev/cdrom and /dev/sr0 are the same drive.
+    name = Path(os.path.realpath(device)).name if device else "default-drive"
+    return lock_dir() / f"drive-{name}.lock"
+
+
+@contextlib.contextmanager
+def hold(device: str) -> Iterator[None]:
+    """Keep other cdimports off the drive while this one works with its disc.
+
+    Held from the disc preview to the end of the rip: cyanrip -I, -f and the
+    rip itself all move the drive's head, and a second process doing that
+    during a rip forces re-reads (seen 2026-10-12: a preview ran during a
+    rip; AccurateRip still matched, but only thanks to cyanrip's retries).
+    The operating system drops the lock when the process ends in any way.
+    Raises DriveBusy when another cdimport holds it.
+    """
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - Windows: no lock, as for staging folders
+        yield
+        return
+    path = lock_path(device)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # The file is never deleted: unlinking a lock file lets a second process
+    # lock a new file of the same name while the first still holds the old one.
+    with open(path, "a+", encoding="utf-8") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            handle.seek(0)
+            raise DriveBusy(_busy_message(device, handle.read())) from None
+        handle.seek(0)
+        handle.truncate()
+        handle.write(f"{os.getpid()}\n")
+        handle.flush()
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            handle.truncate()
+
+
+def busy(device: str) -> str | None:
+    """Why the drive is in use by another cdimport, or None when it is free."""
+    try:
+        with hold(device):
+            return None
+    except DriveBusy as exc:
+        return str(exc)
+
+
+def _busy_message(device: str, content: str) -> str:
+    pid = content.strip()
+    return f"{device or 'The drive'} is in use by another cdimport" + (f" (process {pid})" if pid else "")
+
+
 def find_drives() -> list[Drive] | None:
     """All optical drives and their discs; None when this platform has no backend."""
     if sys.platform.startswith("linux"):
@@ -68,7 +142,8 @@ def _linux_drives(sys_block: Path = Path("/sys/class/block")) -> list[Drive]:
         device = f"/dev/{name}"
         drive = _from_udev(device)
         if drive is None:
-            drive = Drive(device, status=_ioctl_status(device))
+            # The ioctl talks to the drive; leave one another cdimport rips from.
+            drive = Drive(device, status="unknown" if busy(device) else _ioctl_status(device))
         drives.append(drive)
     return drives
 

@@ -294,7 +294,12 @@ def disc_and_rip(session: Session) -> AlbumState | None:
         found = find_disc(session)
         if isinstance(found, AlbumState):
             return found
-        album = preview_and_rip(session, found)
+        try:
+            with disc.hold(found):
+                album = preview_and_rip(session, found)
+        except disc.DriveBusy as exc:  # taken between the check and here
+            ui.warn(f"{exc}.")
+            continue
         if album is not None:
             return album
 
@@ -319,6 +324,10 @@ def find_disc(session: Session) -> str | AlbumState:
         else:
             if wanted:
                 drives = [d for d in drives if d.device == wanted]
+            taken = {d.device: why for d in drives if (why := disc.busy(d.device))}
+            for why in taken.values():
+                ui.warn(f"{why}; leaving it alone.")
+            drives = [d for d in drives if d.device not in taken]
             audio = [d for d in drives if d.has_audio]
             if len(audio) == 1:
                 ui.success(audio[0].describe())
@@ -326,12 +335,12 @@ def find_disc(session: Session) -> str | AlbumState:
             if len(audio) > 1:
                 options = [(str(i), d.describe()) for i, d in enumerate(audio, 1)]
                 return audio[int(ui.choose("Drive", options, default="1")) - 1].device
-            if not drives:
+            if not drives and not taken:
                 ui.warn(f"Drive {wanted} not found." if wanted else "No optical drive found.")
             for d in drives:
                 ui.info(d.describe())
-            answer = ui.choose("No audio CD", [("c", "check again"),
-                                               ("w", "wait for a disc (Ctrl+C to stop waiting)"),
+            answer = ui.choose("No free drive with an audio CD" if taken else "No audio CD", [("c", "check again"),
+                                               ("w", "wait for a disc or a free drive (Ctrl+C to stop waiting)"),
                                                ("f", "continue with an existing album folder"),
                                                ("q", "quit")], default="c")
             if answer == "w":
@@ -354,7 +363,7 @@ def wait_for_disc(wanted: str) -> str | None:
         while True:
             drives = disc.find_drives() or []
             for d in drives:
-                if d.has_audio and (not wanted or d.device == wanted):
+                if d.has_audio and (not wanted or d.device == wanted) and not disc.busy(d.device):
                     ui.success(d.describe())
                     return d.device
             time.sleep(POLL_SECONDS)

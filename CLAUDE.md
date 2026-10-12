@@ -72,6 +72,12 @@ regenerate it (see `config.write_example`); a test fails until then.
 - **A running rip is locked** (`<staging>.lock`, flock): another cdimport
   must not offer to delete it as an interrupted rip. Found 2026-10-11 when
   a test run did exactly that while the maintainer was ripping.
+- **A drive in use is locked too** (`disc.hold`, flock on
+  `$XDG_RUNTIME_DIR/cdimport/drive-<sr0>.lock`, held from the disc preview
+  to the end of the rip). Another cdimport skips that drive, also for the
+  ioctl fallback of detection. Found 2026-10-12 when a test run's `cyanrip
+  -I` ran on the drive during the maintainer's rip (AccurateRip still
+  matched 6/6). Versions before this fix do not take the lock.
 - **Lyrics mode** chosen by the user each run: automatic (`lyrembed DIR
   --auto`) or interactive (`lyrembed DIR`).
 - **Tag editor**: Ear Tag by default, others selectable (Kid3, Picard),
