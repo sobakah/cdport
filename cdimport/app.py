@@ -386,12 +386,17 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
                             no_musicbrainz=no_mb, tags=typed)
         if shown.needs_tags:
             ui.warn("MusicBrainz does not know this disc, and cyanrip does not rip it without tags.")
+        elif shown.releases:
+            ui.warn("Several MusicBrainz releases have this disc; pick one to see its tags.")
         elif shown.code != 0:
             ui.warn(f"cyanrip -I exited with code {shown.code}:{rip.explain(shown.tail) or ' see above.'}")
         if shown.disc_unknown and shown.submission_url and not no_mb:
             explain_submission(shown.submission_url)
         ui.dim(f"Rip settings: {describe_rip_settings(session.cfg)}")
-        options = [] if shown.needs_tags else [("r", "rip")]
+        options = [(str(i), f"{label}\n      {musicbrainz.release_page(mbid)}")
+                   for i, (mbid, label) in enumerate(shown.releases, 1)]
+        if not (shown.needs_tags or shown.releases):
+            options.append(("r", "rip"))
         options += [
             ("s", "search MusicBrainz for the release (album and artist)"),
             ("m", "pick a MusicBrainz release (list number, release ID or link)"),
@@ -400,7 +405,11 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
             ("b", "back to disc detection"),
             ("q", "quit"),
         ]
-        answer = ui.choose("Rip this disc", options, default="s" if shown.needs_tags else "r")
+        default = "1" if shown.releases else "s" if shown.needs_tags else "r"
+        answer = ui.choose("Rip this disc", options, default=default)
+        if answer.isdigit():
+            release, no_mb = shown.releases[int(answer) - 1][0], False
+            continue
         if answer == "s":
             found = search_release(typed, shown.tracks)
             if found:

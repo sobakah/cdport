@@ -77,6 +77,12 @@ working folder, where rips land first (suggested: `~/Temp`), and the music
 library (suggested: your desktop's music folder, e.g. `~/Music` or
 `~/Musik`). `-w DIR` and `-l DIR` use other folders for one run.
 
+### Several releases for one disc
+
+When several MusicBrainz releases have the disc's ID (editions, reissues),
+cyanrip lists them and waits for a choice. cdimport shows them as numbered
+options with a link to each release page; pick one to see its tags, then rip.
+
 ### Discs MusicBrainz does not know
 
 cyanrip looks the disc up by its disc ID. When MusicBrainz has no release with

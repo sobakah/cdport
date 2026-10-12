@@ -93,6 +93,9 @@ class Preview:
     disc_unknown: bool = False       # MusicBrainz has no release with this disc ID
     needs_tags: bool = False         # cyanrip will not rip without -a/-t, -R or -N
     tracks: tuple[int, int] | None = None  # first and last track number
+    # Several releases share the disc ID: (release ID, cyanrip's description).
+    # cyanrip does not rip until one is picked with -R.
+    releases: list[tuple[str, str]] = field(default_factory=list)
 
 
 # cyanrip's messages (src/musicbrainz.c, master b40c1f0). Matching its text
@@ -101,6 +104,8 @@ _SUBMISSION_URL = re.compile(r"https://musicbrainz\.org/cdtoc/attach\?\S+")
 _TOC = re.compile(r"[?&]toc=(\d+)\+(\d+)\+")
 _DISC_UNKNOWN = ("Unable to find", "matching stub", "isn't on MusicBrainz yet")
 _NEEDS_TAGS = "add metadata via -a or -t"
+_RELEASE_LINE = re.compile(r"^\d+ \(ID: ([0-9a-fA-F-]{36})\): (.+)$")
+_MULTIPLE = "Multiple releases found"
 
 
 def preview(cyanrip: str, cfg: dict[str, Any], *, device: str = "", release: str = "",
@@ -123,7 +128,19 @@ def parse_preview(code: int, lines: list[str]) -> Preview:
                    submission_url=url.group(0) if url else "",
                    disc_unknown=any(phrase in text for phrase in _DISC_UNKNOWN),
                    needs_tags=_NEEDS_TAGS in text,
-                   tracks=(int(toc.group(1)), int(toc.group(2))) if toc else None)
+                   tracks=(int(toc.group(1)), int(toc.group(2))) if toc else None,
+                   releases=_releases(lines) if _MULTIPLE in text else [])
+
+
+def _releases(lines: list[str]) -> list[tuple[str, str]]:
+    """cyanrip's list of releases for the disc ID, e.g.
+    "1 (ID: 5c580fb1-...): 때깔 (Killin’ It) (색깔 (Superb) ver.) (KR) (2024-01-08)"."""
+    found = []
+    for line in lines:
+        match = _RELEASE_LINE.match(line)
+        if match:
+            found.append((match.group(1).lower(), match.group(2)))
+    return found
 
 
 def explain(lines: list[str]) -> str:

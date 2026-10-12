@@ -943,6 +943,48 @@ def test_release_by_link_and_bad_answers(tmp_path, monkeypatch, capsys):
     assert "neither a list number" in capsys.readouterr().out
 
 
+# cyanrip 0.9.4-rc3 (b40c1f0) -I when several releases have the disc ID
+# (src/musicbrainz.c; last_lines strips the four-space indent).
+SEVERAL_RELEASES = [
+    "Multiple releases found in database for DiscID abc-:",
+    "    1 (ID: 2CABF241-341b-4b40-ad84-c77c719af676): Killin' It (XW) (2024-01-08)",
+    "    2 (ID: 5c580fb1-7c31-4785-afde-68098dc5caa2): \ub54c\uae54 (Killin\u2019 It) (\uc0c9\uae54 (Superb) ver.) (KR) (2 CDs) (2024-01-08)",
+    "Please specify which release to use by adding the -R argument with an index or ID.",
+]
+
+
+def test_several_releases_are_offered_in_the_menu(tmp_path, monkeypatch, capsys):
+    shown = rip.parse_preview(1, [line.strip() for line in SEVERAL_RELEASES])
+    assert shown.releases == [("2cabf241-341b-4b40-ad84-c77c719af676", "Killin' It (XW) (2024-01-08)"),
+                              ("5c580fb1-7c31-4785-afde-68098dc5caa2",
+                               "\ub54c\uae54 (Killin\u2019 It) (\uc0c9\uae54 (Superb) ver.) (KR) (2 CDs) (2024-01-08)")]
+    assert not shown.needs_tags
+    assert rip.parse_preview(0, ["1 (ID: x): not a list"]).releases == []
+
+    session = offset_session(tmp_path, offset=6)
+    session.work_dir = tmp_path / "work"
+    previews = []
+
+    def preview(cyanrip, cfg, **kwargs):
+        previews.append(kwargs["release"])
+        return rip.Preview(0, []) if kwargs["release"] else shown
+    ripped = []
+
+    def fake_rip(cyanrip, cfg, work_dir, **kwargs):
+        ripped.append(kwargs["release"])
+        (work_dir / "Album").mkdir(parents=True)
+        return work_dir / "Album", None
+    monkeypatch.setattr(app.rip, "preview", preview)
+    monkeypatch.setattr(app.rip, "rip", fake_rip)
+    answers = feed_input(monkeypatch, ["r", "2", "r"])  # no "r" before a pick; the 2nd release; rip
+    assert app.preview_and_rip(session, "/dev/sr0") is not None and answers == []
+    assert previews == ["", "5c580fb1-7c31-4785-afde-68098dc5caa2"]
+    assert ripped == ["5c580fb1-7c31-4785-afde-68098dc5caa2"]
+    out = capsys.readouterr().out
+    assert "Please type one of: 1, 2, s" in out
+    assert "https://musicbrainz.org/release/5c580fb1-7c31-4785-afde-68098dc5caa2" in out
+
+
 # --- release / master --------------------------------------------------------
 def test_master_is_always_a_source_build():
     ubuntu = {"ID": "ubuntu"}

@@ -12,6 +12,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a release link, or type in album, artist, year and track titles (cyanrip's
   `-a`/`-t`). The link for adding the disc ID to MusicBrainz is shown with
   the steps, and again after the rip.
+* **Several releases for one disc:** the releases cyanrip lists are offered
+  as numbered options with links; before, only `m` with the list number
+  worked and `r` failed.
 
 ## [0.2.0] — 2026-10-11
 

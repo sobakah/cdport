@@ -149,6 +149,12 @@ Behaviour depends on third-party tools; re-verify before relying on these.
   (round trip checked against libavutil). Keys: `album`, `album_artist`,
   `date`, `title`. cdimport reads the link and track range from all of
   `-I`'s output (`rip.parse_preview`); the link comes before the track list.
+- **Several releases for the disc ID:** `-I` (and a rip) exits 1 after
+  "Multiple releases found in database for DiscID ...:", one line per
+  release `    N (ID: <mbid>): Album (disambiguation) (country) (N CDs)
+  (date)`, and "Please specify which release to use by adding the -R
+  argument". `rip.parse_preview` reads those lines into `Preview.releases`.
+  Not yet seen with a real disc; format taken from `src/musicbrainz.c`.
 - Attaching a disc ID on MusicBrainz ("Add disc ID", edit type 55): 7-day
   voting period, accepted on expiry; MusicBrainz's guide shows it applied at
   once in its example. Steps from musicbrainz.org/doc/How_to_Add_Disc_IDs.
