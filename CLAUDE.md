@@ -31,6 +31,9 @@ built (`install.update_offer`, cache `~/.cache/cdimport/cyanrip-update.json`).
 0.2.0 (2026-10-11): asks for another run after the summary, links the
 embedded cover and MusicBrainz search hits, offers an interactive lyrembed
 check after automatic lyrics.
+0.3.0 (2026-10-12): discs MusicBrainz does not know (release search, release
+link, typed tags via -a/-t, disc ID submission link) and a choice among
+several releases for one disc ID.
 
 Layout: `cdimport/` package (`app.py` runs the steps, one module per step:
 `disc`, `rip`, `tags`, `lyrics`, `library`; `state`, `tools`, `proc`,
