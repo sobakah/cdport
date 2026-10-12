@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+
+* **Easier-to-read output:** messages start with ✓, ! or ✗; menus show keys
+  in colour with links dimmed and aligned under their option; links are
+  underlined and clickable in terminals that support it; the tool check and
+  the summary are aligned checklists with paths shortened to `~`; cyanrip's,
+  lyrembed's and build tools' output is framed (`╭─ cyanrip` … `╰─ done`);
+  blocks are separated by single blank lines. Without colour (`--color
+  never`, `NO_COLOR`) only the marks and the layout remain.
+
 ## [0.3.0] — 2026-10-12
 
 ### Added

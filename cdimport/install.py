@@ -309,8 +309,9 @@ def build_from_source(cfg: dict[str, Any], config_path: Path, os_release: dict[s
     if state == "clone":
         source.parent.mkdir(parents=True, exist_ok=True)
     for cmd, cwd in commands:
-        ui.dim(f"$ {proc.format_command(cmd)}")
+        ui.tool_start(Path(cmd[0]).name, proc.format_command(cmd))
         code = proc.run(cmd, cwd=cwd)
+        ui.tool_end(Path(cmd[0]).name, code)
         if code != 0:
             ui.error(f"Failed (exit code {code}): {proc.format_command(cmd)}\n"
                      f"The source stays in {source}; fix the problem and install again.")

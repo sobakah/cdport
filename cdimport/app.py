@@ -78,7 +78,7 @@ def run(session: Session) -> int:
         session.album = album
         continue_album(session, album)
         summary(session, album)
-        print()
+        ui.gap()
         if not ui.confirm("Start another run (next disc or album)?", default=False):
             break
     return 1 if session.failed else 0
@@ -99,7 +99,7 @@ def ask_missing_folders(session: Session) -> None:
                           config.music_dir_suggestion()))
     if not questions:
         return
-    print()
+    ui.gap()
     ui.info("cdimport needs to know where to work. The answers are saved in "
             f"{ui.tilde(session.config_path)}; change them there later.")
     ui.dim("Edit the suggestion or press Enter to accept it.")
@@ -126,6 +126,10 @@ def ask_missing_folders(session: Session) -> None:
 
 
 # --- 0. Tools ----------------------------------------------------------------
+# Notes under a checklist line start where its text does.
+INDENT = " " * (4 + ui.LABEL_WIDTH)
+
+
 def check_tools(session: Session) -> None:
     ui.step(0, "Tools")
     cfg = session.cfg
@@ -133,51 +137,54 @@ def check_tools(session: Session) -> None:
     session.lyrembed = tools.find_lyrembed(cfg)
 
     if session.cyanrip and (problem := tools.start_problem([session.cyanrip, "-v"])):
-        ui.warn(f"cyanrip    {session.cyanrip} does not start: {problem}")
+        ui.check("cyanrip", f"{ui.tilde(session.cyanrip)} does not start: {problem}", False)
         session.cyanrip = None
     if session.cyanrip:
         installed = install.installed_version(session.cyanrip)
         version = f" ({installed.version})" if installed else ""
-        ui.info(f"cyanrip    {session.cyanrip}{version}")
+        ui.check("cyanrip", f"{ui.tilde(session.cyanrip)}{version}", True)
         if installed and not session.options.install_cyanrip:
             offer_cyanrip_update(session, installed)
     else:
-        ui.warn("cyanrip    not found - without it only albums ripped earlier can be continued.")
+        ui.check("cyanrip", "not found: only albums ripped earlier can be continued", False)
     if session.options.install_cyanrip or not session.cyanrip:
         offer_cyanrip_install(session)
 
     editor_key = session.options.editor or cfg["editor"]
     if editor_key == "skip":
-        ui.info("editor     skipped (config)")
+        ui.check("editor", "skipped (config)", None)
     else:
         editor = tools.find_editor(cfg, editor_key)
         if editor:
-            ui.info(f"editor     {editor.name}")
+            ui.check("editor", editor.name, True)
         else:
             name = cfg["editors"].get(editor_key, {}).get("name", editor_key)
             others = [e.name for e in tools.available_editors(cfg)]
-            ui.warn(f"editor     {name} not found" + (f" - available: {', '.join(others)}" if others else ""))
+            ui.check("editor", f"{name} not found", False,
+                     f"available: {', '.join(others)}" if others else "")
 
     if session.lyrembed and (problem := tools.start_problem([session.lyrembed, "--version"])):
-        ui.warn(f"lyrembed   {session.lyrembed} does not start: {problem}")
+        ui.check("lyrembed", f"{ui.tilde(session.lyrembed)} does not start: {problem}", False)
         session.lyrembed, session.lyrembed_problem = None, problem
     elif session.lyrembed:
-        ui.info(f"lyrembed   {session.lyrembed}")
+        ui.check("lyrembed", ui.tilde(session.lyrembed), True)
         session.lyrembed_romanize = lyrics.can_romanize(session.lyrembed)
     else:
-        ui.warn("lyrembed   not found - the lyrics step is disabled.")
-        ui.dim(f"           To install: {tools.LYREMBED_INSTALL_HINT}")
-    ui.dim(f"Working folder: {session.work_dir}   Library: {session.library_dir}")
+        ui.check("lyrembed", "not found: the lyrics step is disabled", False,
+                 f"To install: {tools.LYREMBED_INSTALL_HINT}")
+    ui.gap()
+    ui.field("Working", ui.tilde(session.work_dir) if session.work_dir else "-")
+    ui.field("Library", ui.tilde(session.library_dir) if session.library_dir else "-")
 
 
 def offer_cyanrip_install(session: Session) -> None:
     """Install cyanrip when it is missing, or (re)build it on request."""
     route = install.choose_route(channel=session.cfg["cyanrip"]["channel"])
     if not session.options.install_cyanrip:
-        ui.dim(f"           To install: {install.route_hint(route)}")
+        ui.dim(f"{INDENT}To install: {install.route_hint(route)}")
         if route.kind == "download" or not ui.confirm("Install cyanrip now?", default=True):
             return
-    print()
+    ui.gap()
     found = install.install_cyanrip(session.cfg, session.config_path)
     if found:
         session.cyanrip = found
@@ -191,19 +198,19 @@ def offer_cyanrip_update(session: Session, installed: install.Installed) -> None
     try:
         remote = install.remote_info()
     except install.UpdateCheckError as exc:
-        ui.dim(f"           Update check skipped: {exc}")
+        ui.dim(f"{INDENT}Update check skipped: {exc}")
         return
     offer = install.update_offer(session.cfg["cyanrip"]["channel"], installed, remote,
                                  install.is_self_built(session.cyanrip))
     if offer is None or not install.should_show(offer):
         return
-    ui.warn(f"           {offer.message}")
+    ui.info(f"{INDENT}{ui.style(offer.message, 'yellow')}")
     if not offer.can_build:
-        ui.dim("           Your package manager updates it once the distribution packages the new version.")
+        ui.dim(f"{INDENT}Your package manager updates it once the distribution packages the new version.")
         return
     if not ui.confirm("Build the new cyanrip now?", default=True):
         return
-    print()
+    ui.gap()
     found = install.build_from_source(session.cfg, session.config_path, tools.read_os_release())
     if found:
         session.cyanrip = found
@@ -238,7 +245,7 @@ def offer_resume(session: Session) -> AlbumState | None:
     unfinished = state.unfinished_albums(session.work_dir)
     if not unfinished:
         return None
-    print()
+    ui.gap()
     ui.info("Unfinished albums in the working folder:")
     options = [(str(i), f"{a.folder.name}  (next: {a.next_step()})") for i, a in enumerate(unfinished, 1)]
     options.append(("n", "start with a new disc"))
@@ -381,9 +388,10 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
     no_mb = False
     typed: rip.ManualTags | None = None
     while True:
-        print()
+        ui.tool_start("cyanrip", "disc info and MusicBrainz match")
         shown = rip.preview(session.cyanrip, session.cfg, device=device, release=release,
                             no_musicbrainz=no_mb, tags=typed)
+        ui.tool_end("cyanrip", shown.code)
         if shown.needs_tags:
             ui.warn("MusicBrainz does not know this disc, and cyanrip does not rip it without tags.")
         elif shown.releases:
@@ -439,10 +447,12 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
 
         ui.step(2, "Rip")
         session.work_dir.mkdir(parents=True, exist_ok=True)
+        ui.tool_start("cyanrip", "ripping")
         try:
             folder, leftover = rip.rip(session.cyanrip, session.cfg, session.work_dir,
                                        device=device, release=release, no_musicbrainz=no_mb, tags=typed)
         except rip.RipError as exc:
+            ui.tool_end("cyanrip", None)
             ui.error(str(exc))
             answer = ui.choose("Then", [("r", "back to the disc preview, to try again"),
                                         ("b", "back to disc detection"),
@@ -452,9 +462,10 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
             if answer == "q":
                 raise Quit(1)
             continue
+        ui.tool_end("cyanrip", 0)
         album = AlbumState(folder)
         album.mark("rip")
-        ui.success(f"Ripped to {folder}")
+        ui.success(f"Ripped to {ui.tilde(folder)}")
         if leftover:
             ui.warn(f"cyanrip also left files in {leftover}; check them.")
         if shown.disc_unknown and shown.submission_url:
@@ -464,6 +475,7 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
 
 def explain_submission(url: str) -> None:
     """How to tell MusicBrainz about the disc, so the next lookup finds it."""
+    ui.gap()
     ui.info("MusicBrainz has no release with this disc's ID. To add it (needs a MusicBrainz account):")
     ui.info(f"  1. Open this link while logged in:\n     {url}")
     ui.info("  2. Search for the release by artist or title. If it is listed, select it\n"
@@ -550,7 +562,7 @@ def ensure_offset(session: Session, device: str) -> bool:
     if session.cfg["cyanrip"]["offset"] is not None:
         return True
     assert session.cyanrip
-    print()
+    ui.gap()
     ui.warn("cyanrip needs the drive's read offset before it rips. Once set, it is saved in the config.")
     ui.dim("Drives are listed at https://www.accuraterip.com/driveoffsets.htm; one marked [Purged] "
            "has no fixed offset and must be measured.")
@@ -581,11 +593,12 @@ def measure_offset(session: Session, device: str) -> int | None:
     """Run cyanrip -f; the offset to save, or None to choose again."""
     assert session.cyanrip
     cmd = [session.cyanrip, "-f"] + (["-d", device] if device else [])
-    ui.dim(proc.format_command(cmd))
+    ui.tool_start("cyanrip", proc.format_command(cmd))
     # cyanrip writes nothing here as far as seen, but runs in a throwaway
     # folder in case a version does.
     with tempfile.TemporaryDirectory(prefix="cdimport-offset-") as scratch:
         code, tail = proc.run_tail(cmd, cwd=Path(scratch), lines=10)
+    ui.tool_end("cyanrip", code)
     found = parse_offset(tail)
     if found is None:
         if code != 0:
@@ -681,7 +694,7 @@ def offer_cover(folder: Path) -> None:
 
 def run_editor(editor: tools.Editor, folder: Path) -> bool:
     cmd = tags.expand_command(editor.command, folder, tags.audio_files(folder))
-    ui.dim(proc.format_command(cmd))
+    ui.dim(f"$ {proc.format_command(cmd)}")
     try:
         launched = tags.open_editor(editor, folder)
     except OSError as exc:
@@ -743,8 +756,9 @@ def lyrics_step(session: Session, album: AlbumState) -> bool:
             album.mark("lyrics", skipped=True)
             return True
         cmd = lyrics.lyrembed_command(session.lyrembed, session.cfg, album.folder, mode, romanize)
-        ui.dim(proc.format_command(cmd))
+        ui.tool_start("lyrembed", proc.format_command(cmd))
         code = lyrics.run_lyrembed(session.lyrembed, session.cfg, album.folder, mode, romanize)
+        ui.tool_end("lyrembed", code)
         if code == lyrics.EXIT_OK:
             album.mark("lyrics")
             if mode == "auto":
@@ -788,8 +802,9 @@ def offer_lyrics_check(session: Session, album: AlbumState) -> None:
     if answer == "c":
         return
     cmd = lyrics.lyrembed_command(session.lyrembed, session.cfg, album.folder, "interactive")
-    ui.dim(proc.format_command(cmd))
+    ui.tool_start("lyrembed", proc.format_command(cmd))
     code = lyrics.run_lyrembed(session.lyrembed, session.cfg, album.folder, "interactive")
+    ui.tool_end("lyrembed", code)
     if code == lyrics.EXIT_INTERRUPTED:
         raise KeyboardInterrupt
     if code != lyrics.EXIT_OK:
@@ -857,7 +872,7 @@ def finish_step(session: Session, album: AlbumState) -> bool:
         album.folder = target
         album.mark("finish")
         album.remove()
-        ui.success(f"Moved to {target}")
+        ui.success(f"Moved to {ui.tilde(target)}")
         try:
             session.logs = library.keep_logs_out(target, session.work_dir / LOG_FOLDER)
         except OSError as exc:
@@ -870,18 +885,16 @@ LOG_FOLDER = "logs"
 
 
 def summary(session: Session, album: AlbumState) -> None:
-    print()
-    ui.info(ui.style("Summary", "bold"))
-    ui.info(f"  Album:  {album.folder}")
-    ui.info(f"  Tracks: {len(tags.audio_files(album.folder))}")
+    ui.step(None, "Summary")
+    ui.field("Album", ui.tilde(album.folder))
+    ui.field("Tracks", len(tags.audio_files(album.folder)))
     for name in ("rip", "tags", "lyrics", "finish"):
         if name in album.done:
-            status = "done"
+            ui.check(name.capitalize(), "done", True)
         elif name in album.skipped:
-            status = "skipped"
+            ui.check(name.capitalize(), "skipped", None)
         else:
-            status = "open - run cdimport again to continue"
-        ui.info(f"  {name:<7} {status}")
+            ui.check(name.capitalize(), "open: run cdimport again to continue", False)
     logs = session.logs or sorted(album.folder.glob("*.log"))
     if logs:
-        ui.info(f"  Log:    {logs[0]}")
+        ui.field("Log", ui.tilde(logs[0]))

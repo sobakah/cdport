@@ -149,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--release applies to one album, but there are several folders")
     try:
         for folder in folders:
-            print()
+            ui.gap()
             ui.info(ui.style(ui.tilde(folder), "bold"))
             offer(folder, args.release or "")
     except KeyboardInterrupt:

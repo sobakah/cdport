@@ -130,6 +130,44 @@ def test_every_setting_has_help_and_no_help_is_stale():
             assert set(help_text) == set(config.DEFAULT_CONFIG[key]), key
 
 
+# --- terminal output ---------------------------------------------------------
+def test_marks_lists_and_menus_without_colour(monkeypatch, capsys):
+    monkeypatch.setattr(ui, "_color", False)
+    monkeypatch.setattr(ui, "_blank", True)
+    ui.warn("first\nsecond")
+    ui.check("lyrembed", "not found", False, "To install: pipx")
+    ui.check("Lyrics", "skipped", None)
+    ui.field("Album", "~/Musik/A")
+    ui.gap()
+    ui.gap()
+    feed_input(monkeypatch, ["s"])
+    ui.choose("Rip this disc", [("10", "a release\n      https://musicbrainz.org/release/x"), ("s", "search")])
+    assert capsys.readouterr().out.split("\n") == [
+        "! first",
+        "  second",
+        "  ! lyrembed  not found",
+        "              To install: pipx",
+        "  – Lyrics    skipped",
+        "    Album     ~/Musik/A",
+        "",                       # one gap, not two; choose() adds none after it
+        "   10  a release",
+        "       https://musicbrainz.org/release/x",
+        "   s   search",
+        "",
+    ]
+
+
+def test_colour_links_and_readline_safe_prompt(monkeypatch):
+    monkeypatch.setattr(ui, "_color", True)
+    linked = ui.links("see https://x.org/a here", "dim")
+    assert "\x1b]8;;https://x.org/a\x1b\\" in linked and linked.endswith("\x1b]8;;\x1b\\ here")
+    assert "\x1b[0m\x1b[2m" in linked  # the dim text after the link stays dim
+    if ui._readline is not None:
+        assert ui._prompt("Rip", "r").count("\x01") == 4  # every escape code is wrapped
+    monkeypatch.setattr(ui, "_color", False)
+    assert ui.links("https://x.org") == "https://x.org" and ui._prompt("Rip", "r") == "Rip [r]: "
+
+
 # --- disc --------------------------------------------------------------------
 def test_udev_audio_disc():
     props = disc.parse_udev_properties(

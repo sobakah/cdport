@@ -157,7 +157,8 @@ Behaviour depends on third-party tools; re-verify before relying on these.
   release `    N (ID: <mbid>): Album (disambiguation) (country) (N CDs)
   (date)`, and "Please specify which release to use by adding the -R
   argument". `rip.parse_preview` reads those lines into `Preview.releases`.
-  Not yet seen with a real disc; format taken from `src/musicbrainz.c`.
+  Seen 2026-10-12 with a real disc ("Back to Life", three releases); the
+  format matched `src/musicbrainz.c`.
 - Attaching a disc ID on MusicBrainz ("Add disc ID", edit type 55): 7-day
   voting period, accepted on expiry; MusicBrainz's guide shows it applied at
   once in its example. Steps from musicbrainz.org/doc/How_to_Add_Disc_IDs.
