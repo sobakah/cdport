@@ -34,6 +34,8 @@ check after automatic lyrics.
 0.3.0 (2026-10-12): discs MusicBrainz does not know (release search, release
 link, typed tags via -a/-t, disc ID submission link) and a choice among
 several releases for one disc ID.
+0.4.0 (2026-10-12): easier-to-read output (marks, aligned lists, framed tool
+output, clickable links; `ui.check`, `ui.field`, `ui.gap`, `ui.tool_start`).
 
 Layout: `cdimport/` package (`app.py` runs the steps, one module per step:
 `disc`, `rip`, `tags`, `lyrics`, `library`; `state`, `tools`, `proc`,
