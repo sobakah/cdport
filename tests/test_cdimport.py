@@ -282,6 +282,37 @@ def test_disc_step_holds_the_drive_until_the_rip_is_done(tmp_path, monkeypatch):
     assert disc.busy("/dev/sr0") is None
 
 
+def test_eject_waits_for_a_busy_drive_then_falls_back(tmp_path, monkeypatch):
+    import errno as errno_
+    import fcntl
+    if not sys.platform.startswith("linux"):
+        pytest.skip("Linux backend")
+    device = tmp_path / "sr0"
+    device.write_text("")
+    answers = []
+
+    def ioctl(fd, request, arg):
+        assert request == disc.CDROMEJECT
+        code = answers.pop(0)
+        if code:
+            raise OSError(code, os.strerror(code))
+    monkeypatch.setattr(fcntl, "ioctl", ioctl)
+    monkeypatch.setattr(disc.time, "sleep", lambda s: None)
+    fallback = []
+    monkeypatch.setattr(disc.shutil, "which", lambda name: "/usr/bin/eject")
+    monkeypatch.setattr(disc.proc, "capture", lambda cmd, timeout=10: fallback.append(cmd) or
+                        SimpleNamespace(returncode=fallback_code[0], stderr="eject: unable to eject"))
+    fallback_code = [0]
+    answers[:] = [errno_.EBUSY, errno_.EBUSY, 0]  # busy twice (udev looking), then free
+    assert disc.eject(str(device)) is None and fallback == []
+    answers[:] = [errno_.EIO]  # not a busy drive: no waiting, straight to util-linux eject
+    assert disc.eject(str(device)) is None and fallback == [["eject", str(device)]]
+    answers[:] = [errno_.EBUSY] * disc.EJECT_ATTEMPTS
+    fallback_code[0] = 1
+    problem = disc.eject(str(device))
+    assert "busy" in problem.lower() and "eject: unable to eject" in problem
+
+
 # --- tools -------------------------------------------------------------------
 def test_os_release_parsing(tmp_path):
     path = tmp_path / "os-release"
@@ -513,6 +544,57 @@ def run_cli(tmp_path, monkeypatch, argv, *, lyrembed=None, editor=None):
     cfg_path.write_text(json.dumps({"work_dir": str(tmp_path / "work"), "library_dir": str(tmp_path / "lib")}),
                         encoding="utf-8")
     return cli.main(["--config", str(cfg_path), "--color", "never"] + argv)
+
+
+RELEASE_ID = "c4716917-5064-48a8-a63b-00d024f57743"
+
+
+def disc_folder(folder, disc, tracks, release=RELEASE_ID, cover=b"same cover"):
+    """One disc of a two-disc album as cyanrip names it."""
+    folder.mkdir(parents=True)
+    for n in range(1, tracks + 1):
+        make_flac(folder / f"{disc}.{n:02} - T{n}.flac", album="Young Forever", albumartist="BTS",
+                  artist="BTS", title=f"T{n}", discnumber=str(disc), totaldiscs="2",
+                  musicbrainz_albumid=release)
+    (folder / f"Young Forever CD{disc}.cue").write_text(f"cue {disc}")
+    (folder / "cover.jpg").write_bytes(cover)
+    return folder
+
+
+def test_second_disc_joins_the_first_in_the_library(tmp_path, monkeypatch, capsys):
+    library_folder = disc_folder(tmp_path / "lib" / "BTS" / "Young Forever", 1, 2)
+    second = disc_folder(tmp_path / "work" / "Young Forever", 2, 2)
+    (second / "Young Forever CD2.log").write_text("log 2")
+    state.AlbumState(second, done=["rip", "tags", "lyrics"]).save()
+    session = app.new_session(dict(default_cfg(), library_dir=str(tmp_path / "lib")), app.Options(),
+                              tmp_path / "config.json")
+    session.work_dir = tmp_path / "work"
+    session.library_dir = tmp_path / "lib"
+    album = state.load(second)
+    answers = feed_input(monkeypatch, [""])  # Enter: add the disc
+    assert app.finish_step(session, album) and answers == []
+    names = sorted(p.name for p in library_folder.iterdir())
+    assert names == ["1.01 - T1.flac", "1.02 - T2.flac", "2.01 - T1.flac", "2.02 - T2.flac",
+                     "Young Forever CD1.cue", "Young Forever CD2.cue", "cover.jpg"]
+    assert not second.exists()  # nothing left in the working folder, not even the state file
+    assert (tmp_path / "work" / "logs" / "Young Forever CD2.log").read_text() == "log 2"
+    assert "It holds disc 1 of this album; this is disc 2." in capsys.readouterr().out
+
+
+def test_disc_merge_is_only_offered_when_it_is_safe(tmp_path):
+    there = disc_folder(tmp_path / "lib", 1, 1)
+    assert library.plan_disc_merge(disc_folder(tmp_path / "same-disc", 1, 1), there) is None
+    assert library.plan_disc_merge(disc_folder(tmp_path / "other", 2, 1, release="x"), there) is None
+    with pytest.raises(library.MoveError, match="cover.jpg already exists with other content"):
+        library.plan_disc_merge(disc_folder(tmp_path / "new-cover", 2, 1, cover=b"other"), there)
+    plan = library.plan_disc_merge(disc_folder(tmp_path / "ok", 2, 1), there)
+    assert plan.discs_there == ["1"] and plan.discs_here == ["2"]
+    assert [f.name for f in plan.duplicates] == ["cover.jpg"]
+    # Without release IDs, album and album artist decide.
+    no_id = tmp_path / "no-id"
+    no_id.mkdir()
+    make_flac(no_id / "2.01 - A.flac", album="Young Forever", albumartist="BTS", discnumber="2/2")
+    assert library.plan_disc_merge(no_id, there).discs_here == ["2"]
 
 
 def test_existing_folder_to_library(tmp_path, monkeypatch, album_dir):

@@ -7,9 +7,12 @@ Only Linux has a backend so far. Elsewhere detection reports None
 from __future__ import annotations
 
 import contextlib
+import errno
 import os
+import shutil
 import sys
 import tempfile
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -205,24 +208,53 @@ def _ioctl_status(device: str) -> str:
     return _DISC_STATUS.get(code, "unknown")
 
 
+# Right after cyanrip closes the drive, udev or udisks may still have it open
+# to look at the disc, and the kernel refuses to eject while anyone else
+# does (EBUSY). Seen 2026-10-14: the first fast rip's disc stayed in.
+EJECT_ATTEMPTS = 5
+EJECT_WAIT_SECONDS = 1.0
+
+
 def eject(device: str) -> str | None:
     """Open the tray; None when it worked, else why not.
 
     A fast rip runs without cyanrip's -Q, since a secure re-rip of some
-    tracks may follow; this ejects once the rip is checked.
+    tracks may follow; this ejects once the rip is checked. It retries
+    while the drive is busy, then hands over to util-linux's eject, which
+    also tries a SCSI command, as cyanrip's libcdio does.
     """
     if not sys.platform.startswith("linux"):
         return "ejecting is only built for Linux"
+    problem = ""
+    for attempt in range(EJECT_ATTEMPTS):
+        code, problem = _ioctl_eject(device)
+        if code == 0:
+            return None
+        if code != errno.EBUSY:
+            break
+        if attempt < EJECT_ATTEMPTS - 1:
+            time.sleep(EJECT_WAIT_SECONDS)
+    if shutil.which("eject"):
+        result = proc.capture(["eject", device], timeout=30)
+        if result is not None and result.returncode == 0:
+            return None
+        detail = (result.stderr.strip() or f"exit code {result.returncode}") if result else "did not finish"
+        problem += f"; eject: {detail}"
+    return problem
+
+
+def _ioctl_eject(device: str) -> tuple[int, str]:
+    """(0, "") on success, else (errno, message)."""
     import fcntl
 
     try:
         fd = os.open(device, os.O_RDONLY | os.O_NONBLOCK)
     except OSError as exc:
-        return exc.strerror or str(exc)
+        return exc.errno or -1, exc.strerror or str(exc)
     try:
         fcntl.ioctl(fd, CDROMEJECT, 0)
     except OSError as exc:
-        return exc.strerror or str(exc)
+        return exc.errno or -1, exc.strerror or str(exc)
     finally:
         os.close(fd)
-    return None
+    return 0, ""

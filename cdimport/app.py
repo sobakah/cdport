@@ -549,7 +549,7 @@ def check_fast_rip(session: Session, folder: Path, device: str, *, release: str,
             ui.success("AccurateRip now confirms every track.")
         return  # the re-rip ejected the disc (-Q) if configured
     if eject and (problem := disc.eject(device)):
-        ui.dim(f"Cannot eject the disc: {problem}")
+        ui.warn(f"Cannot eject the disc ({problem}); take it out with the drive's button.")
 
 
 def explain_submission(url: str) -> None:
@@ -934,12 +934,24 @@ def finish_step(session: Session, album: AlbumState) -> bool:
     target = library.destination(session.library_dir, session.cfg["library_layout"], album.folder, artist)
     while True:
         exists = target.exists()
-        ui.info(f"Library folder: {target}")
+        merge = None
+        ui.info(f"Library folder: {ui.tilde(target)}")
         if exists:
-            ui.warn("That folder already exists; cdimport will not overwrite it.")
-        options = ([] if exists else [("m", "move the album there")]) + [
-            ("e", "enter another folder"), ("k", "keep it in the working folder")]
-        answer = ui.choose("Move", options, default="k" if exists else "m")
+            try:
+                merge = library.plan_disc_merge(album.folder, target)
+            except (library.MoveError, tags.TagReadError, OSError) as exc:
+                ui.warn(f"That folder holds this album, but this disc cannot join it: {exc}")
+            if merge:
+                ui.info(f"It holds disc {', '.join(merge.discs_there)} of this album; this is disc "
+                        f"{', '.join(merge.discs_here)}.")
+            else:
+                ui.warn("That folder already exists; cdimport will not overwrite it.")
+        if merge:
+            options = [("a", f"add disc {', '.join(merge.discs_here)} to that folder")]
+        else:
+            options = [] if exists else [("m", "move the album there")]
+        options += [("e", "enter another folder"), ("k", "keep it in the working folder")]
+        answer = ui.choose("Move", options, default="a" if merge else "k" if exists else "m")
         if answer == "e":
             entered = ui.ask_path("Folder", ui.tilde(target))
             if entered:
@@ -950,14 +962,20 @@ def finish_step(session: Session, album: AlbumState) -> bool:
             album.remove()
             return True
         try:
-            library.move_album(album.folder, target)
+            if merge:
+                library.merge_disc(merge, target)
+                album.remove()  # the state file stays behind in the working folder otherwise
+                album.folder.rmdir()
+            else:
+                library.move_album(album.folder, target)
         except (library.MoveError, OSError) as exc:
             ui.error(f"Move failed: {exc}")
             continue
         album.folder = target
         album.mark("finish")
         album.remove()
-        ui.success(f"Moved to {ui.tilde(target)}")
+        ui.success(f"Added disc {', '.join(merge.discs_here)} to {ui.tilde(target)}" if merge
+                   else f"Moved to {ui.tilde(target)}")
         try:
             session.logs = library.keep_logs_out(target, session.work_dir / LOG_FOLDER)
         except OSError as exc:

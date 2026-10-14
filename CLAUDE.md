@@ -66,7 +66,15 @@ regenerate it (see `config.write_example`); a test fails until then.
   maintainer), and saves them as `work_dir`/`library_dir` in the config.
   `-w`/`-l` override them for one run. Rips land in the working folder
   first. At the end, *offer* to move the album to the library; never
-  overwrite an existing album.
+  overwrite an existing album. **Exception, merging discs** (2026-10-14):
+  cyanrip's `-D` scheme has no disc number, so disc 2 of an album finds
+  disc 1's library folder (seen with "LOVE YOURSELF 結 'Answer'", "화양연화
+  Young Forever"). `library.plan_disc_merge` offers to add the disc when
+  that folder holds the same release (`musicbrainz_albumid`, else album +
+  album artist) with disjoint `discnumber`s. Files are named apart by
+  cyanrip (`1.01 - …`/`2.1 - …`; the track number is padded to each disc's
+  own track count, `<album> CD2.cue/.log`); byte-identical files
+  (`cover.jpg`) are dropped, anything else of the same name stops it.
 - **Rip logs stay out of the library** (maintainer's request, 2026-10-11):
   after the move, `*.log` goes to `<work_dir>/logs/` (`library.keep_logs_out`,
   numbered "name (2).log" instead of overwriting). The `.cue` stays with
@@ -183,8 +191,13 @@ Behaviour depends on third-party tools; re-verify before relying on these.
   `rip.accuraterip_results` reads each track's "(accurately ripped" from
   the log (matched cyanrip's own "Tracks ripped accurately" on all 13
   logs), and `rip.rerip` rips unconfirmed tracks with `-P max -l N,...`.
-  A fast rip runs without `-Q`; `disc.eject` (CDROMEJECT ioctl) ejects
-  afterwards, or the re-rip's `-Q` does. "AccurateRip:" in `-I` must say
+  A fast rip runs without `-Q`; `disc.eject` ejects afterwards, or the
+  re-rip's `-Q` does. 2026-10-14 the first real fast rip (9/9 confirmed)
+  left the disc in: the single CDROMEJECT failed, presumably EBUSY (the
+  kernel ejects only when nobody else has the drive open, and udev/udisks
+  look at it after cyanrip closes it; not reproduced). `disc.eject` now
+  retries EBUSY 5x 1 s, then runs util-linux `eject` (SCSI fallback, as
+  libcdio's `cdio_eject_media` does for cyanrip's `-Q`). "AccurateRip:" in `-I` must say
   "found", else the rip is secure. Not yet run end to end on real
   hardware: the fast/re-rip file names are assumed to match because both
   passes use the same release, tags and naming scheme.

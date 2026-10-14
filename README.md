@@ -134,8 +134,14 @@ small `.cdimport.json` recording the finished steps. When a run is stopped
 deleted when the album is finished.
 
 At the end cdimport offers to move the album to
-`<library>/<album artist>/<album folder>`. It never overwrites or merges into
-an existing folder. The rip log (`*.log`, cyanrip's AccurateRip record) does
+`<library>/<album artist>/<album folder>`. It never overwrites an existing
+folder. The one exception to "never merges": the other disc of a multi-disc
+album. cyanrip names every disc's folder after the album, so disc 2 finds
+disc 1's folder in the library. When that folder holds the same release
+(MusicBrainz release ID, else album and album artist) with other disc
+numbers, cdimport offers to add the disc to it. Its files are named apart
+(`2.01 - …`, `<album> CD2.cue`); identical copies such as `cover.jpg` are
+dropped, and any other file of the same name stops the merge. The rip log (`*.log`, cyanrip's AccurateRip record) does
 not go into the library: it is kept in `logs/` in the working folder, under a
 new name if an older log has the same one. The cue sheet stays with the
 album. After the summary cdimport asks whether to start another run (next

@@ -3,6 +3,23 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+* **Multi-disc albums:** the second disc of an album could not be moved to
+  the library, because cyanrip names every disc's folder after the album
+  and disc 1's folder was already there. cdimport now offers to add the
+  disc to that folder when it holds the same release with other disc
+  numbers. Nothing there is replaced: byte-identical files (`cover.jpg`)
+  are dropped, any other file of the same name stops the merge.
+* **Eject after a fast rip:** the disc stayed in after the first fast rip.
+  cdimport ejected it with one `CDROMEJECT` call, which the kernel refuses
+  while udev or udisks still look at the drive; the reason was only a dimmed
+  line. It now retries while the drive is busy, falls back to util-linux's
+  `eject` (which also tries a SCSI command, like cyanrip's libcdio), and
+  warns visibly if the disc still stays in.
+
 ## [0.4.1] — 2026-10-14
 
 ### Added
