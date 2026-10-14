@@ -48,6 +48,8 @@
     "device": "",
     "_offset": "Drive read offset in samples (-s). cyanrip refuses to rip without one, so with null cdimport asks before the first rip: measure it with cyanrip -f (needs a disc in the AccurateRip database; saved without asking when at least 4 tracks confirm it), type it in, or use 0 for one rip.",
     "offset": null,
+    "_mode": "\"fast\" rips without paranoia (-P none), checks every track against AccurateRip and rips the tracks that do not match again with -P max; discs not in the AccurateRip database are ripped securely. \"secure\" always uses cyanrip's paranoia (-P max): about twice as slow, every block read in overlapping, verified pieces. --rip-mode overrides it for one run, p in the disc menu for one disc.",
+    "mode": "fast",
     "_deemphasis": "true (cyanrip's default) undoes preemphasis on discs flagged with it, since players ignore the flag. false passes -W: bit-exact, but such discs then sound too bright.",
     "deemphasis": true,
     "_replaygain": "Write ReplayGain tags (tags only, the audio is unchanged). false passes -K.",

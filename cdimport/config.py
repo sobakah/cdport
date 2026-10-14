@@ -50,6 +50,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "path": "",
         "device": "",
         "offset": None,
+        "mode": "fast",
         "deemphasis": True,
         "replaygain": True,
         "eject": True,
@@ -115,6 +116,13 @@ SETTING_HELP: dict[str, Any] = {
             "AccurateRip database; saved without asking when at least 4 tracks confirm it), type "
             "it in, or use 0 for one rip."
         ),
+        "mode": (
+            "\"fast\" rips without paranoia (-P none), checks every track against AccurateRip "
+            "and rips the tracks that do not match again with -P max; discs not in the "
+            "AccurateRip database are ripped securely. \"secure\" always uses cyanrip's paranoia "
+            "(-P max): about twice as slow, every block read in overlapping, verified pieces. "
+            "--rip-mode overrides it for one run, p in the disc menu for one disc."
+        ),
         "deemphasis": (
             "true (cyanrip's default) undoes preemphasis on discs flagged with it, since players "
             "ignore the flag. false passes -W: bit-exact, but such discs then sound too bright."
@@ -151,6 +159,7 @@ EXAMPLE_ABOUT = [
 _NULLABLE: dict[tuple[str, ...], type] = {("cyanrip", "offset"): int}
 
 LYRICS_MODES = ("ask", "auto", "interactive", "skip")
+RIP_MODES = ("fast", "secure")
 
 
 class ConfigError(Exception):
@@ -250,6 +259,8 @@ def validate(cfg: dict[str, Any]) -> list[str]:
     problems = []
     if cfg["cyanrip"]["channel"] not in ("release", "master"):
         problems.append("'cyanrip.channel' must be \"release\" or \"master\"")
+    if cfg["cyanrip"]["mode"] not in RIP_MODES:
+        problems.append("'cyanrip.mode' must be \"fast\" or \"secure\"")
     if cfg["lyrics_mode"] not in LYRICS_MODES:
         problems.append(f"'lyrics_mode' must be one of {', '.join(LYRICS_MODES)}")
     if cfg["editor"] != "skip" and cfg["editor"] not in cfg["editors"]:

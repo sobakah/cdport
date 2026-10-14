@@ -1086,6 +1086,135 @@ def test_several_releases_are_offered_in_the_menu(tmp_path, monkeypatch, capsys)
     assert "https://musicbrainz.org/release/5c580fb1-7c31-4785-afde-68098dc5caa2" in out
 
 
+# --- fast and secure rips -----------------------------------------------------
+def _track_section(number, verdict, ok=True):
+    """One track's part of a cyanrip log (format of master b40c1f0)."""
+    return (f"Track {number} ripped and encoded {'successfully!' if ok else 'with errors.'}\n"
+            "Summary:\n\n  Properties:\n    Duration:    03:07.40\n\n"
+            "  EAC CRC32:     85175512\n"
+            "  Accurip:       disc found in database (max confidence: 1)\n"
+            f"    Accurip v1:  B04C1ADE{verdict}\n"
+            "    Accurip v2:  526CDDBE\n\n  Metadata:\n    title:   X\n\n")
+
+
+ACCURATE = " (accurately ripped, confidence 1)"
+NOT_FOUND = " (not found, either a new pressing, or bad rip)"
+
+
+def fast_log(*tracks):
+    """A rip log: tracks as (number, verdict, ok)."""
+    return ("cyanrip 0.9.4-rc3 (b40c1f0)\nAccurateRip:    found\n\nTracks:\n"
+            + "".join(_track_section(*t) for t in tracks)
+            + "Tracks ripped accurately: 1/3\n\nRipping errors: 0\n")
+
+
+def test_rip_mode_options_and_accuraterip_results():
+    cfg = default_cfg()
+    args = rip.cyanrip_args(cfg, paranoia="none", eject=False)
+    assert args[args.index("-P") + 1] == "none" and "-Q" not in args
+    args = rip.cyanrip_args(cfg, paranoia="max", tracks=[3, 5])
+    assert args[args.index("-l") + 1] == "3,5" and "-Q" in args
+    assert rip.parse_preview(0, ["AccurateRip ID: 1-2-3", "AccurateRip:    found"]).accuraterip == "found"
+    assert rip.parse_preview(0, ["AccurateRip:    not found"]).accuraterip == "not found"
+    assert rip.parse_preview(0, []).accuraterip == ""
+    log = fast_log((1, ACCURATE, True), (2, NOT_FOUND, True), (3, ACCURATE, False))
+    assert rip.accuraterip_results(log) == {1: True, 2: False, 3: False}
+    assert config.validate(dict(cfg, cyanrip=dict(cfg["cyanrip"], mode="quick")))
+
+
+def test_rerip_replaces_tracks_and_keeps_both_logs(tmp_path, monkeypatch):
+    work = tmp_path / "work"
+    album = work / "Album"
+    album.mkdir(parents=True)
+    for name, text in (("1 - A.flac", "fast1"), ("2 - B.flac", "fast2"), ("Album.cue", "full cue"),
+                       ("Album.log", "first log")):
+        (album / name).write_text(text)
+    commands = []
+
+    def cyanrip(cmd, cwd=None, lines=3, keep_bytes=8192):
+        commands.append(cmd)
+        out = Path(cwd) / "Album"
+        out.mkdir()
+        (out / "2 - B.flac").write_text("secure2")
+        (out / "Album.cue").write_text("partial cue")
+        (out / "Album.log").write_text(fast_log((2, ACCURATE, True)))
+        return 0, []
+    monkeypatch.setattr(rip.proc, "run_tail", cyanrip)
+    replaced, log = rip.rerip("cyanrip", default_cfg(), album, work, [2], eject=True)
+    assert replaced == [album / "2 - B.flac"] and (album / "2 - B.flac").read_text() == "secure2"
+    assert (album / "1 - A.flac").read_text() == "fast1" and (album / "Album.cue").read_text() == "full cue"
+    assert log == album / "Album (secure re-rip).log" and (album / "Album.log").read_text() == "first log"
+    cmd = commands[0]
+    assert cmd[cmd.index("-P") + 1] == "max" and cmd[cmd.index("-l") + 1] == "2" and "-Q" in cmd
+    assert not list(work.glob(STAGING_PREFIX + "*"))  # nothing left behind
+    rip.rerip("cyanrip", default_cfg(), album, work, [2])
+    assert (album / "Album (secure re-rip) (2).log").exists()  # a second re-rip keeps the first log
+
+
+def fast_rip_session(tmp_path, monkeypatch, log_text, accuraterip="found", relog=None):
+    """A session whose disc rips into work/Album with the given log; returns
+    the session and what was called."""
+    session = offset_session(tmp_path, offset=6)
+    session.work_dir = tmp_path / "work"
+    calls = {"rip": [], "rerip": [], "eject": []}
+    monkeypatch.setattr(app.rip, "preview", lambda *a, **k: rip.Preview(0, [], accuraterip=accuraterip))
+
+    def fake_rip(cyanrip, cfg, work_dir, **kwargs):
+        calls["rip"].append(kwargs)
+        folder = work_dir / "Album"
+        folder.mkdir(parents=True)
+        (folder / "Album.log").write_text(log_text)
+        return folder, None
+
+    def fake_rerip(cyanrip, cfg, album, work_dir, tracks, **kwargs):
+        calls["rerip"].append((tracks, kwargs))
+        log = album / "Album (secure re-rip).log"
+        log.write_text(relog or "")
+        return [album / f"{n}.flac" for n in tracks], log
+    monkeypatch.setattr(app.rip, "rip", fake_rip)
+    monkeypatch.setattr(app.rip, "rerip", fake_rerip)
+    monkeypatch.setattr(app.disc, "eject", lambda device: calls["eject"].append(device))
+    return session, calls
+
+
+def test_fast_rip_confirmed_by_accuraterip_is_ejected(tmp_path, monkeypatch, capsys):
+    session, calls = fast_rip_session(tmp_path, monkeypatch, fast_log((1, ACCURATE, True), (2, ACCURATE, True)))
+    feed_input(monkeypatch, ["r"])
+    assert app.preview_and_rip(session, "/dev/sr0") is not None
+    assert calls["rip"][0]["paranoia"] == "none" and calls["rip"][0]["eject"] is False
+    assert calls["rerip"] == [] and calls["eject"] == ["/dev/sr0"]
+    assert "AccurateRip confirms all 2 tracks" in capsys.readouterr().out
+
+
+def test_fast_rip_rereads_unconfirmed_tracks_securely(tmp_path, monkeypatch, capsys):
+    log = fast_log((1, ACCURATE, True), (2, NOT_FOUND, True), (3, ACCURATE, False))
+    session, calls = fast_rip_session(tmp_path, monkeypatch, log,
+                                      relog=fast_log((2, ACCURATE, True), (3, NOT_FOUND, True)))
+    feed_input(monkeypatch, ["r"])
+    app.preview_and_rip(session, "/dev/sr0")
+    tracks, kwargs = calls["rerip"][0]
+    assert tracks == [2, 3] and kwargs["eject"] is True
+    assert calls["eject"] == []  # the re-rip ejects with -Q
+    out = capsys.readouterr().out
+    assert "does not confirm track(s) 2, 3; ripping them again securely" in out
+    assert "track(s) 3 after the secure rip either" in out
+
+
+def test_secure_mode_and_discs_without_accuraterip(tmp_path, monkeypatch, capsys):
+    session, calls = fast_rip_session(tmp_path, monkeypatch, "", accuraterip="not found")
+    feed_input(monkeypatch, ["r"])
+    app.preview_and_rip(session, "/dev/sr0")
+    assert calls["rip"][0]["paranoia"] == "max" and calls["rip"][0]["eject"] is None
+    assert "not in the AccurateRip database" in capsys.readouterr().out
+    # p switches a disc in the database to secure, without a new preview.
+    session, calls = fast_rip_session(tmp_path / "2", monkeypatch, "")
+    previews = []
+    monkeypatch.setattr(app.rip, "preview", lambda *a, **k: previews.append(1) or rip.Preview(0, [], accuraterip="found"))
+    feed_input(monkeypatch, ["p", "r"])
+    app.preview_and_rip(session, "/dev/sr0")
+    assert calls["rip"][0]["paranoia"] == "max" and len(previews) == 1 and calls["rerip"] == []
+
+
 # --- release / master --------------------------------------------------------
 def test_master_is_always_a_source_build():
     ubuntu = {"ID": "ubuntu"}

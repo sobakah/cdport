@@ -18,6 +18,7 @@ from . import proc
 
 # linux/cdrom.h
 CDROM_DISC_STATUS = 0x5327
+CDROMEJECT = 0x5309
 _DISC_STATUS = {
     0: "unknown",       # CDS_NO_INFO
     1: "empty",         # CDS_NO_DISC
@@ -202,3 +203,26 @@ def _ioctl_status(device: str) -> str:
     finally:
         os.close(fd)
     return _DISC_STATUS.get(code, "unknown")
+
+
+def eject(device: str) -> str | None:
+    """Open the tray; None when it worked, else why not.
+
+    A fast rip runs without cyanrip's -Q, since a secure re-rip of some
+    tracks may follow; this ejects once the rip is checked.
+    """
+    if not sys.platform.startswith("linux"):
+        return "ejecting is only built for Linux"
+    import fcntl
+
+    try:
+        fd = os.open(device, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError as exc:
+        return exc.strerror or str(exc)
+    try:
+        fcntl.ioctl(fd, CDROMEJECT, 0)
+    except OSError as exc:
+        return exc.strerror or str(exc)
+    finally:
+        os.close(fd)
+    return None

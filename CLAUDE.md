@@ -170,6 +170,22 @@ Behaviour depends on third-party tools; re-verify before relying on these.
 - Attaching a disc ID on MusicBrainz ("Add disc ID", edit type 55): 7-day
   voting period, accepted on expiry; MusicBrainz's guide shows it applied at
   once in its example. Steps from musicbrainz.org/doc/How_to_Add_Disc_IDs.
+- **Rip speed** (measured 2026-10-14, ASUS SDRW-08D2S-U, track 1 of a
+  16-track disc, 3:48): `-P none` 113 s, `-P max` (cyanrip's default:
+  `PARANOIA_MODE_FULL ^ NEVERSKIP`) 200 s; both matched AccurateRip
+  (confidence 71). 18-25 s pass before the first sector. Even with `-P
+  none` the drive reads ~1200 sectors in ~3.5 s, then stalls ~3.3 s, so it
+  peaks near 2.5x; paranoia added one 22 s stall (re-reads). The
+  maintainer's 13 logs so far: 1.5-2.8x real time, 0 errors. Hence fast
+  mode (`cyanrip.mode`, decided 2026-10-14): `-P none`, then
+  `rip.accuraterip_results` reads each track's "(accurately ripped" from
+  the log (matched cyanrip's own "Tracks ripped accurately" on all 13
+  logs), and `rip.rerip` rips unconfirmed tracks with `-P max -l N,...`.
+  A fast rip runs without `-Q`; `disc.eject` (CDROMEJECT ioctl) ejects
+  afterwards, or the re-rip's `-Q` does. "AccurateRip:" in `-I` must say
+  "found", else the rip is secure. Not yet run end to end on real
+  hardware: the fast/re-rip file names are assumed to match because both
+  passes use the same release, tags and naming scheme.
 - Relevant options: `-I` print disc info and MusicBrainz match without
   ripping; `-R` pick a MusicBrainz release (index or ID); `-D`/`-F` directory
   and file naming schemes (use `-D` to know the output folder instead of

@@ -54,8 +54,14 @@ def tag_args(tags: ManualTags) -> list[str]:
 
 def cyanrip_args(cfg: dict[str, Any], *, device: str = "", release: str = "",
                  no_musicbrainz: bool = False, info_only: bool = False,
-                 tags: ManualTags | None = None) -> list[str]:
-    """cyanrip options from the config and this run's choices (without the program)."""
+                 tags: ManualTags | None = None, paranoia: str = "",
+                 tracks: list[int] | None = None, eject: bool | None = None) -> list[str]:
+    """cyanrip options from the config and this run's choices (without the program).
+
+    paranoia is cyanrip's -P ("none", "max"; empty: cyanrip's default, max),
+    tracks limits the rip to those track numbers (-l), and eject overrides
+    the config's eject (a fast rip must not eject before it is checked).
+    """
     opts = cfg["cyanrip"]
     args: list[str] = []
     device = device or opts["device"]
@@ -76,8 +82,12 @@ def cyanrip_args(cfg: dict[str, Any], *, device: str = "", release: str = "",
             args.append("-W")
         if not opts["replaygain"]:
             args.append("-K")
-        if opts["eject"]:
+        if opts["eject"] if eject is None else eject:
             args.append("-Q")
+        if paranoia:
+            args += ["-P", paranoia]
+        if tracks:
+            args += ["-l", ",".join(str(n) for n in tracks)]
         if opts["dir_scheme"]:
             args += ["-D", opts["dir_scheme"]]
     args += opts["extra_args"]
@@ -96,6 +106,10 @@ class Preview:
     # Several releases share the disc ID: (release ID, cyanrip's description).
     # cyanrip does not rip until one is picked with -R.
     releases: list[tuple[str, str]] = field(default_factory=list)
+    # cyanrip's "AccurateRip:" line: found, not found, mismatch, error,
+    # disabled; "" when the output was not seen. Only "found" lets a fast rip
+    # be checked track by track.
+    accuraterip: str = ""
 
 
 # cyanrip's messages (src/musicbrainz.c, master b40c1f0). Matching its text
@@ -106,6 +120,7 @@ _DISC_UNKNOWN = ("Unable to find", "matching stub", "isn't on MusicBrainz yet")
 _NEEDS_TAGS = "add metadata via -a or -t"
 _RELEASE_LINE = re.compile(r"^\d+ \(ID: ([0-9a-fA-F-]{36})\): (.+)$")
 _MULTIPLE = "Multiple releases found"
+_ACCURATERIP = re.compile(r"^AccurateRip:\s+(\S.*?)\s*$", re.MULTILINE)
 
 
 def preview(cyanrip: str, cfg: dict[str, Any], *, device: str = "", release: str = "",
@@ -129,7 +144,8 @@ def parse_preview(code: int, lines: list[str]) -> Preview:
                    disc_unknown=any(phrase in text for phrase in _DISC_UNKNOWN),
                    needs_tags=_NEEDS_TAGS in text,
                    tracks=(int(toc.group(1)), int(toc.group(2))) if toc else None,
-                   releases=_releases(lines) if _MULTIPLE in text else [])
+                   releases=_releases(lines) if _MULTIPLE in text else [],
+                   accuraterip=ar.group(1) if (ar := _ACCURATERIP.search(text)) else "")
 
 
 def _releases(lines: list[str]) -> list[tuple[str, str]]:
@@ -256,7 +272,8 @@ def remove_empty_dirs(root: Path) -> bool:
 
 def rip(cyanrip: str, cfg: dict[str, Any], work_dir: Path, *, device: str = "",
         release: str = "", no_musicbrainz: bool = False,
-        tags: ManualTags | None = None) -> tuple[Path, Path | None]:
+        tags: ManualTags | None = None, paranoia: str = "",
+        eject: bool | None = None) -> tuple[Path, Path | None]:
     """Rip the disc into the working folder.
 
     Returns the album folder and, when cyanrip left other files next to it,
@@ -264,16 +281,98 @@ def rip(cyanrip: str, cfg: dict[str, Any], work_dir: Path, *, device: str = "",
     """
     staging = new_staging_dir(work_dir)
     cmd = [cyanrip] + cyanrip_args(cfg, device=device, release=release, no_musicbrainz=no_musicbrainz,
-                                   tags=tags)
+                                   tags=tags, paranoia=paranoia, eject=eject)
     with hold_lock(staging):
-        code, tail = proc.run_tail(cmd, cwd=staging)
-        if code != 0:
-            reason = explain(tail) or "\n  (see cyanrip's output above)"
-            if remove_empty_dirs(staging):
-                raise RipError(f"cyanrip stopped (exit code {code}) before writing anything:{reason}")
-            raise RipError(f"cyanrip failed (exit code {code}):{reason}\nPartial files are in {staging}")
+        _run_into(cmd, staging)
         album = find_album_dir(staging)
         target = unique_path(work_dir / album.name)
         shutil.move(str(album), str(target))
         leftover = None if remove_empty_dirs(staging) else staging
     return target, leftover
+
+
+def _run_into(cmd: list[str], staging: Path) -> None:
+    """Run cyanrip in the staging folder; RipError with its reason if it fails."""
+    code, tail = proc.run_tail(cmd, cwd=staging)
+    if code != 0:
+        reason = explain(tail) or "\n  (see cyanrip's output above)"
+        if remove_empty_dirs(staging):
+            raise RipError(f"cyanrip stopped (exit code {code}) before writing anything:{reason}")
+        raise RipError(f"cyanrip failed (exit code {code}):{reason}\nPartial files are in {staging}")
+
+
+# A track's section in cyanrip's log starts with this line (src/cyanrip_main.c)
+# and holds its AccurateRip result, e.g. "Accurip v2:  2BDE5557 (accurately
+# ripped, confidence 71)" (src/cyanrip_log.c, master b40c1f0).
+_TRACK_DONE = re.compile(r"^Track (\d+) ripped and encoded (successfully!|with errors\.)", re.MULTILINE)
+_ACCURATE = "(accurately ripped"
+
+
+def accuraterip_results(log_text: str) -> dict[int, bool]:
+    """Track number -> whether AccurateRip confirms it, from a rip log.
+
+    A track ripped with errors, or only partially matching, counts as not
+    confirmed: those are the ones a fast rip has to read again securely.
+    """
+    marks = list(_TRACK_DONE.finditer(log_text))
+    results = {}
+    for i, mark in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(log_text)
+        results[int(mark.group(1))] = mark.group(2).startswith("successfully") and \
+            _ACCURATE in log_text[mark.end():end]
+    return results
+
+
+def rip_log(album: Path) -> Path | None:
+    """The rip log cyanrip wrote into the album folder (the newest, if several)."""
+    logs = sorted(album.glob("*.log"), key=lambda p: p.stat().st_mtime)
+    return logs[-1] if logs else None
+
+
+SECURE_LOG_SUFFIX = " (secure re-rip)"
+
+
+def rerip(cyanrip: str, cfg: dict[str, Any], album: Path, work_dir: Path, tracks: list[int], *,
+          device: str = "", release: str = "", no_musicbrainz: bool = False,
+          tags: ManualTags | None = None, eject: bool | None = None) -> tuple[list[Path], Path | None]:
+    """Rip tracks again with full paranoia and put them in place of the fast ones.
+
+    Same release, tags and naming as the first pass, so cyanrip gives each
+    track the same file name; a file whose name is not in the album stays in
+    the staging folder instead of joining the album as an extra track.
+    Returns the replaced files and the re-rip's log (kept next to the first
+    one as "<name> (secure re-rip).log").
+    """
+    staging = new_staging_dir(work_dir)
+    cmd = [cyanrip] + cyanrip_args(cfg, device=device, release=release, no_musicbrainz=no_musicbrainz,
+                                   tags=tags, paranoia="max", tracks=tracks, eject=eject)
+    replaced: list[Path] = []
+    log = None
+    with hold_lock(staging):
+        _run_into(cmd, staging)
+        new = find_album_dir(staging)
+        for f in sorted(new.iterdir()):
+            target = album / f.name
+            if f.suffix.lower() in AUDIO_EXTENSIONS and target.exists():
+                os.replace(f, target)
+                replaced.append(target)
+            elif f.suffix.lower() == ".log":
+                log = _numbered(album / f"{f.stem}{SECURE_LOG_SUFFIX}{f.suffix}")
+                shutil.move(str(f), str(log))
+            elif f.suffix.lower() not in AUDIO_EXTENSIONS and target.exists():
+                # The cue sheet and cover art of this partial rip; the album
+                # already has the complete ones.
+                f.unlink()
+        if not remove_empty_dirs(staging):
+            raise RipError(f"The secure re-rip left files that do not belong to the album in {staging}")
+    return replaced, log
+
+
+def _numbered(path: Path) -> Path:
+    """path, or 'name (2).ext', ... when a re-rip of the same album ran before."""
+    n = 1
+    candidate = path
+    while candidate.exists():
+        n += 1
+        candidate = path.with_name(f"{path.stem} ({n}){path.suffix}")
+    return candidate

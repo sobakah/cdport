@@ -28,6 +28,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="tag editor from the config's 'editors' (eartag, kid3, picard) or 'skip'")
     parser.add_argument("--lyrics", choices=("auto", "interactive", "skip"),
                         help="lyrics mode for this run (default: ask)")
+    parser.add_argument("--rip-mode", choices=config.RIP_MODES,
+                        help="fast: no paranoia, checked with AccurateRip, mismatching tracks ripped again "
+                             "securely; secure: paranoia for every track (default: config cyanrip.mode)")
     parser.add_argument("--install-cyanrip", action="store_true",
                         help="install cyanrip, or update and rebuild a source build, before starting")
     parser.add_argument("--color", choices=("auto", "always", "never"), help="override colour handling")
@@ -58,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
 
     options = app.Options(folder=args.folder, device=args.device or "",
                           lyrics=args.lyrics or "", editor=args.editor or "",
-                          install_cyanrip=args.install_cyanrip)
+                          install_cyanrip=args.install_cyanrip, rip_mode=args.rip_mode or "")
     session = app.new_session(cfg, options, args.config)
     try:
         return app.run(session)

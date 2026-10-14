@@ -70,12 +70,29 @@ cdimport                  # rip the disc in the drive
 cdimport ~/Temp/Album     # continue with an album ripped earlier
 cdimport --lyrics auto --editor skip
 cdimport --install-cyanrip    # update and rebuild cyanrip first
+cdimport --rip-mode secure      # paranoia for every track (default: fast)
 ```
 
 On first use cdimport asks for two folders and saves them in the config: the
 working folder, where rips land first (suggested: `~/Temp`), and the music
 library (suggested: your desktop's music folder, e.g. `~/Music` or
 `~/Musik`). `-w DIR` and `-l DIR` use other folders for one run.
+
+### Fast and secure rips
+
+By default cdimport rips **fast**: cyanrip reads without paranoia
+(`-P none`), and afterwards every track is checked against the AccurateRip
+database. Tracks it does not confirm are ripped again with full paranoia
+(`-P max`) and replace the fast ones; that log is kept as
+`<album> (secure re-rip).log`. A disc that is not in the AccurateRip
+database cannot be checked, so it is ripped securely right away.
+
+**Secure** mode uses cyanrip's paranoia for every track: each block is read
+in overlapping, verified pieces, and the drive's cache is defeated by
+seeking away and back. On the maintainer's slim USB drive that took about
+twice as long (200 s instead of 113 s for a 3:48 track, both confirmed by
+AccurateRip). Set `cyanrip.mode` to `"secure"`, pass `--rip-mode secure`
+for one run, or press `p` in the disc menu for one disc.
 
 ### Several releases for one disc
 

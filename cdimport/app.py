@@ -33,6 +33,7 @@ class Options:
     lyrics: str = ""
     editor: str = ""
     install_cyanrip: bool = False
+    rip_mode: str = ""  # "fast" or "secure"; empty: config cyanrip.mode
 
 
 @dataclass
@@ -373,9 +374,10 @@ def wait_for_disc(wanted: str) -> str | None:
 
 
 # --- 2. Rip ------------------------------------------------------------------
-def describe_rip_settings(cfg: dict[str, Any]) -> str:
+def describe_rip_settings(cfg: dict[str, Any], mode: str) -> str:
     opts = cfg["cyanrip"]
-    parts = ["deemphasis " + ("on (changes the audio of preemphasised discs)" if opts["deemphasis"]
+    parts = [MODE_LABELS[mode],
+             "deemphasis " + ("on (changes the audio of preemphasised discs)" if opts["deemphasis"]
                               else "off (bit-exact)"),
              "ReplayGain tags " + ("on" if opts["replaygain"] else "off"),
              "eject " + ("on" if opts["eject"] else "off")]
@@ -396,11 +398,16 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
     release = ""
     no_mb = False
     typed: rip.ManualTags | None = None
+    mode = session.options.rip_mode or session.cfg["cyanrip"]["mode"]
+    shown: rip.Preview | None = None
+    refresh = False
     while True:
-        ui.tool_start("cyanrip", "disc info and MusicBrainz match")
-        shown = rip.preview(session.cyanrip, session.cfg, device=device, release=release,
-                            no_musicbrainz=no_mb, tags=typed)
-        ui.tool_end("cyanrip", shown.code)
+        if shown is None or refresh:  # the first time, and after another release or tags
+            refresh = False
+            ui.tool_start("cyanrip", "disc info and MusicBrainz match")
+            shown = rip.preview(session.cyanrip, session.cfg, device=device, release=release,
+                                no_musicbrainz=no_mb, tags=typed)
+            ui.tool_end("cyanrip", shown.code)
         if shown.needs_tags:
             ui.warn("MusicBrainz does not know this disc, and cyanrip does not rip it without tags.")
         elif shown.releases:
@@ -409,7 +416,7 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
             ui.warn(f"cyanrip -I exited with code {shown.code}:{rip.explain(shown.tail) or ' see above.'}")
         if shown.disc_unknown and shown.submission_url and not no_mb:
             explain_submission(shown.submission_url)
-        ui.dim(f"Rip settings: {describe_rip_settings(session.cfg)}")
+        ui.dim(f"Rip settings: {describe_rip_settings(session.cfg, mode)}")
         options = [(str(i), f"{label}\n      {musicbrainz.release_page(mbid)}")
                    for i, (mbid, label) in enumerate(shown.releases, 1)]
         if not (shown.needs_tags or shown.releases):
@@ -419,11 +426,18 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
             ("m", "pick a MusicBrainz release (list number, release ID or link)"),
             ("t", "type in the tags (album, artist, year, track titles)"),
             ("n", "rip without MusicBrainz metadata"),
+            ("p", "rip securely with paranoia instead (about twice as slow)" if mode == "fast"
+             else "rip fast instead (checked with AccurateRip)"),
             ("b", "back to disc detection"),
             ("q", "quit"),
         ]
         default = "1" if shown.releases else "s" if shown.needs_tags else "r"
         answer = ui.choose("Rip this disc", options, default=default)
+        if answer == "p":
+            mode = "secure" if mode == "fast" else "fast"
+            continue
+        # Only "p" keeps the preview; everything else may change what cyanrip shows.
+        refresh = True
         if answer.isdigit():
             release, no_mb = shown.releases[int(answer) - 1][0], False
             continue
@@ -455,11 +469,18 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
             continue
 
         ui.step(2, "Rip")
+        fast = mode == "fast" and shown.accuraterip == "found"
+        if mode == "fast" and not fast:
+            ui.info("This disc is not in the AccurateRip database, so a fast rip could not be "
+                    "checked: ripping securely with paranoia.")
         session.work_dir.mkdir(parents=True, exist_ok=True)
-        ui.tool_start("cyanrip", "ripping")
+        ui.tool_start("cyanrip", "ripping fast (no paranoia)" if fast else "ripping securely (paranoia)")
         try:
+            # A fast rip keeps the disc in: tracks that fail the check are read again.
             folder, leftover = rip.rip(session.cyanrip, session.cfg, session.work_dir,
-                                       device=device, release=release, no_musicbrainz=no_mb, tags=typed)
+                                       device=device, release=release, no_musicbrainz=no_mb, tags=typed,
+                                       paranoia="none" if fast else "max",
+                                       eject=False if fast else None)
         except rip.RipError as exc:
             ui.tool_end("cyanrip", None)
             ui.error(str(exc))
@@ -477,9 +498,58 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
         ui.success(f"Ripped to {ui.tilde(folder)}")
         if leftover:
             ui.warn(f"cyanrip also left files in {leftover}; check them.")
+        if fast:
+            check_fast_rip(session, folder, device, release=release, no_mb=no_mb, typed=typed)
         if shown.disc_unknown and shown.submission_url:
             ui.info(f"To add this disc to MusicBrainz later: {shown.submission_url}")
         return album
+
+
+def check_fast_rip(session: Session, folder: Path, device: str, *, release: str, no_mb: bool,
+                   typed: rip.ManualTags | None) -> None:
+    """After a fast rip: read the tracks AccurateRip does not confirm again,
+    securely, in place of the fast ones; then eject as configured."""
+    assert session.cyanrip
+    eject = session.cfg["cyanrip"]["eject"]
+    log = rip.rip_log(folder)
+    try:
+        results = rip.accuraterip_results(log.read_text(encoding="utf-8", errors="replace")) if log else {}
+    except OSError as exc:
+        results = {}
+        ui.warn(f"Cannot read the rip log: {exc}")
+    unconfirmed = sorted(n for n, ok in results.items() if not ok)
+    if not results:
+        ui.warn("The rip log says nothing about AccurateRip, so the fast rip is unchecked. "
+                "Rip the disc again with p (secure) if in doubt.")
+    elif not unconfirmed:
+        ui.success(f"AccurateRip confirms all {len(results)} tracks.")
+    else:
+        listed = ", ".join(str(n) for n in unconfirmed)
+        ui.warn(f"AccurateRip does not confirm track(s) {listed}; ripping them again securely.")
+        ui.tool_start("cyanrip", f"secure re-rip of track(s) {listed}")
+        try:
+            replaced, relog = rip.rerip(session.cyanrip, session.cfg, folder, session.work_dir, unconfirmed,
+                                        device=device, release=release, no_musicbrainz=no_mb, tags=typed,
+                                        eject=eject)
+        except rip.RipError as exc:
+            ui.tool_end("cyanrip", None)
+            ui.error(f"{exc}\nThe fast-ripped track(s) {listed} stay, unconfirmed.")
+            return
+        ui.tool_end("cyanrip", 0)
+        again = {}
+        if relog:
+            again = rip.accuraterip_results(relog.read_text(encoding="utf-8", errors="replace"))
+        still = [n for n in unconfirmed if not again.get(n)]
+        ui.success(f"Replaced {len(replaced)} track(s) with the secure rip.")
+        if still:
+            ui.warn(f"AccurateRip does not confirm track(s) {', '.join(map(str, still))} after the secure "
+                    "rip either: a pressing AccurateRip does not know, or a damaged disc. The secure "
+                    "rip is kept; its log says more.")
+        else:
+            ui.success("AccurateRip now confirms every track.")
+        return  # the re-rip ejected the disc (-Q) if configured
+    if eject and (problem := disc.eject(device)):
+        ui.dim(f"Cannot eject the disc: {problem}")
 
 
 def explain_submission(url: str) -> None:
@@ -544,6 +614,12 @@ def ask_tags(previous: rip.ManualTags | None, tracks: tuple[int, int] | None) ->
         if title:
             titles[n] = title
     return rip.ManualTags(album, artist, date, titles)
+
+
+MODE_LABELS = {
+    "fast": "fast (no paranoia, checked with AccurateRip, mismatches ripped again securely)",
+    "secure": "secure (paranoia)",
+}
 
 
 # cyanrip's confidence is the number of tracks that confirmed the offset.

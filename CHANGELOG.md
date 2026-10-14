@@ -5,6 +5,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+* **Fast rips by default:** cyanrip reads without paranoia, every track is
+  checked against AccurateRip, and tracks it does not confirm are ripped
+  again securely (`-P max`) in place of the fast ones. Discs not in the
+  AccurateRip database are ripped securely. About half the time of a secure
+  rip on a slim USB drive. `cyanrip.mode` (`"fast"`/`"secure"`),
+  `--rip-mode` for one run, `p` in the disc menu for one disc.
+
 ### Fixed
 
 * **Parallel runs:** a cdimport working with a disc (preview, offset
