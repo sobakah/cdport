@@ -38,6 +38,8 @@ several releases for one disc ID.
 output, clickable links; `ui.check`, `ui.field`, `ui.gap`, `ui.tool_start`).
 0.4.1 (2026-10-14): fast rips by default (`cyanrip.mode`, AccurateRip check,
 secure re-rip of unconfirmed tracks) and the drive lock against parallel runs.
+0.4.2 (2026-10-14): second disc of an album joins the first one's library
+folder; eject after a fast rip retries and falls back to util-linux eject.
 
 Layout: `cdimport/` package (`app.py` runs the steps, one module per step:
 `disc`, `rip`, `tags`, `lyrics`, `library`; `state`, `tools`, `proc`,
