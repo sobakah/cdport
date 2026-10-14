@@ -36,6 +36,8 @@ link, typed tags via -a/-t, disc ID submission link) and a choice among
 several releases for one disc ID.
 0.4.0 (2026-10-12): easier-to-read output (marks, aligned lists, framed tool
 output, clickable links; `ui.check`, `ui.field`, `ui.gap`, `ui.tool_start`).
+0.4.1 (2026-10-14): fast rips by default (`cyanrip.mode`, AccurateRip check,
+secure re-rip of unconfirmed tracks) and the drive lock against parallel runs.
 
 Layout: `cdimport/` package (`app.py` runs the steps, one module per step:
 `disc`, `rip`, `tags`, `lyrics`, `library`; `state`, `tools`, `proc`,
