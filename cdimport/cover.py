@@ -9,8 +9,8 @@ of the same album has a front cover (seen 2026-10-11 with P1Harmony's
 from __future__ import annotations
 
 import json
+import os
 import re
-import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -18,6 +18,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import config
 from .config import __version__
 
 MB_SITE = "https://musicbrainz.org"
@@ -186,10 +187,12 @@ def image_type(data: bytes) -> tuple[str, str]:
 
 
 def missing(files: list[Path]) -> list[Path]:
-    """FLAC files without an embedded picture (other formats are not checked)."""
+    """FLAC files without an embedded front cover (other formats are not
+    checked). A back cover or booklet page alone is no cover for a player."""
     from mutagen.flac import FLAC
 
-    return [f for f in files if f.suffix.lower() == ".flac" and not FLAC(f).pictures]
+    return [f for f in files if f.suffix.lower() == ".flac"
+            and not any(p.type == FRONT_COVER for p in FLAC(f).pictures)]
 
 
 def current(files: list[Path]) -> str:
@@ -212,7 +215,8 @@ def group_page(group_id: str) -> str:
 
 
 def preview(files: list[Path]) -> Path | None:
-    """Write the first embedded front cover to a temporary file and return it.
+    """Write the first embedded front cover to a temporary file and return it
+    (the caller deletes it).
 
     The keep-or-change question shows it as a link, so the user can look at
     the cover they would keep. cover.jpg may be missing or differ from what
@@ -229,7 +233,9 @@ def preview(files: list[Path]) -> Path | None:
                     _, ext = image_type(picture.data)
                 except CoverError:
                     return None
-                path = Path(tempfile.gettempdir()) / f"cdimport-cover-preview{ext}"
+                # Per user and per process: no other user's file in the way,
+                # no other cdimport overwriting it while it is looked at.
+                path = config.make_runtime_dir() / f"cover-preview-{os.getpid()}{ext}"
                 path.write_bytes(picture.data)
                 return path
     return None
@@ -238,7 +244,7 @@ def preview(files: list[Path]) -> Path | None:
 def embed(files: list[Path], data: bytes, replace: bool = False) -> int:
     """Embed the picture as front cover; returns how many files changed.
 
-    Without replace only FLAC files without any picture get it. With replace
+    Without replace only FLAC files without a front cover get it. With replace
     every FLAC file's front cover is swapped; other pictures (back cover,
     booklet) stay.
     """

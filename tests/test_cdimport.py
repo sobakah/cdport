@@ -26,6 +26,28 @@ def private_dirs(tmp_path, tmp_path_factory, monkeypatch):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path_factory.mktemp("runtime")))
 
 
+# Real programs a test must never start: they read the drive, eject it, go
+# online or change the system. Test doubles are started by path, not by name.
+REAL_TOOLS = {"cyanrip", "eject", "udevadm", "lyrembed", "flatpak", "kid3", "picard", "git",
+              "dnf", "sudo", "apt", "meson", "ninja", "pipx", "pkg-config"}
+
+
+@pytest.fixture(autouse=True)
+def no_real_tools(monkeypatch, tmp_path_factory):
+    """Fail a test that would run one of the real tools (seen 2026-10-15: a
+    fake that no longer matched let cyanrip open the drive)."""
+    real_popen = subprocess.Popen
+    test_dirs = tmp_path_factory.getbasetemp().resolve()
+
+    class GuardedPopen(real_popen):
+        def __init__(self, args, *rest, **kwargs):
+            program = Path(str(args[0] if isinstance(args, (list, tuple)) else str(args).split()[0]))
+            if program.name in REAL_TOOLS and not program.resolve().is_relative_to(test_dirs):
+                raise AssertionError(f"test tried to run the real {program}: {args}")
+            super().__init__(args, *rest, **kwargs)
+    monkeypatch.setattr(subprocess, "Popen", GuardedPopen)
+
+
 def default_cfg():
     return copy.deepcopy(config.DEFAULT_CONFIG)
 
@@ -94,6 +116,36 @@ def test_broken_default_config_warns_and_uses_defaults(tmp_path, monkeypatch):
     cfg, warnings = config.load_config()
     assert warnings and "using the defaults" in warnings[0]
     assert cfg == config.DEFAULT_CONFIG
+
+
+def test_bad_settings_fall_back_alone(tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({
+        "work_dir": "~/Rips", "library_dir": "~/Musik", "lyrics_mode": "sometimes",
+        "cyanrip": {"offset": 6, "mode": "quick", "eject": "yes"},
+        "editors": {"mine": {"commands": "tageditor"}, "named": {"name": 3, "commands": [["x"]]}},
+        "editor": "mine"}), encoding="utf-8")
+    monkeypatch.setattr(config, "default_config_path", lambda: path)
+    cfg, warnings = config.load_config()
+    # The folders and the offset still apply: no first-run questions, no new measurement.
+    assert (cfg["work_dir"], cfg["library_dir"], cfg["cyanrip"]["offset"]) == ("~/Rips", "~/Musik", 6)
+    assert cfg["lyrics_mode"] == "ask" and cfg["cyanrip"]["mode"] == "fast" and cfg["cyanrip"]["eject"] is True
+    assert "mine" not in cfg["editors"] and "named" not in cfg["editors"] and cfg["editor"] == "eartag"
+    for fragment in ("lyrics_mode", "cyanrip.mode", "cyanrip.eject", "editors.mine.commands",
+                     "editors.named.name", "'editor' is 'mine'", "the others apply"):
+        assert fragment in warnings[0]
+
+
+@pytest.mark.parametrize("content, fragment", [
+    ('{"cyanrip": {"offset": true}}', "cyanrip.offset"),
+    ('{"editors": {"mine": {"name": null, "commands": [["x"]]}}}', "editors.mine.name"),
+    ('{"lyrembed": {"extra_args": [1]}}', "lyrembed.extra_args"),
+])
+def test_more_invalid_values(tmp_path, content, fragment):
+    path = tmp_path / "config.json"
+    path.write_text(content, encoding="utf-8")
+    with pytest.raises(config.ConfigError, match=fragment.replace(".", r"\.")):
+        config.load_config(path)
 
 
 def test_missing_explicit_config_is_fatal(tmp_path):
@@ -170,6 +222,14 @@ def test_colour_links_and_readline_safe_prompt(monkeypatch):
         assert ui._prompt("Rip", "r").count("\x01") == 4  # every escape code is wrapped
     monkeypatch.setattr(ui, "_color", False)
     assert ui.links("https://x.org") == "https://x.org" and ui._prompt("Rip", "r") == "Rip [r]: "
+
+
+def test_links_leave_sentence_punctuation_out(monkeypatch):
+    monkeypatch.setattr(ui, "_color", True)
+    text = ui.links("Drives are listed at https://www.accuraterip.com/driveoffsets.htm; one marked. "
+                    "See https://x.org/a/b. (https://y.org/c?d=1+2)")
+    assert "\033]8;;https://www.accuraterip.com/driveoffsets.htm\033\\" in text
+    assert "\033]8;;https://x.org/a/b\033\\" in text and "\033]8;;https://y.org/c?d=1+2\033\\" in text
 
 
 # --- disc --------------------------------------------------------------------
@@ -334,6 +394,13 @@ def test_flatpak_command_needs_installed_app(monkeypatch):
     assert tools.command_available(["kid3", "{dir}"])  # not flatpak: PATH is enough
 
 
+def test_flatpak_app_id_skips_option_values():
+    assert tools._flatpak_app_id(["flatpak", "run", "--arch", "x86_64", "org.musicbrainz.Picard", "{dir}"]) \
+        == "org.musicbrainz.Picard"
+    assert tools._flatpak_app_id(["flatpak", "run", "--arch=x86_64", "--user", "app.drey.EarTag"]) == "app.drey.EarTag"
+    assert tools._flatpak_app_id(["flatpak", "run", "--branch"]) is None
+
+
 def test_find_editor_takes_first_available_command(monkeypatch):
     monkeypatch.setattr(tools, "command_available", lambda cmd: cmd[0] == "flatpak")
     editor = tools.find_editor(default_cfg(), "kid3")
@@ -371,18 +438,18 @@ def test_cyanrip_args_options():
 
 
 def fake_cyanrip(files, code=0):
-    """proc.run stand-in that creates files relative to cwd, like cyanrip."""
-    def run(cmd, cwd=None):
+    """proc.run_tail stand-in that creates files relative to cwd, like cyanrip."""
+    def run_tail(cmd, cwd=None, lines=3, keep_bytes=8192):
         for name in files:
             target = Path(cwd) / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("x")
-        return code
-    return run
+        return code, []
+    return run_tail
 
 
 def test_rip_moves_album_out_of_staging(tmp_path, monkeypatch):
-    monkeypatch.setattr(rip.proc, "run", fake_cyanrip(["Album/01 - A.flac", "Album/Album.log"]))
+    monkeypatch.setattr(rip.proc, "run_tail", fake_cyanrip(["Album/01 - A.flac", "Album/Album.log"]))
     folder, leftover = rip.rip("cyanrip", default_cfg(), tmp_path)
     assert folder == tmp_path / "Album"
     assert (folder / "01 - A.flac").exists() and (folder / "Album.log").exists()
@@ -392,25 +459,25 @@ def test_rip_moves_album_out_of_staging(tmp_path, monkeypatch):
 
 def test_rip_never_overwrites_existing_album(tmp_path, monkeypatch):
     (tmp_path / "Album").mkdir()
-    monkeypatch.setattr(rip.proc, "run", fake_cyanrip(["Album/01.flac"]))
+    monkeypatch.setattr(rip.proc, "run_tail", fake_cyanrip(["Album/01.flac"]))
     folder, _ = rip.rip("cyanrip", default_cfg(), tmp_path)
     assert folder.name == "Album (2)"
 
 
 def test_rip_keeps_leftovers_and_failures(tmp_path, monkeypatch):
-    monkeypatch.setattr(rip.proc, "run", fake_cyanrip(["Artist/Album/01.flac", "stray.log"]))
+    monkeypatch.setattr(rip.proc, "run_tail", fake_cyanrip(["Artist/Album/01.flac", "stray.log"]))
     folder, leftover = rip.rip("cyanrip", default_cfg(), tmp_path)
     assert folder == tmp_path / "Album"
     assert leftover is not None and (leftover / "stray.log").exists()
 
-    monkeypatch.setattr(rip.proc, "run", fake_cyanrip(["Other/01.flac"], code=1))
+    monkeypatch.setattr(rip.proc, "run_tail", fake_cyanrip(["Other/01.flac"], code=1))
     with pytest.raises(rip.RipError, match="exit code 1"):
         rip.rip("cyanrip", default_cfg(), tmp_path)
     assert not (tmp_path / "Other").exists()  # partial rip stays in staging
 
 
 def test_rip_without_audio_is_an_error(tmp_path, monkeypatch):
-    monkeypatch.setattr(rip.proc, "run", fake_cyanrip(["Album/cover.jpg"]))
+    monkeypatch.setattr(rip.proc, "run_tail", fake_cyanrip(["Album/cover.jpg"]))
     with pytest.raises(rip.RipError, match="no audio files"):
         rip.rip("cyanrip", default_cfg(), tmp_path)
 
@@ -430,6 +497,13 @@ def test_missing_tags_and_album_artist(tmp_path):
     assert files == [good, bad]
     assert tags.missing_tags(files) == [(bad, ["title"])]
     assert tags.album_artist(files) == "IU"
+
+
+def test_tag_check_mentions_album_artist_setting(tmp_path, capsys):
+    make_flac(tmp_path / "01.flac", title="Blueming", albumartist="IU")  # no track artist
+    assert not app.check_tags(tmp_path)
+    out = capsys.readouterr().out
+    assert "01.flac: no artist" in out and "prefer_album_artist" in out
 
 
 def test_broken_file_raises_tag_read_error(tmp_path):
@@ -595,6 +669,38 @@ def test_disc_merge_is_only_offered_when_it_is_safe(tmp_path):
     no_id.mkdir()
     make_flac(no_id / "2.01 - A.flac", album="Young Forever", albumartist="BTS", discnumber="2/2")
     assert library.plan_disc_merge(no_id, there).discs_here == ["2"]
+
+
+def test_disc_merge_without_album_artist_compares_every_track(tmp_path):
+    there, here = tmp_path / "lib", tmp_path / "work"
+    there.mkdir()
+    here.mkdir()
+    make_flac(there / "1.01 - A.flac", album="Mix", artist="IU feat. Suga", discnumber="1")
+    make_flac(there / "1.02 - B.flac", album="Mix", artist="IU", discnumber="1")
+    make_flac(here / "2.01 - C.flac", album="Mix", artist="Zico", discnumber="2")
+    make_flac(here / "2.02 - D.flac", album="Mix", artist="IU", discnumber="2")
+    assert library.plan_disc_merge(here, there).discs_here == ["2"]  # IU is on both
+    make_flac(here / "2.02 - D.flac", album="Mix", artist="Psy", discnumber="2")
+    assert library.plan_disc_merge(here, there) is None  # no artist in common
+
+
+def test_failed_disc_merge_moves_everything_back(tmp_path, monkeypatch):
+    there = disc_folder(tmp_path / "lib", 1, 1)
+    here = disc_folder(tmp_path / "work", 2, 2)
+    plan = library.plan_disc_merge(here, there)
+    real_move = library.shutil.move
+    moves = []
+
+    def move(source, destination):
+        moves.append(source)
+        if len(moves) == 2:
+            raise OSError(28, "No space left on device")
+        return real_move(source, destination)
+    monkeypatch.setattr(library.shutil, "move", move)
+    with pytest.raises(library.MoveError, match="No space left on device.*stays where it was"):
+        library.merge_disc(plan, there)
+    assert sorted(p.name for p in there.iterdir()) == ["1.01 - T1.flac", "Young Forever CD1.cue", "cover.jpg"]
+    assert len(list(here.glob("*.flac"))) == 2 and (here / "cover.jpg").exists()
 
 
 def test_existing_folder_to_library(tmp_path, monkeypatch, album_dir):
@@ -929,22 +1035,27 @@ def test_offset_zero_is_for_this_rip_only(tmp_path, monkeypatch):
     assert app.ensure_offset(session, "")
     assert session.cfg["cyanrip"]["offset"] == 0
     assert not session.config_path.exists()
+    # The next disc (another run) asks again instead of ripping with 0 silently.
+    session.forget_one_time_offset()
+    assert session.cfg["cyanrip"]["offset"] is None
+    feed_input(monkeypatch, ["b"])
+    assert not app.ensure_offset(session, "")
 
 
 def test_failed_measurement_offers_the_choice_again(tmp_path, monkeypatch):
     commands = []
 
-    def run(cmd, cwd=None):
+    def run_tail(cmd, cwd=None, lines=3, keep_bytes=8192):
         commands.append(cmd)
-        return 1  # "No track had AccuRip entry, cannot find offset!"
-    monkeypatch.setattr(app.proc, "run", run)
+        return 1, ["No track had AccuRip entry, cannot find offset!"]
+    monkeypatch.setattr(app.proc, "run_tail", run_tail)
     feed_input(monkeypatch, ["f", "b"])
     assert not app.ensure_offset(offset_session(tmp_path), "/dev/sr0")
     assert commands == [["cyanrip", "-f", "-d", "/dev/sr0"]]
 
 
 def test_measured_offset_is_saved(tmp_path, monkeypatch):
-    monkeypatch.setattr(app.proc, "run", lambda cmd, cwd=None: 0)
+    monkeypatch.setattr(app.proc, "run_tail", lambda cmd, cwd=None, lines=3: (0, []))
     session = offset_session(tmp_path)
     feed_input(monkeypatch, ["f", "x", "f", "-12"])  # a typo, then measure again
     assert app.ensure_offset(session, "")
@@ -952,7 +1063,7 @@ def test_measured_offset_is_saved(tmp_path, monkeypatch):
 
 
 def test_rip_failing_before_any_file_removes_staging(tmp_path, monkeypatch):
-    monkeypatch.setattr(rip.proc, "run", lambda cmd, cwd=None: 1)
+    monkeypatch.setattr(rip.proc, "run_tail", lambda cmd, cwd=None: (1, []))
     with pytest.raises(rip.RipError, match="before writing anything"):
         rip.rip("cyanrip", default_cfg(), tmp_path)
     assert list(tmp_path.iterdir()) == []
@@ -975,6 +1086,57 @@ def test_run_tail_passes_output_through_and_keeps_the_end(monkeypatch, capsys):
     assert code == 1
     assert tail[-1] == "Offset is unset!" and "Opening drive..." in tail
     assert "Offset is unset!" in capsys.readouterr().out  # the user saw it live too
+
+
+def test_run_tail_without_a_terminal_still_keeps_the_end(monkeypatch, capsys):
+    monkeypatch.setattr(proc, "_use_pty", lambda: False)
+    child = ("import sys; print('Multiple releases found'); "
+             "print('    1 (ID: x): Album', file=sys.stderr); sys.exit(1)")
+    code, tail = proc.run_tail([sys.executable, "-c", child], lines=10)
+    # A pipe makes the tool buffer stdout but not stderr, so the order may change.
+    assert code == 1 and sorted(tail) == ["1 (ID: x): Album", "Multiple releases found"]
+    assert "Multiple releases found" in capsys.readouterr().out
+    assert proc.run_tail(["/nonexistent/tool"])[0] == proc.CANNOT_START
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="signals to a child differ on Windows")
+def test_run_tail_keeps_reading_while_the_tool_cleans_up(monkeypatch, capsys):
+    # After Ctrl+C the tool writes more than a terminal buffer holds; it
+    # must still be able to finish within the grace period.
+    monkeypatch.setattr(proc, "_use_pty", lambda: True)
+    child = ("import signal, sys, time\n"
+             "def bye(*a):\n"
+             "    sys.stdout.write('x' * 200000 + '\\ncleaned up\\n'); sys.stdout.flush(); sys.exit(3)\n"
+             "signal.signal(signal.SIGINT, bye)\n"
+             "print('ready', flush=True)\n"
+             "time.sleep(30)\n")
+    real_copy = []
+    started = subprocess.Popen
+
+    def popen(*args, **kwargs):
+        child_proc = started(*args, **kwargs)
+        real_copy.append(child_proc)
+        return child_proc
+    monkeypatch.setattr(proc.subprocess, "Popen", popen)
+    monkeypatch.setattr(proc, "INTERRUPT_GRACE_SECONDS", 10)
+    real_write = sys.stdout.buffer.write
+    interrupted = []
+
+    def write(data):
+        # Ctrl+C reaches the tool and cdimport together, as from the terminal.
+        if b"ready" in data and not interrupted:
+            interrupted.append(1)
+            real_copy[0].send_signal(2)
+            real_write(data)
+            raise KeyboardInterrupt
+        return real_write(data)
+    monkeypatch.setattr(sys.stdout.buffer, "write", write)
+    import time
+    began = time.monotonic()
+    with pytest.raises(KeyboardInterrupt):
+        proc.run_tail([sys.executable, "-c", child])
+    assert real_copy[0].returncode == 3  # finished on its own, not terminated
+    assert time.monotonic() - began < 10
 
 
 def test_rip_error_repeats_cyanrips_reason(tmp_path, monkeypatch):
@@ -1222,7 +1384,8 @@ def test_rerip_replaces_tracks_and_keeps_both_logs(tmp_path, monkeypatch):
         (out / "Album.log").write_text(fast_log((2, ACCURATE, True)))
         return 0, []
     monkeypatch.setattr(rip.proc, "run_tail", cyanrip)
-    replaced, log = rip.rerip("cyanrip", default_cfg(), album, work, [2], eject=True)
+    replaced, log, leftover = rip.rerip("cyanrip", default_cfg(), album, work, [2], eject=True)
+    assert leftover is None
     assert replaced == [album / "2 - B.flac"] and (album / "2 - B.flac").read_text() == "secure2"
     assert (album / "1 - A.flac").read_text() == "fast1" and (album / "Album.cue").read_text() == "full cue"
     assert log == album / "Album (secure re-rip).log" and (album / "Album.log").read_text() == "first log"
@@ -1231,6 +1394,25 @@ def test_rerip_replaces_tracks_and_keeps_both_logs(tmp_path, monkeypatch):
     assert not list(work.glob(STAGING_PREFIX + "*"))  # nothing left behind
     rip.rerip("cyanrip", default_cfg(), album, work, [2])
     assert (album / "Album (secure re-rip) (2).log").exists()  # a second re-rip keeps the first log
+
+
+def test_rerip_reports_what_does_not_belong(tmp_path, monkeypatch):
+    work = tmp_path / "work"
+    album = work / "Album"
+    album.mkdir(parents=True)
+    (album / "2 - B.flac").write_text("fast2")
+
+    def cyanrip(cmd, cwd=None, lines=3, keep_bytes=8192):
+        out = Path(cwd) / "Album"
+        out.mkdir()
+        (out / "2 - B.flac").write_text("secure2")
+        (out / "2 - Other name.flac").write_text("?")  # not in the album: stays out of it
+        return 0, []
+    monkeypatch.setattr(rip.proc, "run_tail", cyanrip)
+    replaced, log, leftover = rip.rerip("cyanrip", default_cfg(), album, work, [2])
+    assert replaced == [album / "2 - B.flac"] and (album / "2 - B.flac").read_text() == "secure2"
+    assert leftover and (leftover / "Album" / "2 - Other name.flac").exists()
+    assert not (album / "2 - Other name.flac").exists()
 
 
 def fast_rip_session(tmp_path, monkeypatch, log_text, accuraterip="found", relog=None):
@@ -1252,7 +1434,9 @@ def fast_rip_session(tmp_path, monkeypatch, log_text, accuraterip="found", relog
         calls["rerip"].append((tracks, kwargs))
         log = album / "Album (secure re-rip).log"
         log.write_text(relog or "")
-        return [album / f"{n}.flac" for n in tracks], log
+        if kwargs.get("fail"):
+            raise rip.RipError("cyanrip failed")
+        return [album / f"{n}.flac" for n in tracks], log, None
     monkeypatch.setattr(app.rip, "rip", fake_rip)
     monkeypatch.setattr(app.rip, "rerip", fake_rerip)
     monkeypatch.setattr(app.disc, "eject", lambda device: calls["eject"].append(device))
@@ -1280,6 +1464,17 @@ def test_fast_rip_rereads_unconfirmed_tracks_securely(tmp_path, monkeypatch, cap
     out = capsys.readouterr().out
     assert "does not confirm track(s) 2, 3; ripping them again securely" in out
     assert "track(s) 3 after the secure rip either" in out
+
+
+def test_failed_rerip_keeps_the_fast_tracks_and_ejects(tmp_path, monkeypatch, capsys):
+    log = fast_log((1, NOT_FOUND, True))
+    session, calls = fast_rip_session(tmp_path, monkeypatch, log)
+    real_rerip = app.rip.rerip
+    monkeypatch.setattr(app.rip, "rerip", lambda *a, **k: real_rerip(*a, fail=True, **k))
+    feed_input(monkeypatch, ["r"])
+    assert app.preview_and_rip(session, "/dev/sr0") is not None
+    assert calls["eject"] == ["/dev/sr0"]
+    assert "track(s) 1 stay, unconfirmed" in capsys.readouterr().err
 
 
 def test_secure_mode_and_discs_without_accuraterip(tmp_path, monkeypatch, capsys):
@@ -1524,10 +1719,10 @@ def test_lock_of_a_crashed_run_counts_as_free(tmp_path):
 def test_rip_holds_the_lock_while_cyanrip_runs(tmp_path, monkeypatch):
     seen = []
 
-    def run(cmd, cwd=None):
+    def run_tail(cmd, cwd=None, lines=3, keep_bytes=8192):
         seen.append(rip.in_use(Path(cwd)))
         return fake_cyanrip(["Album/01.flac"])(cmd, cwd)
-    monkeypatch.setattr(rip.proc, "run", run)
+    monkeypatch.setattr(rip.proc, "run_tail", run_tail)
     folder, _ = rip.rip("cyanrip", default_cfg(), tmp_path)
     assert seen == [True]
     assert sorted(p.name for p in tmp_path.iterdir()) == ["Album"]  # no lock file left
@@ -1618,12 +1813,32 @@ def test_keep_or_change_links_the_embedded_cover(tmp_path, monkeypatch, capsys):
     folder.mkdir()
     make_flac(folder / "01.flac")
     cover.embed(tags.audio_files(folder), JPEG)
-    monkeypatch.setattr(cover.tempfile, "gettempdir", lambda: str(tmp_path))
-    feed_input(monkeypatch, [""])  # keep
-    covertool.offer(folder)
-    preview = tmp_path / "cdimport-cover-preview.jpg"
-    assert preview.read_bytes() == JPEG
+    seen = []
+    monkeypatch.setattr(covertool.ui, "choose", lambda title, options, default: seen.append(
+        list(config.runtime_dir().glob("cover-preview-*"))) or default)
+    covertool.offer(folder)  # keep
+    preview = config.runtime_dir() / f"cover-preview-{os.getpid()}.jpg"
+    assert seen == [[preview]]  # there while the question is asked ...
+    assert not preview.exists()  # ... and gone after the answer
     assert f"Current cover: {preview.as_uri()}" in capsys.readouterr().out
+    assert oct(config.runtime_dir().stat().st_mode & 0o777) == "0o700"
+
+
+def test_a_back_cover_alone_is_no_cover(tmp_path, monkeypatch):
+    from mutagen.flac import FLAC, Picture
+    folder = tmp_path / "Album"
+    folder.mkdir()
+    back_only = make_flac(folder / "01.flac")
+    audio = FLAC(back_only)
+    picture = Picture()
+    picture.type, picture.mime, picture.data = 4, "image/jpeg", b"\xff\xd8\xff back"
+    audio.add_picture(picture)
+    audio.save()
+    covered = make_flac(folder / "02.flac")
+    cover.embed([covered], JPEG)
+    assert cover.missing([back_only, covered]) == [back_only]
+    assert cover.embed([back_only, covered], JPEG) == 1  # only the track without a front cover
+    assert {p.type for p in FLAC(back_only).pictures} == {3, 4}
 
 
 def test_cover_from_own_file_and_bad_files(tmp_path, monkeypatch):
@@ -1834,7 +2049,7 @@ def test_automatic_lyrics_asks_about_romanization(tmp_path, monkeypatch, album_d
                         lambda lyr, cfg, folder, mode, romanize=None: passed.append(romanize) or lyrics.EXIT_OK)
     album = state.load(album_dir)
     album.mark("tags")
-    feed_input(monkeypatch, [answer, ""])  # Enter = lyrembed's own setting; then continue
+    feed_input(monkeypatch, [answer, "c"])  # Enter = lyrembed's own setting; then continue without lyrics
     assert app.lyrics_step(session, album)
     assert passed == [expected]
 
@@ -1847,24 +2062,60 @@ def test_old_lyrembed_is_not_asked_and_gets_no_flag(tmp_path, monkeypatch, album
                         lambda lyr, cfg, folder, mode, romanize=None: passed.append(romanize) or lyrics.EXIT_OK)
     album = state.load(album_dir)
     album.mark("tags")
-    feed_input(monkeypatch, [""])  # lyrics embedded: continue
+    feed_input(monkeypatch, ["c"])  # no lyrics found: continue without them
     assert app.lyrics_step(session, album) and passed == [None]
 
 
-@pytest.mark.parametrize("batch_code, answers", [
-    (lyrics.EXIT_OK, ["l"]),                      # all embedded; check them
-    (lyrics.EXIT_BATCH_FAILURES, ["c", "l"]),     # some undecided; continue; check
+@pytest.mark.parametrize("batch_code, found, answers, modes, says", [
+    # Every track got lyrics: offer to check them.
+    (lyrics.EXIT_OK, True, ["l"], ["auto", "interactive"], "Every track has lyrics (1)"),
+    # lyrembed exits 0 although it found nothing: cdimport sees it in the tags.
+    (lyrics.EXIT_OK, False, [""], ["auto", "interactive"], "1 of 1 tracks have no lyrics"),
+    # Exit 1 means files it could not write; continuing keeps what it embedded.
+    (lyrics.EXIT_BATCH_FAILURES, False, ["c"], ["auto"], "could not read or write some files"),
 ])
-def test_automatic_lyrics_can_be_checked_interactively(tmp_path, monkeypatch, album_dir, batch_code, answers):
+def test_automatic_lyrics_are_checked_in_the_tags(tmp_path, monkeypatch, capsys, album_dir,
+                                                   batch_code, found, answers, modes, says):
     session = app.new_session(default_cfg(), app.Options(lyrics="auto"), tmp_path / "config.json")
     session.lyrembed = "lyrembed"
     codes = [batch_code, lyrics.EXIT_OK]
-    modes = []
-    monkeypatch.setattr(app.lyrics, "run_lyrembed",
-                        lambda lyr, cfg, folder, mode, romanize=None: modes.append(mode) or codes.pop(0))
+    called = []
+
+    def fake_run(lyr, cfg, folder, mode, romanize=None):
+        called.append(mode)
+        if mode == "auto" and found:
+            make_flac(folder / "01.flac", artist="IU", title="Blueming", lyrics="[00:01.00]la la")
+        return codes.pop(0)
+    monkeypatch.setattr(app.lyrics, "run_lyrembed", fake_run)
     album = state.load(album_dir)
     album.mark("tags")
     left = feed_input(monkeypatch, answers)
     assert app.lyrics_step(session, album)
-    assert left == [] and modes == ["auto", "interactive"]
+    assert left == [] and called == modes
     assert "lyrics" in state.load(album_dir).done
+    out = capsys.readouterr().out
+    assert says in out and ("01.flac" in out) == (not found)
+
+
+def test_lyrics_in_the_tags(tmp_path):
+    with_lyrics = make_flac(tmp_path / "1.flac", lyrics="la la")
+    synced = make_flac(tmp_path / "2.flac", syncedlyrics="[00:01.00]la")
+    empty = make_flac(tmp_path / "3.flac", lyrics="  ")
+    plain = make_flac(tmp_path / "4.flac", title="x")
+    assert lyrics.without_lyrics([with_lyrics, synced, empty, plain]) == [empty, plain]
+    (tmp_path / "5.flac").write_bytes(b"fLaC garbage")
+    with pytest.raises(tags.TagReadError):
+        lyrics.without_lyrics([tmp_path / "5.flac"])
+
+
+def test_albums_lyrembed_cannot_tag_skip_the_lyrics(tmp_path, monkeypatch, capsys):
+    folder = tmp_path / "Album"
+    folder.mkdir()
+    (folder / "01.wav").write_bytes(b"RIFF")
+    session = app.new_session(default_cfg(), app.Options(lyrics="auto"), tmp_path / "config.json")
+    session.lyrembed = "lyrembed"
+    monkeypatch.setattr(app.lyrics, "run_lyrembed", lambda *a, **k: pytest.fail("lyrembed would exit 2"))
+    album = state.load(folder)
+    assert app.lyrics_step(session, album)
+    assert "lyrics" in state.load(folder).skipped
+    assert "only handles FLAC, MP3, Ogg, Opus and M4A" in capsys.readouterr().out

@@ -123,7 +123,7 @@ itself, for you and everyone else.
 If the tracks have no embedded cover (cyanrip only takes an image the Cover
 Art Archive marks as front cover), cdimport offers what the archive has for
 the release or another edition of the album, or a picture file of your own.
-It embeds the choice in every FLAC without a picture and saves it as
+It embeds the choice in every FLAC without a front cover and saves it as
 `cover.jpg`. When every track has a cover, it asks whether to keep it
 (Enter) or change it, with a link to the embedded cover to look at. Every
 offered cover, and every album a MusicBrainz search finds, comes with a link.
@@ -139,7 +139,9 @@ folder. The one exception to "never merges": the other disc of a multi-disc
 album. cyanrip names every disc's folder after the album, so disc 2 finds
 disc 1's folder in the library. When that folder holds the same release
 (MusicBrainz release ID, else album and album artist) with other disc
-numbers, cdimport offers to add the disc to it. Its files are named apart
+numbers, cdimport offers to add the disc to it (without release IDs, every
+track must have the same album title, and the album artists must match or
+the discs share an artist). Its files are named apart
 (`2.01 - …`, `<album> CD2.cue`); identical copies such as `cover.jpg` are
 dropped, and any other file of the same name stops the merge. The rip log (`*.log`, cyanrip's AccurateRip record) does
 not go into the library: it is kept in `logs/` in the working folder, under a
@@ -151,9 +153,13 @@ In automatic lyrics mode cdimport asks whether to romanize the lyrics
 (Hangul, Kana, Hanzi to Latin letters). Enter keeps lyrembed's own setting
 (`settings.auto_romanize`); `y`/`n` pass `--romanize`/`--no-romanize`. This
 needs lyrembed 1.0.1 or newer; older versions are not asked. After an
-automatic run cdimport offers to check the result: `l` opens the album in
-lyrembed's interactive mode, which shows every track, including the ones that
-just got lyrics. Enter continues with the next step.
+automatic run cdimport reads the tracks to see which ones still have no
+lyrics (lyrembed skips a track without a confident match). It lists them and
+offers lyrembed's interactive mode for them (Enter) or to continue without
+them; instrumental tracks stay without lyrics either way. When every track
+got lyrics, `l` opens the album in lyrembed's interactive mode to check them,
+and Enter continues with the next step. lyrembed tags FLAC, MP3, Ogg, Opus
+and M4A; an album in other formats skips the lyrics step.
 
 ## Cover art on its own: cdimport-cover
 
@@ -177,7 +183,8 @@ MusicBrainz is asked at most once a second.
 ## Configuration
 
 `~/.config/cdimport/config.json`, holding only the keys you want to change.
-Unknown keys or wrong types are reported. [config.example.json](config.example.json)
+Unknown keys and wrong values are reported; those settings keep their
+defaults, the others apply. [config.example.json](config.example.json)
 lists every setting with its default and an explanation; a copy works as a
 config as it is (the `_` keys are comments). The most common settings:
 
@@ -209,7 +216,9 @@ config as it is (the `_` keys are comments). The most common settings:
   unless filtered later).
 - `replaygain: false` passes `-K`; `eject: false` drops `-Q`.
 - `dir_scheme` is cyanrip's `-D` and must be relative. The default is
-  cyanrip's own without the ` [FLAC]` suffix.
+  cyanrip's own without the ` [FLAC]` suffix. Only the folder holding the
+  tracks is kept: `{album_artist}/{album}` puts the album in
+  `<working folder>/<album>`; `library_layout` decides the artist folder.
 - Your own editors go under `"editors"`, each a list of command templates
   (the first one that exists is used). `{files}` as a whole argument expands
   to the track files; `{dir}` is the album folder:

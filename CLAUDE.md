@@ -18,7 +18,7 @@ cdimport
 ```
 
 It replaces the maintainer's manual workflow: copy WAVs off the CD, convert
-them with `~/Software/Git-Repos/wav-to-flac`, tag them in Ear Tag, then run
+them with `~/Projekte/Git-Repos/wav-to-flac`, tag them in Ear Tag, then run
 lyrembed. It is glue: it does not rip, tag or fetch lyrics itself.
 
 **Status:** 0.1.0 code written 2026-10-11: steps 1–5 on Linux, and step 0
@@ -40,6 +40,11 @@ output, clickable links; `ui.check`, `ui.field`, `ui.gap`, `ui.tool_start`).
 secure re-rip of unconfirmed tracks) and the drive lock against parallel runs.
 0.4.2 (2026-10-14): second disc of an album joins the first one's library
 folder; eject after a fast rip retries and falls back to util-linux eject.
+Unreleased (2026-10-15): fixes from an outside review (Gemini), each
+checked against the code first: lyrics left after `--auto`, one-time
+offset, config falls back per setting, link punctuation, re-rip leftovers,
+cover checks, `run_tail` without a terminal and after Ctrl+C, disc merge
+over all tracks with rollback, Flatpak option values.
 
 Layout: `cdimport/` package (`app.py` runs the steps, one module per step:
 `disc`, `rip`, `tags`, `lyrics`, `library`; `state`, `tools`, `proc`,
@@ -66,7 +71,9 @@ regenerate it (see `config.write_example`); a test fails until then.
   2026-10-11): on first use cdimport asks for both, prefilled with `~/Temp`
   and the desktop's music folder (`XDG_MUSIC_DIR`, `~/Musik` for the
   maintainer), and saves them as `work_dir`/`library_dir` in the config.
-  `-w`/`-l` override them for one run. Rips land in the working folder
+  `-w`/`-l` override them for one run. A wrong value in the config file
+  falls back to that setting's default and is reported; the rest still
+  applies (2026-10-15: before, one typo dropped the folders and the offset). Rips land in the working folder
   first. At the end, *offer* to move the album to the library; never
   overwrite an existing album. **Exception, merging discs** (2026-10-14):
   cyanrip's `-D` scheme has no disc number, so disc 2 of an album finds
@@ -255,7 +262,8 @@ Behaviour depends on third-party tools; re-verify before relying on these.
   `cdimport/<version>` without contact details (never put the maintainer's
   email there without asking). A 503 seen 2026-10-11 was temporary.
 
-**lyrembed** (`~/Software/Git-Repos/lyrembed`, installed with pipx)
+**lyrembed** (`~/Projekte/Git-Repos/lyrembed`, private repo `sobakah/lyrembed`,
+installed with pipx)
 - 2026-10-11: Fedora moved `/usr/bin/python3` to 3.15 and removed 3.14, so
   every pipx venv built on 3.14 (lyrembed, keepbest, media-optimizer) fails
   with "bad interpreter". cdimport crashed on it; now step 0 runs
@@ -263,6 +271,15 @@ Behaviour depends on third-party tools; re-verify before relying on these.
   command (`pipx reinstall NAME`), and any tool that cannot start returns
   127 instead of raising.
 - Exit codes: 0 done/quit, 1 batch failures, 2 unusable input, 130 Ctrl+C.
+  **Batch mode exits 0 also when it embedded nothing** (checked 2026-10-15
+  in 1.1.0's `run_batch`): "no confident match", incomplete tags and
+  instrumentals count as skipped; 1 means only unreadable files or failed
+  writes. There is no machine-readable summary. So cdimport reads the
+  tracks after `--auto` (`lyrics.without_lyrics`: Vorbis `LYRICS`/
+  `UNSYNCEDLYRICS`/`SYNCEDLYRICS`, ID3 `USLT`/`SYLT`, MP4 `©lyr`, as
+  lyrembed's `tagging.py`) and offers interactive mode for what is left.
+- Tags only `.flac .mp3 .ogg .opus .m4a` (`SUPPORTED_EXTENSIONS`); cdimport
+  skips the lyrics step for albums with none of them.
 - Batch mode (`--auto`) never prompts; `--dry-run`, `--overwrite`,
   `--color never` exist.
 - Planned in lyrembed, not built yet: "automatic, then prompt only for the
@@ -314,7 +331,11 @@ versioned ones with a Windows exe. So the channel is called "master", not
   exactly one feature and says so where it is used.
 - **Never install, delete or overwrite without asking.**
 - **Tests never touch the network or real hardware.** Mock subprocess calls,
-  the drive and HTTP.
+  the drive and HTTP. The autouse fixture `no_real_tools` fails a test that
+  starts cyanrip, eject, lyrembed, flatpak, git, a package manager, ... by
+  name or outside the test's temp folders (2026-10-15: a test whose fake
+  replaced `proc.run`, after `run_tail` stopped calling it, started the
+  real `cyanrip` on the empty drive). Fake `proc.run_tail` for cyanrip.
 - **Type hints and docstrings** on public functions. Docstrings say *why*.
 - **Verify claims, do not assert them.** Run it before stating that it works.
 

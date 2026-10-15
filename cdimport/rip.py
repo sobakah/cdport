@@ -334,14 +334,16 @@ SECURE_LOG_SUFFIX = " (secure re-rip)"
 
 def rerip(cyanrip: str, cfg: dict[str, Any], album: Path, work_dir: Path, tracks: list[int], *,
           device: str = "", release: str = "", no_musicbrainz: bool = False,
-          tags: ManualTags | None = None, eject: bool | None = None) -> tuple[list[Path], Path | None]:
+          tags: ManualTags | None = None, eject: bool | None = None
+          ) -> tuple[list[Path], Path | None, Path | None]:
     """Rip tracks again with full paranoia and put them in place of the fast ones.
 
     Same release, tags and naming as the first pass, so cyanrip gives each
     track the same file name; a file whose name is not in the album stays in
     the staging folder instead of joining the album as an extra track.
-    Returns the replaced files and the re-rip's log (kept next to the first
-    one as "<name> (secure re-rip).log").
+    Returns the replaced files, the re-rip's log (kept next to the first
+    one as "<name> (secure re-rip).log") and the staging folder if cyanrip
+    left anything else there (as rip() does), else None.
     """
     staging = new_staging_dir(work_dir)
     cmd = [cyanrip] + cyanrip_args(cfg, device=device, release=release, no_musicbrainz=no_musicbrainz,
@@ -363,9 +365,8 @@ def rerip(cyanrip: str, cfg: dict[str, Any], album: Path, work_dir: Path, tracks
                 # The cue sheet and cover art of this partial rip; the album
                 # already has the complete ones.
                 f.unlink()
-        if not remove_empty_dirs(staging):
-            raise RipError(f"The secure re-rip left files that do not belong to the album in {staging}")
-    return replaced, log
+        leftover = None if remove_empty_dirs(staging) else staging
+    return replaced, log, leftover
 
 
 def _numbered(path: Path) -> Path:

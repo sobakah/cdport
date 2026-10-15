@@ -50,6 +50,13 @@ class Session:
     album: AlbumState | None = None  # the album being worked on, for the Ctrl+C message
     failed: bool = False
     logs: list[Path] = field(default_factory=list)  # rip logs moved out of the library
+    one_time_offset: bool = False  # cfg's offset is "0 for this rip only", not saved
+
+    def forget_one_time_offset(self) -> None:
+        """After that rip, the next disc asks for the offset again."""
+        if self.one_time_offset:
+            self.cfg["cyanrip"]["offset"] = None
+            self.one_time_offset = False
 
 
 def new_session(cfg: dict[str, Any], options: Options, config_path: Path | None = None) -> Session:
@@ -69,6 +76,7 @@ def run(session: Session) -> int:
         offer_staging_cleanup(session)
         session.album = None
         session.logs = []
+        session.forget_one_time_offset()
         if folder:
             album = open_folder(folder)
             folder = None  # the folder from the command line is for the first run only
@@ -500,6 +508,7 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
             ui.warn(f"cyanrip also left files in {leftover}; check them.")
         if fast:
             check_fast_rip(session, folder, device, release=release, no_mb=no_mb, typed=typed)
+        session.forget_one_time_offset()
         if shown.disc_unknown and shown.submission_url:
             ui.info(f"To add this disc to MusicBrainz later: {shown.submission_url}")
         return album
@@ -528,12 +537,14 @@ def check_fast_rip(session: Session, folder: Path, device: str, *, release: str,
         ui.warn(f"AccurateRip does not confirm track(s) {listed}; ripping them again securely.")
         ui.tool_start("cyanrip", f"secure re-rip of track(s) {listed}")
         try:
-            replaced, relog = rip.rerip(session.cyanrip, session.cfg, folder, session.work_dir, unconfirmed,
-                                        device=device, release=release, no_musicbrainz=no_mb, tags=typed,
-                                        eject=eject)
+            replaced, relog, leftover = rip.rerip(session.cyanrip, session.cfg, folder, session.work_dir,
+                                                  unconfirmed, device=device, release=release,
+                                                  no_musicbrainz=no_mb, tags=typed, eject=eject)
         except rip.RipError as exc:
+            # cyanrip failed, so nothing was replaced, and its -Q did not eject.
             ui.tool_end("cyanrip", None)
             ui.error(f"{exc}\nThe fast-ripped track(s) {listed} stay, unconfirmed.")
+            eject_disc(device, eject)
             return
         ui.tool_end("cyanrip", 0)
         again = {}
@@ -541,6 +552,9 @@ def check_fast_rip(session: Session, folder: Path, device: str, *, release: str,
             again = rip.accuraterip_results(relog.read_text(encoding="utf-8", errors="replace"))
         still = [n for n in unconfirmed if not again.get(n)]
         ui.success(f"Replaced {len(replaced)} track(s) with the secure rip.")
+        if leftover:
+            ui.warn(f"The secure re-rip also left files that do not belong to the album in {leftover}; "
+                    "check them.")
         if still:
             ui.warn(f"AccurateRip does not confirm track(s) {', '.join(map(str, still))} after the secure "
                     "rip either: a pressing AccurateRip does not know, or a damaged disc. The secure "
@@ -548,6 +562,10 @@ def check_fast_rip(session: Session, folder: Path, device: str, *, release: str,
         else:
             ui.success("AccurateRip now confirms every track.")
         return  # the re-rip ejected the disc (-Q) if configured
+    eject_disc(device, eject)
+
+
+def eject_disc(device: str, eject: bool) -> None:
     if eject and (problem := disc.eject(device)):
         ui.warn(f"Cannot eject the disc ({problem}); take it out with the drive's button.")
 
@@ -663,6 +681,7 @@ def ensure_offset(session: Session, device: str) -> bool:
             return False
         if answer == "0":
             session.cfg["cyanrip"]["offset"] = 0
+            session.one_time_offset = True
             return True
         if answer == "f":
             offset = measure_offset(session, device)
@@ -811,6 +830,9 @@ def check_tags(folder: Path) -> bool:
     ui.warn("Tracks missing tags that the lyrics search needs:")
     for path, missing in problems:
         ui.warn(f"  {path.name}: no {' or '.join(missing)}")
+    if any("artist" in missing and tags.album_artist([path]) for path, missing in problems):
+        ui.dim("A track with an album artist but no artist is found when lyrembed's "
+               "settings.prefer_album_artist is true.")
     return False
 
 
@@ -829,6 +851,15 @@ def lyrics_step(session: Session, album: AlbumState) -> bool:
         album.mark("lyrics", skipped=True)
         return True
     mode = session.options.lyrics or session.cfg["lyrics_mode"]
+    files = tags.audio_files(album.folder)
+    taggable = [f for f in files if lyrics.lyrembed_can_tag(f)]
+    if not taggable:
+        ui.warn("lyrembed only handles FLAC, MP3, Ogg, Opus and M4A files, and this album has none; "
+                "skipping lyrics.")
+        album.mark("lyrics", skipped=True)
+        return True
+    if len(taggable) < len(files):
+        ui.dim(f"lyrembed leaves {len(files) - len(taggable)} file(s) in other formats alone.")
     if mode == "ask":
         mode = {"a": "auto", "i": "interactive", "s": "skip"}[ui.choose("Lyrics", [
             ("a", "automatic: embed confident matches, no questions"),
@@ -844,20 +875,15 @@ def lyrics_step(session: Session, album: AlbumState) -> bool:
         ui.tool_start("lyrembed", proc.format_command(cmd))
         code = lyrics.run_lyrembed(session.lyrembed, session.cfg, album.folder, mode, romanize)
         ui.tool_end("lyrembed", code)
-        if code == lyrics.EXIT_OK:
-            album.mark("lyrics")
-            if mode == "auto":
-                offer_lyrics_check(session, album)
-            return True
         if code == lyrics.EXIT_INTERRUPTED:
             raise KeyboardInterrupt
-        if code == lyrics.EXIT_BATCH_FAILURES and mode == "auto":
-            ui.warn("lyrembed could not decide some tracks.")
-            answer = ui.choose("Then", [("i", "go through them interactively"),
-                                        ("c", "continue without them")], default="i")
-            if answer == "c":
-                album.mark("lyrics")
-                offer_lyrics_check(session, album)
+        if code == lyrics.EXIT_OK and mode != "auto":
+            album.mark("lyrics")
+            return True
+        if mode == "auto" and code in (lyrics.EXIT_OK, lyrics.EXIT_BATCH_FAILURES):
+            if code == lyrics.EXIT_BATCH_FAILURES:
+                ui.warn("lyrembed could not read or write some files (see its output above).")
+            if after_automatic_lyrics(session, album, taggable):
                 return True
             mode = "interactive"
             continue
@@ -871,6 +897,36 @@ def lyrics_step(session: Session, album: AlbumState) -> bool:
         elif answer == "q":
             session.failed = True
             return False
+
+
+def after_automatic_lyrics(session: Session, album: AlbumState, files: list[Path]) -> bool:
+    """After lyrembed --auto: say which tracks are still without lyrics.
+
+    lyrembed's batch mode exits 0 also when it found nothing for a track
+    (that counts as skipped there), so cdimport reads the tracks itself.
+    True when the step is done; False to go through the album interactively.
+    """
+    try:
+        left = lyrics.without_lyrics(files)
+    except tags.TagReadError as exc:
+        ui.warn(f"Cannot check which tracks got lyrics: {exc}")
+        left = None
+    if not left:
+        if left == []:
+            ui.success(f"Every track has lyrics ({len(files)}).")
+        album.mark("lyrics")
+        offer_lyrics_check(session, album)
+        return True
+    ui.warn(f"{len(left)} of {len(files)} tracks have no lyrics:")
+    for f in left:
+        ui.dim(f"  {f.name}")
+    ui.dim("lyrembed's output above says why. Instrumental tracks stay without lyrics.")
+    answer = ui.choose("Then", [("i", "go through them interactively (lyrembed shows every track)"),
+                                ("c", "continue without them")], default="i")
+    if answer == "i":
+        return False
+    album.mark("lyrics")
+    return True
 
 
 def offer_lyrics_check(session: Session, album: AlbumState) -> None:

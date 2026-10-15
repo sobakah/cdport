@@ -66,12 +66,26 @@ def start_problem(cmd: list[str]) -> str | None:
     return lines[-1] if lines else f"exit code {result.returncode}"
 
 
+# The options of 'flatpak run' that take a value, which may also follow as
+# the next argument ("--arch x86_64"); from flatpak 1.16's 'flatpak run --help'.
+_FLATPAK_VALUE_OPTIONS = frozenset(
+    "--installation --arch --command --cwd --branch --runtime --runtime-version --parent-pid "
+    "--app-path --app-fd --usr-path --usr-fd --bind-fd --ro-bind-fd --share --unshare --share-if "
+    "--socket --nosocket --socket-if --device --nodevice --device-if --allow --disallow --allow-if "
+    "--filesystem --nofilesystem --env --env-fd --unset-env --own-name --talk-name --no-talk-name "
+    "--system-own-name --system-talk-name --system-no-talk-name --add-policy --remove-policy "
+    "--usb --nousb --usb-list --usb-list-file --persist --instance-id-fd".split())
+
+
 def _flatpak_app_id(cmd: list[str]) -> str | None:
     """The app ID in 'flatpak run [options] APP ...'."""
     if len(cmd) < 3 or Path(cmd[0]).name != "flatpak" or cmd[1] != "run":
         return None
-    for arg in cmd[2:]:
-        if not arg.startswith("-"):
+    args = iter(cmd[2:])
+    for arg in args:
+        if arg in _FLATPAK_VALUE_OPTIONS:
+            next(args, None)  # its value
+        elif not arg.startswith("-"):
             return arg
     return None
 
@@ -124,4 +138,5 @@ def read_os_release(path: Path = Path("/etc/os-release")) -> dict[str, str]:
     return values
 
 
-LYREMBED_INSTALL_HINT = "pipx install ~/Software/Git-Repos/lyrembed"
+# The repository is private for now: this needs access to it on GitHub.
+LYREMBED_INSTALL_HINT = "pipx install git+https://github.com/sobakah/lyrembed.git"

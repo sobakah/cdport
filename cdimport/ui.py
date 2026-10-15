@@ -24,7 +24,8 @@ _ANSI = {
 }
 # Marks at the start of a message, so its kind shows without colour too.
 OK, WARN, FAIL, SKIP = "✓", "!", "✗", "–"
-_URL = re.compile(r"(?:https?|file)://[^\s)\]]+")
+# A link never ends in sentence punctuation: "see https://x.org/a." links /a.
+_URL = re.compile(r"(?:https?|file)://[^\s)\]]*[^\s)\].,;:!?'\"]")
 # Width of the label column in field() and check().
 LABEL_WIDTH = 10
 _color = False

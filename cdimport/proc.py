@@ -8,6 +8,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -85,45 +86,91 @@ def run_tail(cmd: list[str], cwd: Path | None = None, lines: int = 3,
     """Like run(), and also return the last lines the tool printed.
 
     Those lines usually say why a tool failed, and cdimport repeats them in
-    its error message, where they cannot scroll away. The tool writes to a
-    pseudo-terminal that cdimport copies to the real one: it still sees a
+    its error message, where they cannot scroll away; the disc preview and
+    the offset measurement read their results from them. The tool writes to
+    a pseudo-terminal that cdimport copies to the real one: it still sees a
     terminal, so its progress display and output buffering stay as they are.
-    Without a terminal (or on Windows) this is plain run() with no lines.
-    Only the last keep_bytes of output are searched for those lines.
+    Without a terminal (output redirected, or Windows) it writes into a pipe
+    instead: the same lines, but the tool may buffer them, so its progress
+    shows in bursts. Only the last keep_bytes of output are kept.
     """
-    if not _use_pty():
-        return run(cmd, cwd), []
-    import pty
-
-    master, slave = pty.openpty()
-    _copy_window_size(slave)
     try:
-        proc = subprocess.Popen(cmd, cwd=cwd, stdout=slave, stderr=slave)
+        output = _PtyOutput(cmd, cwd) if _use_pty() else _PipeOutput(cmd, cwd)
     except OSError as exc:
-        os.close(master)
         _cannot_start(cmd, exc)
         return CANNOT_START, [f"cannot start {cmd[0]}: {exc.strerror or exc}"]
-    finally:
-        os.close(slave)
     tail = b""
-    try:
-        while True:
-            try:
-                data = os.read(master, 4096)
-            except OSError:  # EIO: the tool closed the terminal
-                break
-            if not data:
-                break
+
+    def copy() -> None:
+        nonlocal tail
+        while data := output.read():
             sys.stdout.buffer.write(data)
             sys.stdout.flush()
             tail = (tail + data)[-keep_bytes:]
-        code = proc.wait()
+
+    try:
+        copy()
+        code = output.proc.wait()
     except KeyboardInterrupt:
-        _let_finish(proc)
+        # Keep copying while the tool cleans up: a tool whose output is not
+        # read blocks once the terminal's or the pipe's buffer is full.
+        reader = threading.Thread(target=copy, daemon=True)
+        reader.start()
+        _let_finish(output.proc)
+        reader.join(timeout=1)
         raise
     finally:
-        os.close(master)
+        output.close()
     return code, last_lines(tail, lines)
+
+
+class _PtyOutput:
+    """The tool's output through a pseudo-terminal."""
+
+    def __init__(self, cmd: list[str], cwd: Path | None) -> None:
+        import pty
+
+        self.master, slave = pty.openpty()
+        _copy_window_size(slave)
+        try:
+            self.proc = subprocess.Popen(cmd, cwd=cwd, stdout=slave, stderr=slave)
+        except OSError:
+            os.close(self.master)
+            raise
+        finally:
+            os.close(slave)
+        self._closed = False
+
+    def read(self) -> bytes:
+        """The next output, b"" at the end."""
+        if self._closed:
+            return b""
+        try:
+            return os.read(self.master, 4096)
+        except OSError:  # EIO: the tool closed the terminal
+            return b""
+
+    def close(self) -> None:
+        self._closed = True
+        os.close(self.master)
+
+
+class _PipeOutput:
+    """The tool's output through a pipe, where there is no terminal."""
+
+    def __init__(self, cmd: list[str], cwd: Path | None) -> None:
+        self.proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        assert self.proc.stdout is not None
+        self._pipe = self.proc.stdout
+
+    def read(self) -> bytes:
+        try:
+            return self._pipe.read1(4096)
+        except (OSError, ValueError):  # closed meanwhile
+            return b""
+
+    def close(self) -> None:
+        self._pipe.close()
 
 
 def _copy_window_size(fd: int) -> None:

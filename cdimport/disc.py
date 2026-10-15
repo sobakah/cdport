@@ -11,13 +11,12 @@ import errno
 import os
 import shutil
 import sys
-import tempfile
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import proc
+from . import config, proc
 
 # linux/cdrom.h
 CDROM_DISC_STATUS = 0x5327
@@ -62,13 +61,8 @@ class DriveBusy(Exception):
 
 
 def lock_dir() -> Path:
-    """Where drive locks live: per user, shared by every cdimport of that
-    user whatever its working folder (-w), and emptied at logout."""
-    runtime = os.environ.get("XDG_RUNTIME_DIR")
-    if runtime and Path(runtime).is_dir():
-        return Path(runtime) / "cdimport"
-    uid = os.getuid() if hasattr(os, "getuid") else 0
-    return Path(tempfile.gettempdir()) / f"cdimport-{uid}"
+    """Where drive locks live (see config.runtime_dir)."""
+    return config.runtime_dir()
 
 
 def lock_path(device: str) -> Path:
@@ -93,8 +87,8 @@ def hold(device: str) -> Iterator[None]:
     except ImportError:  # pragma: no cover - Windows: no lock, as for staging folders
         yield
         return
+    config.make_runtime_dir()
     path = lock_path(device)
-    path.parent.mkdir(parents=True, exist_ok=True)
     # The file is never deleted: unlinking a lock file lets a second process
     # lock a new file of the same name while the first still holds the old one.
     with open(path, "a+", encoding="utf-8") as handle:

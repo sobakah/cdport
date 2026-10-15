@@ -3,6 +3,48 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+* **Automatic lyrics that found nothing:** `lyrembed --auto` exits 0 also
+  when it embedded nothing (a track without a confident match counts as
+  skipped there), so cdimport marked the step done and its "go through
+  them interactively" offer never appeared. cdimport now reads the tracks
+  afterwards, lists those still without lyrics and offers lyrembed's
+  interactive mode for them.
+* **Offset "0 for this rip only"** stayed for every later disc of the same
+  session; the next disc asks again.
+* **A typo in the config** threw the whole file away, so cdimport asked
+  for the folders again and forgot the drive offset. Only the broken
+  settings fall back to their defaults now. `"offset": true` and an
+  editor whose `name` is not text are reported instead of accepted.
+* **Links** included a following `;`, `.` or `,`, so the AccurateRip drive
+  list link opened a missing page.
+* **Secure re-rip:** files that do not belong to the album are reported, as
+  after the first rip, instead of failing after tracks were replaced; when
+  the re-rip fails, the disc is still ejected.
+* **Cover offer:** a track with only a back cover (or another picture) now
+  counts as having no cover. The preview of the embedded cover is written
+  to the per-user `$XDG_RUNTIME_DIR/cdimport/` and deleted after the
+  question, not to a fixed name in `/tmp`.
+* **Tool output without a terminal** (output piped, e.g. into `tee`) is
+  captured through a pipe, so the disc preview still finds the releases,
+  the AccurateRip status and the MusicBrainz link, and the offset
+  measurement its result. After Ctrl+C the tool's output is still read
+  while it cleans up, so it cannot block on a full terminal buffer.
+* **Multi-disc merge:** without a MusicBrainz release ID, all tracks of
+  both discs are compared (album title, album artist or an artist in
+  common), not only track 1, whose artist differs on albums with guests. A
+  merge that fails halfway moves the files back.
+* **lyrembed install hint** pointed to a folder on the maintainer's disk;
+  it is `pipx install git+https://github.com/sobakah/lyrembed.git` now.
+* `flatpak run --arch x86_64 APP` editor commands: the app is found.
+* Albums in formats lyrembed does not tag (WAV, AIFF, WavPack, TTA) skip
+  the lyrics step with an explanation instead of "lyrembed failed". The tag
+  check mentions lyrembed's `prefer_album_artist` for tracks with an album
+  artist but no artist.
+
 ## [0.4.2] — 2026-10-14
 
 ### Fixed

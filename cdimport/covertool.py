@@ -32,15 +32,19 @@ def offer(folder: Path, release_id: str = "") -> None:
         return
     replace = not without
     if replace:
-        _show_preview(flac)
-        answer = ui.choose(f"Cover ({present} in every track)", [
-            ("k", "keep it"),
-            ("c", "change it (replaces the embedded front cover and cover.jpg/.png)"),
-        ], default="k")
+        shown = _show_preview(flac)
+        try:
+            answer = ui.choose(f"Cover ({present} in every track)", [
+                ("k", "keep it"),
+                ("c", "change it (replaces the embedded front cover and cover.jpg/.png)"),
+            ], default="k")
+        finally:
+            if shown:
+                shown.unlink(missing_ok=True)
         if answer == "k":
             return
     else:
-        ui.warn(f"No cover art is embedded in {len(without)} track(s).")
+        ui.warn(f"No front cover is embedded in {len(without)} track(s).")
     found = _lookup(release_id or first.get("musicbrainz_albumid", ""), first)
     while True:
         options = [(str(i), f"{c.description}\n      {c.page}") for i, c in enumerate(found, 1)]
@@ -67,15 +71,17 @@ def offer(folder: Path, release_id: str = "") -> None:
         return
 
 
-def _show_preview(flac: list[Path]) -> None:
-    """A link to the embedded cover, like the one each downloadable cover gets."""
+def _show_preview(flac: list[Path]) -> Path | None:
+    """A link to the embedded cover, like the one each downloadable cover
+    gets; returns the preview file, to delete once the question is answered."""
     try:
         path = cover.preview(flac)
     except OSError as exc:
         ui.warn(f"Cannot show the current cover: {exc}")
-        return
+        return None
     if path:
         ui.info(f"Current cover: {path.as_uri()}")
+    return path
 
 
 def _lookup(release_id: str, first_tags: dict[str, str]) -> list[cover.Candidate]:

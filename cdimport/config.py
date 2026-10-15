@@ -6,6 +6,7 @@ import copy
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -157,6 +158,8 @@ EXAMPLE_ABOUT = [
 
 # Settings whose default is None but which accept a value of this type.
 _NULLABLE: dict[tuple[str, ...], type] = {("cyanrip", "offset"): int}
+# bool is a subclass of int in Python, but "offset": true is no offset.
+_NOT_NULLABLE_TYPES = (bool,)
 
 LYRICS_MODES = ("ask", "auto", "interactive", "skip")
 RIP_MODES = ("fast", "secure")
@@ -224,6 +227,23 @@ def default_config_path() -> Path:
     return config_dir() / "config.json"
 
 
+def runtime_dir() -> Path:
+    """cdimport's per-user folder for short-lived files (drive locks, the
+    cover preview): shared by every cdimport of that user whatever its
+    working folder (-w), private to the user, and emptied at logout."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime and Path(runtime).is_dir():
+        return Path(runtime) / "cdimport"
+    uid = os.getuid() if hasattr(os, "getuid") else 0
+    return Path(tempfile.gettempdir()) / f"cdimport-{uid}"
+
+
+def make_runtime_dir() -> Path:
+    path = runtime_dir()
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return path
+
+
 def _merge(base: dict[str, Any], override: dict[str, Any], path: tuple[str, ...],
            problems: list[str]) -> None:
     """Merge override into base in place, checking each value's type.
@@ -245,7 +265,8 @@ def _merge(base: dict[str, Any], override: dict[str, Any], path: tuple[str, ...]
             continue
         if current is None:
             expected = _NULLABLE.get(path + (key,))
-            if expected and value is not None and not isinstance(value, expected):
+            if expected and value is not None and (not isinstance(value, expected)
+                                                   or isinstance(value, _NOT_NULLABLE_TYPES)):
                 problems.append(f"'{where}' must be {expected.__name__} or null")
                 continue
         elif type(value) is not type(current) and not (path == ("editors",) and isinstance(value, dict)):
@@ -256,40 +277,70 @@ def _merge(base: dict[str, Any], override: dict[str, Any], path: tuple[str, ...]
 
 def validate(cfg: dict[str, Any]) -> list[str]:
     """Check values whose type is right but whose content is not."""
-    problems = []
+    return [message for _, message in _value_problems(cfg)]
+
+
+def _value_problems(cfg: dict[str, Any]) -> list[tuple[tuple[str, ...], str]]:
+    """validate()'s problems, each with the setting it is about."""
+    problems: list[tuple[tuple[str, ...], str]] = []
     if cfg["cyanrip"]["channel"] not in ("release", "master"):
-        problems.append("'cyanrip.channel' must be \"release\" or \"master\"")
+        problems.append((("cyanrip", "channel"), "'cyanrip.channel' must be \"release\" or \"master\""))
     if cfg["cyanrip"]["mode"] not in RIP_MODES:
-        problems.append("'cyanrip.mode' must be \"fast\" or \"secure\"")
+        problems.append((("cyanrip", "mode"), "'cyanrip.mode' must be \"fast\" or \"secure\""))
     if cfg["lyrics_mode"] not in LYRICS_MODES:
-        problems.append(f"'lyrics_mode' must be one of {', '.join(LYRICS_MODES)}")
-    if cfg["editor"] != "skip" and cfg["editor"] not in cfg["editors"]:
-        problems.append(f"'editor' is '{cfg['editor']}', which is not in 'editors' (or use \"skip\")")
+        problems.append((("lyrics_mode",), f"'lyrics_mode' must be one of {', '.join(LYRICS_MODES)}"))
     for key, entry in cfg["editors"].items():
         commands = entry.get("commands") if isinstance(entry, dict) else None
         if not (isinstance(commands, list) and commands
                 and all(isinstance(c, list) and c and all(isinstance(a, str) for a in c) for c in commands)):
-            problems.append(f"'editors.{key}.commands' must be a list of commands, each a list of strings")
+            problems.append((("editors", key),
+                             f"'editors.{key}.commands' must be a list of commands, each a list of strings"))
+        elif not isinstance(entry.get("name", key), str):
+            problems.append((("editors", key), f"'editors.{key}.name' must be a string"))
+    if cfg["editor"] != "skip" and cfg["editor"] not in cfg["editors"]:
+        problems.append((("editor",), f"'editor' is '{cfg['editor']}', which is not in 'editors' (or use \"skip\")"))
     try:
         cfg["library_layout"].format(albumartist="a", folder="f")
     except (KeyError, IndexError, ValueError) as exc:
-        problems.append(f"'library_layout' may only use {{albumartist}} and {{folder}} ({exc})")
+        problems.append((("library_layout",),
+                         f"'library_layout' may only use {{albumartist}} and {{folder}} ({exc})"))
     scheme = cfg["cyanrip"]["dir_scheme"]
     # cdimport finds the rip inside its own staging folder; an absolute
     # scheme would put it somewhere else.
     if scheme and (os.path.isabs(scheme) or scheme.startswith("~")):
-        problems.append("'cyanrip.dir_scheme' must be relative (it is placed in the working folder)")
-    if not all(isinstance(a, str) for a in cfg["cyanrip"]["extra_args"] + cfg["lyrembed"]["extra_args"]):
-        problems.append("'extra_args' must contain strings only")
+        problems.append((("cyanrip", "dir_scheme"),
+                         "'cyanrip.dir_scheme' must be relative (it is placed in the working folder)"))
+    for tool in ("cyanrip", "lyrembed"):
+        if not all(isinstance(a, str) for a in cfg[tool]["extra_args"]):
+            problems.append(((tool, "extra_args"), f"'{tool}.extra_args' must contain strings only"))
     return problems
+
+
+def _restore_default(cfg: dict[str, Any], where: tuple[str, ...]) -> None:
+    """Undo one setting: back to its default, or gone if it has none (a user's editor)."""
+    default: Any = DEFAULT_CONFIG
+    for key in where:
+        default = default.get(key, _MISSING) if isinstance(default, dict) else _MISSING
+    parent = cfg
+    for key in where[:-1]:
+        parent = parent[key]
+    if default is _MISSING:
+        parent.pop(where[-1], None)
+    else:
+        parent[where[-1]] = copy.deepcopy(default)
+
+
+_MISSING = object()
 
 
 def load_config(path: Path | None = None) -> tuple[dict[str, Any], list[str]]:
     """Return the merged config and warnings.
 
     An explicit path that cannot be used is fatal (the user asked for that
-    file); a broken file at the default location only warns and falls back
-    to the defaults, so a typo there never blocks ripping a CD.
+    file). At the default location a typo never blocks ripping a CD: a file
+    that is not JSON only warns and falls back to the defaults, and a
+    setting with a wrong value is reported and replaced by its default,
+    while the others (folders, drive offset) still apply.
     """
     cfg = copy.deepcopy(DEFAULT_CONFIG)
     explicit = path is not None
@@ -309,13 +360,20 @@ def load_config(path: Path | None = None) -> tuple[dict[str, Any], list[str]]:
         return copy.deepcopy(DEFAULT_CONFIG), [message + " - using the defaults"]
 
     problems: list[str] = []
-    _merge(cfg, loaded, (), problems)
-    problems += validate(cfg)
+    _merge(cfg, loaded, (), problems)  # leaves a value of the wrong type at its default
+    found = _value_problems(cfg)
+    if explicit and (problems or found):
+        raise ConfigError(f"problems in {path}:\n  " + "\n  ".join(problems + [m for _, m in found]))
+    # Restoring one setting can uncover another ("editor" naming a removed
+    # editor), so check again until nothing is left.
+    while found:
+        problems += [message for _, message in found]
+        for where, _ in found:
+            _restore_default(cfg, where)
+        found = _value_problems(cfg)
     if problems:
-        message = f"problems in {path}:\n  " + "\n  ".join(problems)
-        if explicit:
-            raise ConfigError(message)
-        return copy.deepcopy(DEFAULT_CONFIG), [message + "\n  Using the defaults."]
+        return cfg, [f"problems in {path}:\n  " + "\n  ".join(problems)
+                     + "\n  These settings use their defaults; the others apply."]
     return cfg, []
 
 

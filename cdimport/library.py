@@ -61,8 +61,8 @@ def plan_disc_merge(source: Path, target: Path) -> DiscMerge | None:
     files apart ("1.01 - ...", "2.01 - ...", "<album> CD2.log"), so the
     second disc of an album finds the first one's folder in the library.
     Merging is only offered for the same release (MusicBrainz release ID,
-    or album and album artist when a folder has no ID) with disc numbers
-    that do not overlap. Raises MoveError when a file of the same name but
+    or album and album artist when a folder has no ID; see _same_release)
+    with disc numbers that do not overlap. Raises MoveError when a file of the same name but
     other content is there: nothing in the library is ever replaced.
     """
     here, there = tags.audio_files(source), tags.audio_files(target)
@@ -70,7 +70,7 @@ def plan_disc_merge(source: Path, target: Path) -> DiscMerge | None:
         return None
     tags_here = [tags.read_tags(f) for f in here]
     tags_there = [tags.read_tags(f) for f in there]
-    if not _same_release(tags_here[0], tags_there[0]):
+    if not _same_release(tags_here, tags_there):
         return None
     discs_here = {_disc(t) for t in tags_here}
     discs_there = {_disc(t) for t in tags_there}
@@ -92,23 +92,60 @@ def plan_disc_merge(source: Path, target: Path) -> DiscMerge | None:
 
 
 def merge_disc(plan: DiscMerge, target: Path) -> None:
-    """Move the disc's files into the album's library folder (see plan_disc_merge)."""
-    for f in plan.files:
-        destination = target / f.name
-        if destination.exists():  # appeared since the plan was made
-            raise MoveError(f"{destination} already exists - not overwriting it")
-        shutil.move(str(f), str(destination))
+    """Move the disc's files into the album's library folder (see plan_disc_merge).
+
+    All or nothing: when a move fails, the files moved so far go back, so
+    the disc is never left split between the working folder and the library.
+    """
+    moved: list[tuple[Path, Path]] = []
+    try:
+        for f in plan.files:
+            destination = target / f.name
+            if destination.exists():  # appeared since the plan was made
+                raise MoveError(f"{destination} already exists - not overwriting it")
+            shutil.move(str(f), str(destination))
+            moved.append((f, destination))
+    except (MoveError, OSError) as exc:
+        stuck = []
+        for source, destination in reversed(moved):
+            try:
+                shutil.move(str(destination), str(source))
+            except OSError:
+                stuck.append(destination.name)
+        if stuck:
+            raise MoveError(f"{exc}; these files could not be moved back and are in {target}: "
+                            + ", ".join(stuck)) from exc
+        raise MoveError(f"{exc}; the disc stays where it was") from exc
     for f in plan.duplicates:
         f.unlink()
 
 
-def _same_release(a: dict[str, str], b: dict[str, str]) -> bool:
-    id_a, id_b = a.get("musicbrainz_albumid", ""), b.get("musicbrainz_albumid", "")
-    if id_a and id_b:
-        return id_a == id_b
-    album = a.get("album", "")
-    return bool(album) and album == b.get("album", "") and \
-        (a.get("albumartist") or a.get("artist", "")) == (b.get("albumartist") or b.get("artist", ""))
+def _same_release(here: list[dict[str, str]], there: list[dict[str, str]]) -> bool:
+    """Whether the tracks of two folders belong to one release.
+
+    The MusicBrainz release ID decides when both have one. Otherwise every
+    track must have the same album title, and the album artists must agree:
+    the same where both folders have them, else at least one artist in
+    common (track artists differ within an album: guests, compilations).
+    """
+    ids_here, ids_there = _values(here, "musicbrainz_albumid"), _values(there, "musicbrainz_albumid")
+    if ids_here and ids_there:
+        return ids_here == ids_there
+    albums = {t.get("album", "") for t in here + there}
+    if len(albums) != 1 or albums == {""}:
+        return False
+    artists_here, artists_there = _values(here, "albumartist"), _values(there, "albumartist")
+    if artists_here and artists_there:
+        return artists_here == artists_there
+    return bool(_artists(here) & _artists(there))
+
+
+def _values(tracks: list[dict[str, str]], key: str) -> set[str]:
+    return {t[key] for t in tracks if t.get(key)}
+
+
+def _artists(tracks: list[dict[str, str]]) -> set[str]:
+    return {t.get("albumartist") or t.get("artist", "") for t in tracks} - {""}
 
 
 def _disc(t: dict[str, str]) -> str:
