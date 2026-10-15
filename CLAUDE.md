@@ -40,7 +40,7 @@ output, clickable links; `ui.check`, `ui.field`, `ui.gap`, `ui.tool_start`).
 secure re-rip of unconfirmed tracks) and the drive lock against parallel runs.
 0.4.2 (2026-10-14): second disc of an album joins the first one's library
 folder; eject after a fast rip retries and falls back to util-linux eject.
-Unreleased (2026-10-15): fixes from an outside review (Gemini), each
+0.5.0 (2026-10-15): fixes from an outside review (Gemini), each
 checked against the code first: lyrics left after `--auto`, one-time
 offset, config falls back per setting, link punctuation, re-rip leftovers,
 cover checks, `run_tail` without a terminal and after Ctrl+C, disc merge
