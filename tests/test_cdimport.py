@@ -2144,3 +2144,74 @@ def test_albums_lyrembed_cannot_tag_skip_the_lyrics(tmp_path, monkeypatch, capsy
     assert app.lyrics_step(session, album)
     assert "lyrics" in state.load(folder).skipped
     assert "only handles FLAC, MP3, Ogg, Opus and M4A" in capsys.readouterr().out
+
+
+# --- front ends other than the terminal ---------------------------------------
+class RecordingFront(ui.Front):
+    """Answers questions from a list and records everything it is handed."""
+
+    def __init__(self, answers=(), pty=True):
+        self.answers, self.pty = list(answers), pty
+        self.messages, self.questions, self.output = [], [], b""
+
+    def message(self, kind, text="", **details):
+        self.messages.append((kind, text, details))
+
+    def tool_output(self, data):
+        self.output += data
+
+    def wants_pty(self):
+        return self.pty
+
+    def _answer(self, kind, prompt, **details):
+        self.questions.append((kind, prompt, details))
+        if not self.answers:
+            raise AssertionError(f"unexpected question: {prompt!r}")
+        return self.answers.pop(0)
+
+    def ask(self, prompt, default=""):
+        return self._answer("ask", prompt, default=default)
+
+    def confirm(self, prompt, default=True):
+        return self._answer("confirm", prompt, default=default)
+
+    def choose(self, prompt, options, default=None):
+        return self._answer("choose", prompt, options=options, default=default)
+
+    def ask_path(self, prompt, prefill=""):
+        return self._answer("ask_path", prompt, prefill=prefill)
+
+    def wait_for_enter(self, prompt):
+        self._answer("wait", prompt)
+
+
+@pytest.fixture
+def front():
+    """Install a RecordingFront; the terminal is back after the test."""
+    def install(answers=(), pty=True):
+        made = RecordingFront(answers, pty)
+        ui.use(made)
+        return made
+    yield install
+    ui.use(None)
+
+
+def test_a_front_end_gets_the_questions_and_the_terminal_nothing(tmp_path, capsys, front):
+    session = app.new_session(default_cfg(), app.Options(), tmp_path / "config.json")
+    session.cyanrip = "cyanrip"
+    recorder = front(["0"])                       # "use 0 for this rip only"
+    assert app.ensure_offset(session, "/dev/sr0")
+    assert session.cfg["cyanrip"]["offset"] == 0 and session.one_time_offset
+    kind, prompt, details = recorder.questions[0]
+    assert kind == "choose" and prompt == "Offset" and details["default"] == "f"
+    assert [key for key, _ in details["options"]] == ["f", "e", "0", "b"]
+    assert any(kind == "warn" and "read offset" in text for kind, text, _ in recorder.messages)
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("pty", [True, False])
+def test_tool_output_goes_to_the_front_end(capsys, front, pty):
+    recorder = front(pty=pty)
+    code, tail = proc.run_tail([sys.executable, "-c", "print('reading track 1'); print('done')"])
+    assert code == 0 and tail == ["reading track 1", "done"]
+    assert b"reading track 1" in recorder.output and capsys.readouterr().out == ""

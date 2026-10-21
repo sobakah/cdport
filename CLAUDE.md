@@ -335,6 +335,19 @@ Fedora 45, fish shell, VS Code. FFmpeg 9 and `cd-paranoia` installed;
 versioned ones with a Windows exe. So the channel is called "master", not
 "nightly" (maintainer's decision, 2026-10-11).
 
+## Front ends
+
+Every message and question goes through `ui` (`info`, `warn`, `check`,
+`choose`, `confirm`, `ask`, `ask_path`, `wait_for_enter`, ...), and an
+external tool's output through `ui.tool_output` (`proc.run_tail`). Without a
+front end that is the terminal, unchanged. `ui.use(front)` hands every call
+to a `ui.Front` instead, with its plain content, which is how the browser
+page (planned, 2026-10-21) runs the same flow: the flow in `app.py` stays
+one, and only the front end differs. So never `print()` or `input()`
+outside `ui`, and keep prompts' options and defaults as data, not text.
+A front end that wants live tool progress keeps the pseudo-terminal
+(`Front.wants_pty`): in a pipe, cyanrip buffers its progress display.
+
 ## Conventions (shared with lyrembed)
 
 - **Errors are reported, never swallowed.** No bare `except: pass`.

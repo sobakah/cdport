@@ -12,6 +12,8 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import ui
+
 # How long a tool may take to finish after Ctrl+C before it is terminated.
 INTERRUPT_GRACE_SECONDS = 15
 # Exit code for a tool that could not be started, as in the shell.
@@ -78,7 +80,9 @@ def last_lines(output: bytes, count: int = 3) -> list[str]:
 
 
 def _use_pty() -> bool:
-    return sys.platform != "win32" and sys.stdout.isatty()
+    # The page has no terminal, but shows a tool's progress live: it wants
+    # the pseudo-terminal too, or cyanrip buffers its output in the pipe.
+    return sys.platform != "win32" and ui.wants_pty()
 
 
 def run_tail(cmd: list[str], cwd: Path | None = None, lines: int = 3,
@@ -104,8 +108,7 @@ def run_tail(cmd: list[str], cwd: Path | None = None, lines: int = 3,
     def copy() -> None:
         nonlocal tail
         while data := output.read():
-            sys.stdout.buffer.write(data)
-            sys.stdout.flush()
+            ui.tool_output(data)
             tail = (tail + data)[-keep_bytes:]
 
     try:

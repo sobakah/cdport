@@ -1,4 +1,11 @@
-"""Terminal output and prompts."""
+"""Output and prompts: in the terminal, or through another front end.
+
+Every message and question of cdimport goes through this module. Without a
+front end (the default) it writes to the terminal and reads answers there.
+With one set by use() - the browser page - each call is handed to it with
+its plain content (prompt, options, default; label and value), and how it
+looks is the front end's business.
+"""
 
 from __future__ import annotations
 
@@ -29,6 +36,64 @@ _URL = re.compile(r"(?:https?|file)://[^\s)\]]*[^\s)\].,;:!?'\"]")
 # Width of the label column in field() and check().
 LABEL_WIDTH = 10
 _color = False
+
+
+class Front:
+    """A front end other than the terminal. message() gets every kind of
+    output (step, info, success, warn, error, dim, field, check, gap,
+    tool_start, tool_end) with its text and details; the questions block
+    until they are answered, like input() does."""
+
+    def message(self, kind: str, text: str = "", **details: object) -> None:
+        raise NotImplementedError
+
+    def tool_output(self, data: bytes) -> None:
+        """Raw output of an external tool (cyanrip), as it comes."""
+        raise NotImplementedError
+
+    def wants_pty(self) -> bool:
+        """Whether tools should write to a pseudo-terminal; they buffer their
+        progress display in a pipe."""
+        return True
+
+    def ask(self, prompt: str, default: str = "") -> str:
+        raise NotImplementedError
+
+    def confirm(self, prompt: str, default: bool = True) -> bool:
+        raise NotImplementedError
+
+    def choose(self, prompt: str, options: list[tuple[str, str]], default: str | None = None) -> str:
+        raise NotImplementedError
+
+    def ask_path(self, prompt: str, prefill: str = "") -> str:
+        raise NotImplementedError
+
+    def wait_for_enter(self, prompt: str) -> None:
+        raise NotImplementedError
+
+
+_front: Front | None = None
+
+
+def use(front: Front | None) -> None:
+    """Send output and questions to *front*; None is the terminal again."""
+    global _front
+    _front = front
+
+
+def tool_output(data: bytes) -> None:
+    """An external tool's output: copied to the terminal as it is."""
+    if _front is not None:
+        _front.tool_output(data)
+        return
+    sys.stdout.buffer.write(data)
+    sys.stdout.flush()
+
+
+def wants_pty() -> bool:
+    if _front is not None:
+        return _front.wants_pty()
+    return sys.stdout.isatty()
 
 
 def setup_color(mode: str) -> None:
@@ -64,6 +129,9 @@ def _print(text: str = "", *, err: bool = False) -> None:
 
 def gap() -> None:
     """One blank line between blocks (step, menu, tool output), but never two."""
+    if _front is not None:
+        _front.message("gap")
+        return
     if not _blank:
         _print()
 
@@ -91,6 +159,9 @@ def _styled(text: str, *names: str) -> str:
 
 def step(number: int | None, title: str) -> None:
     """A section heading: the numbered steps, and "Summary" (no number)."""
+    if _front is not None:
+        _front.message("step", title, number=number)
+        return
     label = f"{number}. {title}" if number is not None else title
     gap()
     _print(style(f"── {label} ", "bold", "cyan") + style("─" * max(0, 53 - len(label)), "dim"))
@@ -105,27 +176,45 @@ def _marked(mark: str, msg: str, *names: str) -> str:
 
 
 def info(msg: str) -> None:
+    if _front is not None:
+        _front.message("info", msg)
+        return
     _print(links(msg))
 
 
 def success(msg: str) -> None:
+    if _front is not None:
+        _front.message("success", msg)
+        return
     _print(_marked(OK, msg, "green"))
 
 
 def warn(msg: str) -> None:
+    if _front is not None:
+        _front.message("warn", msg)
+        return
     _print(_marked(WARN, msg, "yellow"))
 
 
 def error(msg: str) -> None:
+    if _front is not None:
+        _front.message("error", msg)
+        return
     _print(_marked(FAIL, msg, "red"), err=True)
 
 
 def dim(msg: str) -> None:
+    if _front is not None:
+        _front.message("dim", msg)
+        return
     _print(_styled(msg, "dim"))
 
 
 def field(label: str, value: object) -> None:
     """One "label  value" line of an aligned list (summary, folders)."""
+    if _front is not None:
+        _front.message("field", str(value), label=label)
+        return
     # Indented like check()'s labels, so both kinds of line form one list.
     _print("    " + style(f"{label:<{LABEL_WIDTH}}", "dim") + links(str(value)))
 
@@ -135,6 +224,9 @@ def check(label: str, value: str, ok: bool | None, note: str = "") -> None:
 
     note goes on its own dimmed line below, aligned with the value.
     """
+    if _front is not None:
+        _front.message("check", value, label=label, ok=ok, note=note)
+        return
     mark, colour = (OK, "green") if ok else (SKIP, "dim") if ok is None else (WARN, "yellow")
     _print(f"  {style(mark, 'bold', colour)} {style(f'{label:<{LABEL_WIDTH}}', 'bold')}{links(value)}")
     for line in note.split("\n") if note else []:
@@ -144,6 +236,9 @@ def check(label: str, value: str, ok: bool | None, note: str = "") -> None:
 def tool_start(name: str, command: str = "") -> None:
     """A frame line above an external tool's output, which otherwise runs
     straight into cdimport's own text."""
+    if _front is not None:
+        _front.message("tool_start", command, name=name)
+        return
     gap()
     _print(style("╭─ ", "dim") + style(name, "bold") + (style(f"  {command}", "dim") if command else ""))
 
@@ -151,6 +246,9 @@ def tool_start(name: str, command: str = "") -> None:
 def tool_end(name: str, code: int | None) -> None:
     """The closing frame line, with how the tool ended (None: failed, the
     message follows)."""
+    if _front is not None:
+        _front.message("tool_end", "", name=name, code=code)
+        return
     if code == 0:
         status = style("done", "green")
     else:
@@ -185,6 +283,8 @@ def _answered() -> None:
 def ask(prompt: str, default: str = "") -> str:
     """Read one line; EOF (Ctrl+D) counts as Ctrl+C, so a closed stdin
     cannot loop forever on a prompt."""
+    if _front is not None:
+        return _front.ask(prompt, default)
     try:
         answer = input(_prompt(prompt, default)).strip()
         _answered()
@@ -195,6 +295,8 @@ def ask(prompt: str, default: str = "") -> str:
 
 
 def confirm(prompt: str, default: bool = True) -> bool:
+    if _front is not None:
+        return _front.confirm(prompt, default)
     hint = "Y/n" if default else "y/N"
     while True:
         try:
@@ -217,6 +319,8 @@ def choose(prompt: str, options: list[tuple[str, str]], default: str | None = No
 
     Options are (key, description). Enter picks the default when there is one.
     """
+    if _front is not None:
+        return _front.choose(prompt, options, default)
     gap()
     width = max(len(k) for k, _ in options)
     for key, description in options:
@@ -234,6 +338,9 @@ def choose(prompt: str, options: list[tuple[str, str]], default: str | None = No
 
 
 def wait_for_enter(prompt: str) -> None:
+    if _front is not None:
+        _front.wait_for_enter(prompt)
+        return
     ask(prompt)
 
 
@@ -250,6 +357,8 @@ def ask_path(prompt: str, prefill: str = "") -> str:
     Without readline the prefill is shown in brackets and an empty answer
     accepts it. With readline an empty answer means the user cleared the line.
     """
+    if _front is not None:
+        return _front.ask_path(prompt, prefill)
     hook = getattr(_readline, "set_startup_hook", None)
     insert = getattr(_readline, "insert_text", None)
     if not (hook and insert):
