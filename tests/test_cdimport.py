@@ -1815,7 +1815,7 @@ def test_keep_or_change_links_the_embedded_cover(tmp_path, monkeypatch, capsys):
     make_flac(folder / "01.flac")
     cover.embed(tags.audio_files(folder), JPEG)
     seen = []
-    monkeypatch.setattr(covertool.ui, "choose", lambda title, options, default: seen.append(
+    monkeypatch.setattr(covertool.ui, "choose", lambda title, options, default, info=None: seen.append(
         list(config.runtime_dir().glob("cover-preview-*"))) or default)
     covertool.offer(folder)  # keep
     preview = config.runtime_dir() / f"cover-preview-{os.getpid()}.jpg"
@@ -2175,8 +2175,8 @@ class RecordingFront(ui.Front):
     def confirm(self, prompt, default=True):
         return self._answer("confirm", prompt, default=default)
 
-    def choose(self, prompt, options, default=None):
-        return self._answer("choose", prompt, options=options, default=default)
+    def choose(self, prompt, options, default=None, info=None):
+        return self._answer("choose", prompt, options=options, default=default, info=info)
 
     def ask_path(self, prompt, prefill=""):
         return self._answer("ask_path", prompt, prefill=prefill)
@@ -2400,3 +2400,156 @@ def test_a_running_tool_can_be_stopped_like_ctrl_c(front):
     code, tail = proc.run_tail([sys.executable, "-c", script])
     assert code == 3 and tail[-1] == "log finished"
     assert not proc.interrupt_tool()                       # nothing runs any more
+
+
+# --- the page's tag editor and pictures ------------------------------------------
+from cdimport import tageditor  # noqa: E402
+
+
+def _ripped_album(tmp_path, titles=("Opening", "Paper Moon (feat. Guest)"), album="Night: Lines"):
+    """Two tracks as cyanrip names them, with a cue sheet and a log."""
+    import mutagen.flac
+
+    folder = tmp_path / (tageditor.cyanrip_name(album) + " (Limited)")
+    folder.mkdir()
+    for n, title in enumerate(titles, 1):
+        path = make_flac(folder / f"0{n} - {tageditor.cyanrip_name(title)}.flac", title=title, artist="Sample Artist",
+                         albumartist="Sample Artist", album=album, tracknumber=str(n),
+                         musicbrainz_trackid=f"id-{n}")
+        audio = mutagen.flac.FLAC(path)
+        audio["album artist"] = "Sample Artist"            # a second spelling some taggers add
+        audio.save()
+    cue = folder / f"{tageditor.cyanrip_name(album)}.cue"
+    cue.write_text("".join(f'FILE "0{n} - {tageditor.cyanrip_name(t)}.flac" WAVE\n  TRACK 0{n} AUDIO\n'
+                           for n, t in enumerate(titles, 1)), encoding="utf-8")
+    (folder / f"{tageditor.cyanrip_name(album)}.log").write_text("log, checksum ABC\n", encoding="utf-8")
+    return folder
+
+
+def test_names_are_made_as_cyanrip_makes_them():
+    assert tageditor.cyanrip_name('Say "Hi" / Bye? <3') == "Say “Hi” ∕ Bye？ ‹3"
+    assert tageditor.credit_from(["A"]) == "A" and tageditor.credit_from(["A", "B", "C"]) == "A, B & C"
+
+
+def test_tag_editor_saves_renames_and_follows_in_the_cue_sheet(tmp_path):
+    import mutagen.flac
+
+    folder = _ripped_album(tmp_path)
+    album = tageditor.read_album(folder)
+    assert album["album"] == "Night: Lines" and album["albumArtist"] == "Sample Artist" and album["differing"] == []
+    assert [t["artists"] for t in album["tracks"]] == [[], []]
+    album["album"] = "Night Lines"
+    album["albumArtist"] = "Sample Artist & Friend"
+    second = album["tracks"][1]
+    second.update(title="Paper Moon", artist="Sample Artist feat. Guest", artists=["Sample Artist", "Guest"])
+    plan = tageditor.plan(folder, album)
+    assert plan["problem"] == "" and plan["folderName"] == "Night Lines (Limited)"
+    assert [f["newFile"] for f in plan["files"]] == [None, "02 - Paper Moon.flac"]
+
+    result = tageditor.save(folder, album)
+    moved = tmp_path / "Night Lines (Limited)"
+    assert result["folder"] == str(moved) and result["folderRenamed"] and not folder.exists()
+    assert sorted(p.name for p in moved.iterdir()) == ["01 - Opening.flac", "02 - Paper Moon.flac",
+                                                        "Night Lines.cue", "Night Lines.log"]
+    assert 'FILE "02 - Paper Moon.flac" WAVE' in (moved / "Night Lines.cue").read_text(encoding="utf-8")
+    assert (moved / "Night Lines.log").read_text(encoding="utf-8") == "log, checksum ABC\n"   # never changed
+    audio = mutagen.flac.FLAC(moved / "02 - Paper Moon.flac")
+    assert audio["artist"] == ["Sample Artist feat. Guest"] and audio["artists"] == ["Sample Artist", "Guest"]
+    # A changed album artist leaves one spelling, not a stale second one.
+    assert audio["album"] == ["Night Lines"] and "album artist" not in audio
+    assert audio["albumartist"] == ["Sample Artist & Friend"]
+    assert audio["musicbrainz_trackid"] == ["id-2"]                                            # untouched
+
+
+def test_tag_editor_keeps_names_cyanrip_did_not_make_and_swaps_safely(tmp_path):
+    folder = _ripped_album(tmp_path, titles=("A", "B"))
+    (folder / "02 - B.flac").rename(folder / "track two.flac")         # renamed by hand earlier
+    album = tageditor.read_album(folder)
+    album["tracks"][1]["title"] = "B2"
+    assert tageditor.save(folder, album)["kept"] == ["track two.flac"]
+    assert (folder / "track two.flac").exists()
+
+    other = tmp_path / "other"
+    other.mkdir()
+    folder = _ripped_album(other, titles=("A", "B"))
+    album = tageditor.read_album(folder)
+    album["tracks"][0]["title"], album["tracks"][1]["title"] = "B", "A"
+    tageditor.save(folder, album)                                       # 01 - A -> 01 - B, 02 - B -> 02 - A
+    assert sorted(p.name for p in folder.glob("*.flac")) == ["01 - B.flac", "02 - A.flac"]
+
+
+def test_tag_editor_refuses_before_writing_anything(tmp_path):
+    import mutagen.flac
+
+    folder = _ripped_album(tmp_path, titles=("A", "B"))
+    album = tageditor.read_album(folder)
+    album["tracks"][0]["title"] = "Changed"
+    album["tracks"][1]["artist"] = ""
+    assert "needs a title and an artist" in tageditor.plan(folder, album)["problem"]
+    with pytest.raises(tageditor.TagEditError):
+        tageditor.save(folder, album)
+    assert mutagen.flac.FLAC(folder / "01 - A.flac")["title"] == ["A"]                         # nothing written
+    album = tageditor.read_album(folder)
+    album["tracks"][0]["title"] = "B"                                   # 01 - B next to 02 - B is fine ...
+    (folder / "01 - B.flac").mkdir()                                    # ... unless something of that name is there
+    with pytest.raises(tageditor.TagEditError, match="already there"):
+        tageditor.save(folder, album)
+
+
+def test_the_page_serves_only_pictures_the_flow_named(tmp_path, monkeypatch):
+    picture = tmp_path / "cover.jpg"
+    picture.write_bytes(b"\xff\xd8\xff\xe0 jpeg")
+    fetched = []
+    monkeypatch.setattr(cover, "http_get", lambda url: fetched.append(url) or b"\x89PNG\r\n\x1a\n png")
+    front = web.WebFront()
+    thread, result = _in_thread(lambda: front.choose("Cover", [("1", "front cover"), ("k", "keep it")], default="k",
+                                                     info={"images": {"1": {"url": "https://caa.example/1"},
+                                                                      "k": {"file": picture}}}))
+    question = _wait_for_question(front)
+    urls = question["images"]
+    assert set(urls) == {"1", "k"}
+    assert front.image(urls["k"].rsplit("/", 1)[1]) == (picture.read_bytes(), "image/jpeg")
+    first = urls["1"].rsplit("/", 1)[1]
+    assert front.image(first)[1] == "image/png" and front.image(first)[1] == "image/png"
+    assert fetched == ["https://caa.example/1"]                         # downloaded once
+    with pytest.raises(web.ApiError) as unknown:
+        front.image("made-up")
+    assert unknown.value.status == 404
+    front.answer(question["id"], "k")
+    thread.join(2)
+
+
+def test_the_tag_editor_question_follows_a_renamed_folder(tmp_path):
+    front = web.WebFront()
+    thread, result = _in_thread(lambda: front.edit_tags(tmp_path / "Old"))
+    question = _wait_for_question(front)
+    assert question["kind"] == "tag_editor" and front.tag_folder() == tmp_path / "Old"
+    front.moved_tags(tmp_path / "New")
+    front.answer(question["id"], None)
+    thread.join(2)
+    assert result == [tmp_path / "New"]
+
+
+def test_on_the_page_the_tags_step_offers_its_own_editor_first(tmp_path, monkeypatch, front):
+    class Page(RecordingFront):
+        def supports(self, feature):
+            return feature == "tag_editor"
+
+        def edit_tags(self, folder):
+            self.edited = folder
+            return folder.parent / "Renamed"
+
+    folder = tmp_path / "Album"
+    folder.mkdir()
+    make_flac(folder / "01.flac", artist="IU", title="Blueming")
+    renamed = tmp_path / "Renamed"
+    page = Page(["w"])                                                  # the editor's Continue ends the step
+    ui.use(page)
+    album_after = state.AlbumState(folder)
+    folder.rename(renamed)                                              # what the editor's save does
+    session = app.new_session(default_cfg(), app.Options(editor="skip"), tmp_path / "config.json")
+    monkeypatch.setattr(tools, "available_editors", lambda cfg: [])
+    assert app.tags_step(session, album_after)
+    first = page.questions[0][2]
+    assert first["default"] == "w" and first["options"][0] == ("w", "edit the tags here")
+    assert album_after.folder == renamed and page.edited == folder

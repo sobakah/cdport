@@ -91,6 +91,183 @@ function Tool({ event }) {
   </div>`;
 }
 
+// A cover, or a note where there is none (the Cover Art Archive answers 404).
+function Picture({ src }) {
+  const [failed, setFailed] = useState(false);
+  return failed ? html`<span class="no-picture">no cover</span>`
+    : html`<img src=${src} alt="" loading="lazy" onError=${() => setFailed(true)} />`;
+}
+
+// --- the tag editor (only on the page; the terminal opens Ear Tag and co.) ------
+const FEAT = /\s*[(\[](?:feat\.?|ft\.?|featuring)\s+([^)\]]+)[)\]]/i;
+const JOINS = /\s+(?:feat\.?|ft\.?|featuring|&|and|x|×|with)\s+|\s*,\s*/i;
+
+// "A", "A & B", "A, B & C": the credit for names without join phrases.
+function creditFrom(names) {
+  const list = names.filter(Boolean);
+  if (list.length <= 1) return list[0] || '';
+  return list.slice(0, -1).join(', ') + ' & ' + list[list.length - 1];
+}
+
+function Chips({ names, onChange, label, id }) {
+  const add = (e) => {
+    const value = e.target.value.trim();
+    if (e.key === 'Enter' && value) {
+      e.preventDefault();
+      if (!names.includes(value)) onChange([...names, value]);
+      e.target.value = '';
+    }
+  };
+  return html`<div class="chips">
+    ${names.map((name, i) => html`<span class="chip" key=${name}>${name}
+      <button type="button" aria-label=${'Remove ' + name} onClick=${() => onChange(names.filter((_, j) => j !== i))}>×</button></span>`)}
+    <label class="sr-only" for=${id}>${label}</label>
+    <input id=${id} type="text" class="chip-input" placeholder="Add a name, then Enter" onKeyDown=${add} />
+  </div>`;
+}
+
+function TagEditor({ question, onAnswer }) {
+  const [loaded, setLoaded] = useState(null);
+  const [edit, setEdit] = useState(null);
+  const [plan, setPlan] = useState(null);
+  const [error, setError] = useState('');
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [find, setFind] = useState('');
+  const [replace, setReplace] = useState('');
+
+  const load = async () => {
+    try {
+      const data = await api('/tags');
+      setLoaded(data);
+      setEdit(JSON.parse(JSON.stringify(data)));
+      setError('');
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+  useEffect(() => { load(); }, []);
+  // What a save would rename, worked out by the server while typing.
+  useEffect(() => {
+    if (!edit) return undefined;
+    const timer = setTimeout(() => api('/tags/plan', edit).then(setPlan).catch(() => {}), 250);
+    return () => clearTimeout(timer);
+  }, [edit]);
+
+  if (error && !edit) return html`<p class="line k-error"><span class="mark">✗</span>${error}</p>`;
+  if (!edit) return html`<p class="muted">Reading the tags…</p>`;
+
+  const dirty = JSON.stringify(edit) !== JSON.stringify(loaded);
+  const set = (change) => setEdit({ ...edit, ...change });
+  const setTrack = (i, change) => setEdit({ ...edit, tracks: edit.tracks.map((t, j) => (j === i ? { ...t, ...change } : t)) });
+  const planFor = (file) => (plan && plan.files ? plan.files.find((f) => f.file === file) : null);
+  const featCount = edit.tracks.filter((t) => FEAT.test(t.title)).length;
+  const findCount = find ? edit.tracks.filter((t) => t.title.includes(find)).length : 0;
+
+  const moveFeat = () => setEdit({
+    ...edit,
+    tracks: edit.tracks.map((t) => {
+      const m = t.title.match(FEAT);
+      if (!m) return t;
+      const guests = m[1].split(/\s*(?:,|&| and )\s*/).map((g) => g.trim()).filter(Boolean);
+      const names = (t.artists.length ? t.artists : [t.artist]).filter(Boolean);
+      for (const g of guests) if (!names.includes(g)) names.push(g);
+      return { ...t, title: t.title.replace(m[0], '').trim(), artist: `${t.artist} feat. ${creditFrom(guests)}`, artists: names };
+    }),
+  });
+  const replaceAll = () => {
+    if (!find) return;
+    setEdit({ ...edit, tracks: edit.tracks.map((t) => ({ ...t, title: t.title.split(find).join(replace) })) });
+  };
+  const split = (credit) => credit.split(JOINS).map((n) => n.trim()).filter(Boolean);
+
+  const save = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const result = await api('/tags/save', edit);
+      const parts = [`Saved ${result.changed} track${result.changed === 1 ? '' : 's'}`];
+      if (result.renamed.length) parts.push(`renamed ${result.renamed.length} file${result.renamed.length === 1 ? '' : 's'}`);
+      if (result.folderRenamed) parts.push('renamed the folder');
+      setNote(parts.join(', ') + '.' + (result.kept.length ? ` Kept the names of ${result.kept.length} file(s) cyanrip did not name.` : ''));
+      await load();
+      return true;
+    } catch (err) {
+      setError(err.message);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+  const done = async () => {
+    if (dirty && !(await save())) return;
+    onAnswer(question.id, null);
+  };
+
+  return html`<div class="editor stack">
+    <div class="grid">
+      <label>Album<input type="text" value=${edit.album} onInput=${(e) => set({ album: e.target.value })} /></label>
+      <label>Album artist (credit)<input type="text" value=${edit.albumArtist} onInput=${(e) => set({ albumArtist: e.target.value })} /></label>
+      <label>Date<input type="text" value=${edit.date} onInput=${(e) => set({ date: e.target.value })} /></label>
+      <label>Genre<input type="text" value=${edit.genre} onInput=${(e) => set({ genre: e.target.value })} /></label>
+    </div>
+    <div class="stack-tight">
+      <span class="small"><b>Album artists</b> <span class="muted">(single names, ALBUMARTISTS; optional)</span></span>
+      <div class="row">
+        <${Chips} id="album-artists" label="Add an album artist" names=${edit.albumArtists} onChange=${(names) => set({ albumArtists: names })} />
+        ${!edit.albumArtists.length && edit.albumArtist && html`<button class="btn btn-small" type="button"
+          onClick=${() => set({ albumArtists: split(edit.albumArtist) })}>Split from the credit</button>`}
+      </div>
+    </div>
+    ${edit.differing.length > 0 && html`<p class="line k-warn"><span class="mark">!</span>The tracks differ in ${edit.differing.join(', ')}; saving gives every track the values above.</p>`}
+    ${plan && plan.folderName && html`<p class="line k-dim">The folder will be renamed to <b class="mono">${plan.folderName}</b>.</p>`}
+
+    <div class="row">
+      <span class="label">All tracks</span>
+      <button class="btn btn-small" type="button" disabled=${!featCount} onClick=${moveFeat}>Move “feat.” from titles to artists${featCount ? ` (${featCount})` : ''}</button>
+      <label class="sr-only" for="find">Find in titles</label>
+      <input id="find" type="text" class="short" placeholder="Find in titles" value=${find} onInput=${(e) => setFind(e.target.value)} />
+      <label class="sr-only" for="repl">Replace with</label>
+      <input id="repl" type="text" class="short" placeholder="Replace with" value=${replace} onInput=${(e) => setReplace(e.target.value)} />
+      <button class="btn btn-small" type="button" disabled=${!findCount} onClick=${replaceAll}>Replace${findCount ? ` in ${findCount}` : ''}</button>
+    </div>
+
+    <div class="tracks">
+      ${edit.tracks.map((t, i) => {
+        const p = planFor(t.file);
+        const old = loaded.tracks[i];
+        return html`<div class="track-row" key=${t.file}>
+          <span class="mono muted">${t.track || i + 1}</span>
+          <div class="stack-tight">
+            <label class="sr-only" for=${'title' + i}>Title of track ${i + 1}</label>
+            <input id=${'title' + i} type="text" class=${t.title.trim() ? '' : 'missing'} value=${t.title} onInput=${(e) => setTrack(i, { title: e.target.value })} />
+            <label class="sr-only" for=${'artist' + i}>Artist of track ${i + 1}</label>
+            <input id=${'artist' + i} type="text" class=${t.artist.trim() ? '' : 'missing'} value=${t.artist} placeholder="Artist (credit)"
+              onInput=${(e) => setTrack(i, { artist: e.target.value })} />
+            <div class="row">
+              <${Chips} id=${'artists' + i} label=${'Add an artist to track ' + (i + 1)} names=${t.artists} onChange=${(names) => setTrack(i, { artists: names })} />
+              ${!t.artists.length && split(t.artist).length > 1 && html`<button class="btn btn-small" type="button"
+                onClick=${() => setTrack(i, { artists: split(t.artist) })}>Split: ${split(t.artist).join(' · ')}</button>`}
+            </div>
+            <span class="mono small ${p && p.newFile ? '' : 'muted'}">${p && p.newFile
+              ? html`<s class="muted">${old.file}</s> → ${p.newFile}` : t.file}${p && p.kept ? html` <span class="muted">(kept: ${p.kept})</span>` : ''}</span>
+          </div>
+        </div>`;
+      })}
+    </div>
+    ${loaded.others > 0 && html`<p class="line k-dim">${loaded.others} file(s) in other formats are not edited here.</p>`}
+    ${plan && plan.problem && html`<p class="line k-warn"><span class="mark">!</span>${plan.problem}</p>`}
+    ${error && html`<p class="line k-error"><span class="mark">✗</span>${error}</p>`}
+    ${note && !dirty && html`<p class="line k-success"><span class="mark">✓</span>${note}</p>`}
+    <div class="row">
+      <button class="btn" type="button" disabled=${!dirty || busy} onClick=${() => setEdit(JSON.parse(JSON.stringify(loaded)))}>Undo changes</button>
+      <button class="btn" type="button" disabled=${!dirty || busy || (plan && plan.problem)} onClick=${save}>Save</button>
+      <button class="btn btn-primary" type="button" disabled=${busy || (dirty && plan && plan.problem)} onClick=${done}>
+        ${dirty ? 'Save and continue' : 'Continue'}</button>
+    </div>
+  </div>`;
+}
+
 function Question({ question, onAnswer }) {
   const [text, setText] = useState(question.kind === 'ask_path' ? question.prefill || '' : '');
   const [sending, setSending] = useState(false);
@@ -103,7 +280,7 @@ function Question({ question, onAnswer }) {
   // The terminal's keys: an option's key, y/n, Enter for the default.
   const keys = useRef(null);
   keys.current = (e) => {
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.ctrlKey || e.metaKey || e.altKey || question.kind === 'tag_editor') return;
     const typing = ['INPUT', 'TEXTAREA'].includes(e.target.tagName);
     if (question.kind === 'choose' && !typing) {
       const hit = question.options.find(([key]) => key === e.key.toLowerCase());
@@ -125,7 +302,25 @@ function Question({ question, onAnswer }) {
   }, []);
 
   let body;
-  if (question.kind === 'choose') {
+  const images = question.images || {};
+  if (question.kind === 'tag_editor') {
+    body = html`<${TagEditor} question=${question} onAnswer=${onAnswer} />`;
+  } else if (question.kind === 'choose' && Object.keys(images).length) {
+    // Options with a picture as cards (releases, covers), the rest as usual.
+    const pictured = question.options.filter(([key]) => images[key]);
+    const plain = question.options.filter(([key]) => !images[key]);
+    body = html`<div class="cards">${pictured.map(([key, description]) => {
+      const [first, ...more] = description.split('\n');
+      return html`<button class=${'btn card-option' + (key === question.default ? ' default' : '')} disabled=${sending}
+        onClick=${() => answer(key)}>
+        <span class="picture"><${Picture} src=${images[key]} /></span>
+        <span class="text"><span><span class="key">${key}</span> <${Linked} text=${first} /></span>
+          ${more.map((m) => html`<span class="more"><${Linked} text=${m.trim()} /></span>`)}</span>
+      </button>`;
+    })}</div>
+    <div class="options">${plain.map(([key, description]) => html`<button class=${'btn option' + (key === question.default ? ' default' : '')}
+      disabled=${sending} onClick=${() => answer(key)}><span class="key">${key}</span><span class="text"><${Linked} text=${description} /></span></button>`)}</div>`;
+  } else if (question.kind === 'choose') {
     body = html`<div class="options">${question.options.map(([key, description]) => {
       const [first, ...more] = description.split('\n');
       return html`<button class=${'btn option' + (key === question.default ? ' default' : '')} disabled=${sending}
@@ -150,7 +345,7 @@ function Question({ question, onAnswer }) {
     </form>
     ${question.kind === 'ask' && question.default && html`<span class="muted small">Empty: ${question.default}</span>`}`;
   }
-  return html`<section class="question" aria-live="polite">
+  return html`<section class=${'question' + (question.kind === 'tag_editor' ? ' wide' : '')} aria-live="polite">
     <h2><${Linked} text=${question.prompt} /></h2>
     ${body}
   </section>`;

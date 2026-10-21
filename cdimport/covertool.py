@@ -37,7 +37,7 @@ def offer(folder: Path, release_id: str = "") -> None:
             answer = ui.choose(f"Cover ({present} in every track)", [
                 ("k", "keep it"),
                 ("c", "change it (replaces the embedded front cover and cover.jpg/.png)"),
-            ], default="k")
+            ], default="k", info={"images": {"k": {"file": shown}} if shown else {}})
         finally:
             if shown:
                 shown.unlink(missing_ok=True)
@@ -50,7 +50,8 @@ def offer(folder: Path, release_id: str = "") -> None:
         options = [(str(i), f"{c.description}\n      {c.page}") for i, c in enumerate(found, 1)]
         options += [("f", "a picture file of your own (JPEG or PNG)"),
                     ("s", "keep the current cover" if replace else "no cover")]
-        answer = ui.choose("Cover", options, default="1" if found else "s")
+        covers = {str(i): {"url": c.url} for i, c in enumerate(found, 1)}
+        answer = ui.choose("Cover", options, default="1" if found else "s", info={"images": covers})
         if answer == "s":
             return
         try:
@@ -102,7 +103,8 @@ def _lookup(release_id: str, first_tags: dict[str, str]) -> list[cover.Candidate
             return []
         options = [(str(i), f"{label}\n      {cover.group_page(group)}")
                    for i, (group, label) in enumerate(albums, 1)] + [("n", "none of these")]
-        answer = ui.choose("Which album is it", options, default="1")
+        covers = {str(i): {"url": cover.group_thumbnail(group)} for i, (group, _) in enumerate(albums, 1)}
+        answer = ui.choose("Which album is it", options, default="1", info={"images": covers})
         if answer == "n":
             return []
         return cover.group_candidates(albums[int(answer) - 1][0])

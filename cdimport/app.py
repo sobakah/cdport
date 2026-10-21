@@ -429,6 +429,7 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
         ui.dim(f"Rip settings: {describe_rip_settings(session.cfg, mode)}")
         options = [(str(i), f"{label}\n      {musicbrainz.release_page(mbid)}")
                    for i, (mbid, label) in enumerate(shown.releases, 1)]
+        covers = {str(i): {"url": cover.release_thumbnail(mbid)} for i, (mbid, _) in enumerate(shown.releases, 1)}
         if not (shown.needs_tags or shown.releases):
             options.append(("r", "rip"))
         options += [
@@ -442,7 +443,7 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
             ("q", "quit"),
         ]
         default = "1" if shown.releases else "s" if shown.needs_tags else "r"
-        answer = ui.choose("Rip this disc", options, default=default)
+        answer = ui.choose("Rip this disc", options, default=default, info={"images": covers})
         if answer == "p":
             mode = "secure" if mode == "fast" else "fast"
             continue
@@ -605,7 +606,8 @@ def search_release(typed: rip.ManualTags | None, tracks: tuple[int, int] | None)
         same = "  ← same track count as the disc" if count in r.track_counts else ""
         options.append((str(i), f"{r.label}{same}\n      {r.page}"))
     options.append(("n", "none of these"))
-    answer = ui.choose("Which release is it", options, default="1")
+    covers = {str(i): {"url": cover.release_thumbnail(r.id)} for i, r in enumerate(found, 1)}
+    answer = ui.choose("Which release is it", options, default="1", info={"images": covers})
     return "" if answer == "n" else found[int(answer) - 1].id
 
 
@@ -768,8 +770,11 @@ def tags_step(session: Session, album: AlbumState) -> bool:
     key = session.options.editor or cfg["editor"]
     editor = tools.find_editor(cfg, key) if key != "skip" else None
     edited = False
+    builtin = ui.supports("tag_editor")
     while True:
         options = []
+        if builtin:
+            options.append(("w", "edit the tags here"))
         if editor:
             options.append(("o", f"open {editor.name}"))
         others = [e for e in tools.available_editors(cfg) if not editor or e.key != editor.key]
@@ -777,9 +782,17 @@ def tags_step(session: Session, album: AlbumState) -> bool:
             options.append(("e", "use another editor"))
         options += [("c", "continue without editing" if not edited else "continue"),
                     ("q", "stop here (continue later)")]
-        answer = ui.choose("Tags", options, default="o" if editor and not edited else "c")
+        first_choice = "w" if builtin else "o" if editor else "c"
+        answer = ui.choose("Tags", options, default=first_choice if not edited else "c")
         if answer == "q":
             raise Quit(0)
+        if answer == "w":
+            # The folder follows a changed album name; the state file is in it.
+            album.folder = ui.edit_tags(album.folder)
+            edited = True
+            # The editor's own button means "continue": straight to the check,
+            # unlike an outside editor, after which the user comes back here.
+            answer = "c"
         if answer == "e":
             picked = ui.choose("Editor", [(str(i), e.name) for i, e in enumerate(others, 1)], default="1")
             editor = others[int(picked) - 1]

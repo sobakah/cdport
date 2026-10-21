@@ -209,6 +209,16 @@ def current(files: list[Path]) -> str:
     return "no front cover (other pictures only)"
 
 
+def release_thumbnail(release_id: str) -> str:
+    """A small front cover of the release, for the page to show next to it
+    (the Cover Art Archive answers 404 when there is none)."""
+    return f"{CAA_URL}/release/{release_id}/front-250"
+
+
+def group_thumbnail(group_id: str) -> str:
+    return f"{CAA_URL}/release-group/{group_id}/front-250"
+
+
 def group_page(group_id: str) -> str:
     """The album's MusicBrainz page, so a search hit can be checked before picking it."""
     return f"{MB_SITE}/release-group/{group_id}"

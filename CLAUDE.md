@@ -366,6 +366,26 @@ A front end that wants live tool progress keeps the pseudo-terminal
 - Security as in lyrembed: 127.0.0.1, the token as an HttpOnly SameSite
   cookie, `Host` and `Origin` checks, JSON only, a CSP. Installing cyanrip
   stays in the terminal, because it may ask for a sudo password.
+- Pictures: `ui.choose(..., info={"images": {key: {"url"|"file": ...}}})`
+  gives an option a picture; the terminal ignores `info`. `WebFront`
+  registers each source under a random id, and `/api/image/<id>` serves only
+  those, so the page cannot make cdimport fetch arbitrary addresses. Only
+  JPEG and PNG are served (`cover.image_type`), and downloads are cached.
+  Release thumbnails come from `cover.release_thumbnail` (Cover Art Archive,
+  404 when there is none).
+- The tag editor (`tageditor.py`, no UI) replaces Ear Tag on the page:
+  `ui.supports("tag_editor")` adds the option "w" to the tags step and makes
+  it the default, and `ui.edit_tags` returns the folder, renamed if the
+  album changed. Its Continue ends the step (no return to the menu, unlike an
+  outside editor). Several artists follow Picard: `ARTIST` is the credit,
+  `ARTISTS` holds the names; the same for `ALBUMARTIST`/`ALBUMARTISTS`.
+  cyanrip writes the credit only. Names follow the tags only where cyanrip
+  built them (`{track} - {title}`, `{album}...`, its default "unicode"
+  replacements copied in `tageditor.cyanrip_name`); anything else keeps its
+  name. The `.cue` sheet's FILE lines follow, and `.cue`/`.log` follow the
+  album; the log's content is never changed (its checksum). Everything is
+  checked before anything is written, and renames go through temporary
+  names, so two tracks that swap titles do not overwrite each other.
 - `static/vendor/preact-htm.js` is the file lyrembed vendors (htm 3.1.1's
   Preact bundle, checksum and licenses in `LICENSES.txt`).
 

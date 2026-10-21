@@ -13,6 +13,7 @@ import glob
 import os
 import re
 import sys
+from pathlib import Path
 
 # The stdlib module is POSIX-only; on Windows pyreadline3 may stand in, else
 # prompts work without prefill and completion.
@@ -62,13 +63,24 @@ class Front:
     def confirm(self, prompt: str, default: bool = True) -> bool:
         raise NotImplementedError
 
-    def choose(self, prompt: str, options: list[tuple[str, str]], default: str | None = None) -> str:
+    def choose(self, prompt: str, options: list[tuple[str, str]], default: str | None = None,
+               info: dict | None = None) -> str:
+        """*info* carries what only a page can show, such as a picture per option."""
         raise NotImplementedError
 
     def ask_path(self, prompt: str, prefill: str = "") -> str:
         raise NotImplementedError
 
     def wait_for_enter(self, prompt: str) -> None:
+        raise NotImplementedError
+
+    def supports(self, feature: str) -> bool:
+        """Whether this front end has *feature* ("tag_editor") of its own."""
+        return False
+
+    def edit_tags(self, folder: Path) -> Path:
+        """Let the user edit the album's tags; returns the album's folder,
+        which follows a changed album name."""
         raise NotImplementedError
 
 
@@ -93,6 +105,18 @@ def tool_output(data: bytes) -> None:
         return
     sys.stdout.buffer.write(data)
     sys.stdout.flush()
+
+
+def supports(feature: str) -> bool:
+    """Whether the front end offers *feature* (the terminal offers none)."""
+    return _front is not None and _front.supports(feature)
+
+
+def edit_tags(folder: Path) -> Path:
+    """The front end's own tag editor; only call it when supports("tag_editor")."""
+    if _front is None:
+        raise RuntimeError("the terminal has no tag editor of its own")
+    return _front.edit_tags(folder)
 
 
 def wants_pty() -> bool:
@@ -319,13 +343,16 @@ def confirm(prompt: str, default: bool = True) -> bool:
         warn("Please answer y or n.")
 
 
-def choose(prompt: str, options: list[tuple[str, str]], default: str | None = None) -> str:
+def choose(prompt: str, options: list[tuple[str, str]], default: str | None = None,
+           info: dict | None = None) -> str:
     """Show lettered options and return the chosen key.
 
     Options are (key, description). Enter picks the default when there is one.
+    *info* is for other front ends (pictures per option, see web.py); the
+    terminal shows the descriptions only.
     """
     if _front is not None:
-        return _front.choose(prompt, options, default)
+        return _front.choose(prompt, options, default, info)
     gap()
     width = max(len(k) for k, _ in options)
     for key, description in options:

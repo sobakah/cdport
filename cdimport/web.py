@@ -24,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import app, proc, ui
+from . import app, cover, proc, tageditor, ui
 
 log = logging.getLogger(__name__)
 
@@ -81,6 +81,10 @@ class WebFront(ui.Front):
         self._next_question = 0
         self._tool: dict | None = None
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        # Pictures the flow handed over with a question, by id: the only ones
+        # /api/image serves, so the page cannot make cdimport fetch anything else.
+        self._images: dict[str, tuple[str, str]] = {}
+        self._image_cache: dict[str, tuple[bytes, str]] = {}
         self._pending = ""  # output after the last line break: a line still being written
         self._redrawn = ""  # the newest state of a line a progress display redraws with \r
         self.finished: int | None = None
@@ -171,6 +175,8 @@ class WebFront(ui.Front):
             elif kind == "confirm":
                 if not isinstance(value, bool):
                     raise ApiError(400, "Answer yes or no.")
+            elif kind == "tag_editor":
+                value = question["folder"]
             elif kind in ("ask", "ask_path"):
                 if not isinstance(value, str):
                     raise ApiError(400, "Expected text.")
@@ -203,14 +209,77 @@ class WebFront(ui.Front):
     def confirm(self, prompt: str, default: bool = True) -> bool:
         return self._ask("confirm", prompt, default=default)
 
-    def choose(self, prompt: str, options: list[tuple[str, str]], default: str | None = None) -> str:
-        return self._ask("choose", prompt, options=[[k, d] for k, d in options], default=default)
+    def choose(self, prompt: str, options: list[tuple[str, str]], default: str | None = None,
+               info: dict | None = None) -> str:
+        images = {}
+        for key, source in ((info or {}).get("images") or {}).items():
+            if source:
+                images[key] = f"/api/image/{self._register_image(source)}"
+        return self._ask("choose", prompt, options=[[k, d] for k, d in options], default=default, images=images)
+
+    def _register_image(self, source: dict) -> str:
+        """An id for a picture the flow names: {"url": ...} or {"file": ...}."""
+        kind, value = ("file", str(source["file"])) if "file" in source else ("url", str(source["url"]))
+        with self._cond:
+            for image_id, known in self._images.items():
+                if known == (kind, value):
+                    return image_id
+            image_id = secrets.token_urlsafe(8)
+            self._images[image_id] = (kind, value)
+            return image_id
+
+    def image(self, image_id: str) -> tuple[bytes, str]:
+        """The picture behind *image_id* and its type. A file is read when
+        asked for (the cover preview is deleted after its question); a
+        download is kept, so going back and forth costs no new requests."""
+        with self._cond:
+            source = self._images.get(image_id)
+            cached = self._image_cache.get(image_id)
+        if source is None:
+            raise ApiError(404, "No such picture.")
+        if cached is not None:
+            return cached
+        kind, value = source
+        try:
+            data = Path(value).read_bytes() if kind == "file" else cover.http_get(value)
+            mime, _ = cover.image_type(data)
+        except cover.NotFound as exc:
+            raise ApiError(404, "There is no such cover.") from exc
+        except (cover.CoverError, OSError) as exc:
+            raise ApiError(502, f"Cannot get the picture: {exc}") from exc
+        if kind == "url":
+            with self._cond:
+                self._image_cache[image_id] = (data, mime)
+        return data, mime
 
     def ask_path(self, prompt: str, prefill: str = "") -> str:
         return self._ask("ask_path", prompt, prefill=prefill)
 
     def wait_for_enter(self, prompt: str) -> None:
         self._ask("wait", prompt)
+
+    def supports(self, feature: str) -> bool:
+        return feature == "tag_editor"
+
+    def edit_tags(self, folder: Path) -> Path:
+        """The page's tag editor; the question holds the folder, which a save
+        that renames it updates, and is answered when the user is done."""
+        return Path(self._ask("tag_editor", "Edit the tags", folder=str(folder)))
+
+    def tag_folder(self) -> Path:
+        """The folder of the open tag-editor question."""
+        with self._cond:
+            question = self.question
+            if question is None or question["kind"] != "tag_editor":
+                raise ApiError(409, "The tag editor is not open.")
+            return Path(question["folder"])
+
+    def moved_tags(self, folder: Path) -> None:
+        with self._cond:
+            if self.question is not None and self.question["kind"] == "tag_editor":
+                self.question["folder"] = str(folder)
+                self._rev += 1
+                self._cond.notify_all()
 
     # the page's view
     @property
@@ -245,6 +314,8 @@ def _answer_text(kind: str, answer: object, details: dict) -> str:
         return "Yes" if answer else "No"
     if kind == "wait":
         return "Done"
+    if kind == "tag_editor":
+        return "Tags edited"
     return str(answer) if answer else "(empty)"
 
 
@@ -395,6 +466,10 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             if not url.path.startswith("/api/"):
                 raise ApiError(404, "Not found.")
+            if method == "GET" and url.path.startswith("/api/image/"):
+                data, mime = self.server.run.front.image(url.path[len("/api/image/"):])
+                self._send(200, data, mime)
+                return
             body = self._body(json_required=url.path != "/api/closing") if method == "POST" else {}
             self.server.contact()
             self._send_json(200, self._api(method, url.path, parse_qs(url.query), body))
@@ -405,6 +480,8 @@ class _Handler(BaseHTTPRequestHandler):
             elif url.path == "/api/close":
                 self.wfile.flush()
                 self.server.stop.set()
+        except (BrokenPipeError, ConnectionResetError):
+            return  # the page went away mid-answer (a closed tab, a reload)
         except ApiError as exc:
             if self.path.startswith("/api/"):
                 self._send_json(exc.status, {"error": exc.message})
@@ -453,6 +530,17 @@ class _Handler(BaseHTTPRequestHandler):
                 raise ApiError(400, "Which question?")
             front.answer(qid, body.get("value"))
             return {"ok": True}
+        if method == "GET" and path == "/api/tags":
+            return tageditor.read_album(front.tag_folder())
+        if method == "POST" and path == "/api/tags/plan":
+            return tageditor.plan(front.tag_folder(), body)
+        if method == "POST" and path == "/api/tags/save":
+            try:
+                result = tageditor.save(front.tag_folder(), body)
+            except tageditor.TagEditError as exc:
+                raise ApiError(400, str(exc)) from exc
+            front.moved_tags(Path(result["folder"]))
+            return result
         if method == "POST" and path == "/api/stop-tool":
             return {"stopped": proc.interrupt_tool()}
         if method == "POST" and path == "/api/quit":
