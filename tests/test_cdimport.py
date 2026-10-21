@@ -2343,7 +2343,7 @@ def _http(server, method, path, body=None, headers=None, cookie=True):
     conn = http.client.HTTPConnection("127.0.0.1", server.port, timeout=10)
     sent = {"Host": f"127.0.0.1:{server.port}"}
     if cookie:
-        sent["Cookie"] = f"{web.COOKIE}=test-token"
+        sent["Cookie"] = f"{web.cookie_name(server.port)}=test-token"
     if body is not None:
         body = json.dumps(body).encode()
         sent.update({"Content-Type": "application/json", "Origin": f"http://127.0.0.1:{server.port}"})
@@ -2615,3 +2615,27 @@ def test_the_lyrics_step_hands_over_when_both_can(tmp_path, monkeypatch, capsys,
     session.page_url = ""                              # in the terminal: nothing to come back to
     album.done.remove("lyrics")
     assert app.lyrics_step(session, album) and passed[-1] == ""
+
+
+def test_the_page_leads_back_only_to_a_local_page(capsys):
+    assert cli.local_page("http://127.0.0.1:41000/") and not cli.local_page("http://evil.example:80/")
+    for argv in (["--return-url", "http://127.0.0.1:1/"], ["--web", "--return-url", "https://127.0.0.1:1/"],
+                 ["--web", "--return-name", "lyrembed"]):
+        with pytest.raises(SystemExit):
+            cli.main(argv)
+
+
+def test_the_page_knows_where_done_goes(monkeypatch, tmp_path):
+    monkeypatch.setattr(app, "run", lambda session: 0)
+    run = web.Run(app.new_session(default_cfg(), app.Options(), tmp_path / "config.json"),
+                  back=("http://127.0.0.1:41000/", "lyrembed"))
+    server = web._Server(run, "test-token")
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    try:
+        state = _http(server, "GET", "/api/state?since=0")[1]
+        assert (state["returnUrl"], state["returnName"]) == ("http://127.0.0.1:41000/", "lyrembed")
+    finally:
+        run.thread.join(2)
+        ui.use(None)
+        server.shutdown()
+        server.server_close()

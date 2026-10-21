@@ -3,6 +3,32 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.0] — 2026-10-21
+
+### Added
+
+* **A page in the browser** (`--web`, preview): the terminal's steps,
+  unchanged, with a step bar, the messages, cyanrip's output live (and a
+  Stop button that ends it like Ctrl+C) and each question as buttons or a
+  field. The run starts when the page opens; closing the tab stops it at
+  the next question, never during a rip. Only this computer can open the
+  page, with the token in the printed address.
+* **Pictures with the choices** on the page: releases, albums and cover
+  candidates show their cover, "keep or change" the embedded one.
+* **A tag editor** on the page, offered first in the tags step: album,
+  album artist, date, genre, each track's title and artist; several
+  artists as Picard writes them (`ARTIST` the credit, `ARTISTS` the
+  names); "(feat. X)" moved from titles to the artists; search and
+  replace in titles. File names follow titles and the folder the album
+  where cyanrip built them; the cue sheet follows, the rip log stays
+  untouched; nothing is written unless all of it can be.
+* **The lyrics step hands the tab to lyrembed's page** (lyrembed 2.1.0)
+  and gets it back with "Done – back to cdimport"; lyrembed's output,
+  also in automatic mode, shows on the page.
+* **`--return-url URL --return-name NAME`** with `--web`: the finished
+  run's button leads back there. lyrembed's "Import a CD" uses it, and
+  opens the imported album afterwards.
+
 ## [0.5.1] — 2026-10-21
 
 ### Changed

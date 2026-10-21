@@ -361,6 +361,7 @@ function App() {
   const [finished, setFinished] = useState(null);
   const [error, setError] = useState('');
   const [closed, setClosed] = useState(false);
+  const [back, setBack] = useState(null);
   const end = useRef(null);
   const count = useRef(0);
 
@@ -391,6 +392,7 @@ function App() {
           setQuestion(state.question);
           setToolRunning(state.toolRunning);
           setFinished(state.finished);
+          if (state.returnUrl) setBack({ url: state.returnUrl, name: state.returnName });
           setError('');
           if (state.finished !== null && !state.question) await new Promise((r) => setTimeout(r, 2000));
         } catch (err) {
@@ -425,7 +427,9 @@ function App() {
   };
   const close = async () => {
     await api('/close', {}).catch(() => {});
-    setClosed(true);
+    // Started from another program's page (lyrembed's "Import a CD"): back there.
+    if (back) location.href = back.url;
+    else setClosed(true);
   };
 
   // Steps as the flow announced them; the log grouped under them.
@@ -464,7 +468,7 @@ function App() {
       ${finished !== null && !question && html`<section class="section finished">
         <h2>${finished === 0 ? 'cdimport has finished' : finished === 130 ? 'cdimport was stopped' : `cdimport ended with exit code ${finished}`}</h2>
         <p class="muted">${finished === 0 ? 'Everything above is done.' : 'Finished steps are saved; start cdimport again to continue.'}</p>
-        <div class="row"><button class="btn btn-primary" onClick=${close}>Close</button></div>
+        <div class="row"><button class="btn btn-primary" onClick=${close}>${back ? `Done – back to ${back.name}` : 'Close'}</button></div>
       </section>`}
       <div ref=${end}></div>
     </main>

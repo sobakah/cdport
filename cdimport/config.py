@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-__version__ = "0.5.1"
+__version__ = "0.6.0"
 
 # File names cdimport owns inside the working folder and album folders.
 STATE_FILE_NAME = ".cdimport.json"

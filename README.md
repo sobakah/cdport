@@ -13,7 +13,7 @@ does not rip, tag or fetch lyrics itself.
 5. Finish   offer to move the album into the music library, summary
 ```
 
-Version 0.5.1 · Python 3.10+ · Linux (Windows later)
+Version 0.6.0 · Python 3.10+ · Linux (Windows later)
 
 ## Requirements
 
@@ -77,6 +77,40 @@ On first use cdimport asks for two folders and saves them in the config: the
 working folder, where rips land first (suggested: `~/Temp`), and the music
 library (suggested: your desktop's music folder, e.g. `~/Music` or
 `~/Musik`). `-w DIR` and `-l DIR` use other folders for one run.
+
+### On a page in the browser (preview)
+
+```bash
+cdimport --web               # the same run on a page in your default browser
+cdimport --web --no-browser  # print the page's address instead of opening it
+```
+
+`--web` runs exactly the terminal's steps, with a page as their front end:
+a step bar, each step's messages, cyanrip's output live (with **Stop
+cyanrip**, which ends it like Ctrl+C, so it finishes its log), and each
+question as buttons or a field; the terminal's keys work there too. Only
+this computer can open the page, and only with the address cdimport
+prints. Closing the tab stops cdimport at its next question, never during
+a rip. On the page:
+
+- **Releases, albums and covers show their pictures** (from the Cover Art
+  Archive; cdimport fetches only the pictures its questions name).
+- **The tags step has its own editor**, offered first; Ear Tag and co.
+  stay as alternatives. It edits album, album artist, date, genre and each
+  track's title and artist. Several artists follow Picard: `ARTIST` holds
+  the credit ("A feat. B"), `ARTISTS` the single names (and the same for
+  `ALBUMARTIST`/`ALBUMARTISTS`); "Move feat. from titles to artists" and
+  a search and replace in all titles help. File names follow a changed
+  title, and the folder a changed album, where cyanrip built them; the cue
+  sheet follows, the rip log is never changed.
+- **The lyrics step hands the tab to lyrembed's page** (lyrembed 2.1.0 or
+  newer): **Done – back to cdimport** there brings it back, and the run
+  goes on.
+
+lyrembed's **Import a CD** starts cdimport this way, with
+`--return-url`/`--return-name`: at the end, **Done – back to lyrembed**
+returns there with the imported album open. Installing cyanrip stays in
+the terminal (`--install-cyanrip` may ask for your password).
 
 ### Fast and secure rips
 

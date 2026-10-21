@@ -38,7 +38,14 @@ _CONTENT_TYPES = {
 }
 _CSP = ("default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; "
         "frame-ancestors 'none'; form-action 'none'")
+# Cookies belong to a host, not a port: two pages on 127.0.0.1 (a second
+# cdimport, lyrembed and cdimport handing a tab to each other) would overwrite
+# each other's token under one name. The port goes into the name.
 COOKIE = "cdimport_token"
+
+
+def cookie_name(port: int) -> str:
+    return f"{COOKIE}_{port}"
 # As in lyrembed: the page pings every 15 s, and Chrome runs a hidden tab's
 # timers once a minute, so only longer silence means it is gone.
 HEARTBEAT_TIMEOUT = 90.0
@@ -346,9 +353,12 @@ def _answer_text(kind: str, answer: object, details: dict) -> str:
 class Run:
     """The flow (cli.run_session) in a thread, with the page as front end."""
 
-    def __init__(self, session: app.Session) -> None:
+    def __init__(self, session: app.Session, back: tuple[str, str] | None = None) -> None:
         self.session = session
         self.front = WebFront()
+        # Another program's page that started cdimport (--return-url): the
+        # finished run's button leads back there.
+        self.back_url, self.back_name = back if back else ("", "")
         self.thread = threading.Thread(target=self._run, name="cdimport-flow", daemon=True)
         self._started = threading.Lock()
 
@@ -432,7 +442,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _cookie_token(self) -> str:
         for part in self.headers.get("Cookie", "").split(";"):
             name, _, value = part.strip().partition("=")
-            if name == COOKIE:
+            if name == cookie_name(self.server.port):
                 return value
         return ""
 
@@ -519,7 +529,7 @@ class _Handler(BaseHTTPRequestHandler):
         if given and hmac.compare_digest(given.encode(), self.server.token.encode()):
             self._send(303, b"", "text/plain", {
                 "Location": "/",
-                "Set-Cookie": f"{COOKIE}={self.server.token}; HttpOnly; SameSite=Strict; Path=/",
+                "Set-Cookie": f"{cookie_name(self.server.port)}={self.server.token}; HttpOnly; SameSite=Strict; Path=/",
             })
             return
         if not self._authorized():
@@ -546,7 +556,8 @@ class _Handler(BaseHTTPRequestHandler):
             # Long poll: wait briefly for something new, so progress shows
             # without the page asking ten times a second.
             front.wait_for_change(since_rev, timeout=5.0 if since_rev else 0)
-            return front.snapshot(since_rev)
+            return {**front.snapshot(since_rev), "returnUrl": run.back_url,
+                    "returnName": run.back_name or "the previous page"}
         if method == "POST" and path == "/api/answer":
             qid = body.get("id")
             if not isinstance(qid, int):
@@ -584,10 +595,16 @@ def _say(message: str) -> None:
     print(message, flush=True)
 
 
-def serve(session: app.Session, open_browser: bool = True, port: int = 0) -> int:
+# The last line serve prints when the run ends, read by lyrembed's "Import a
+# CD" to open the imported album: keep the wording.
+FINISHED_LINE = "cdimport finished: {folder}"
+
+
+def serve(session: app.Session, open_browser: bool = True, port: int = 0,
+          back: tuple[str, str] | None = None) -> int:
     """Run the flow with the page as its front end; returns its exit code."""
     token = secrets.token_urlsafe(24)
-    run = Run(session)
+    run = Run(session, back)
     server = _Server(run, token, port)
     url = f"http://127.0.0.1:{server.port}/?token={token}"
     # Where lyrembed's page sends the tab back; the cookie is already set.
@@ -595,9 +612,13 @@ def serve(session: app.Session, open_browser: bool = True, port: int = 0) -> int
     thread = threading.Thread(target=server.serve_forever, name="cdimport-web", daemon=True)
     thread.start()
     _say(f"cdimport is running at {url}")
-    if not (open_browser and webbrowser.open(url)):
-        _say("Open that address in your browser.")
-    _say("Close the page when done, or press Ctrl+C here.")
+    opened = open_browser and webbrowser.open(url)
+    if back:
+        _say(f"When the run is done, its page leads back to {back[1] or 'the previous page'}.")
+    else:
+        if not opened:
+            _say("Open that address in your browser.")
+        _say("Close the page when done, or press Ctrl+C here.")
     sys.stdout.flush()
     try:
         while not server.stop.wait(1.0):
@@ -617,5 +638,8 @@ def serve(session: app.Session, open_browser: bool = True, port: int = 0) -> int
         ui.use(None)
     if run.started:
         run.thread.join(timeout=120)
+    album = session.album
+    if album is not None and album.folder.is_dir():
+        _say(FINISHED_LINE.format(folder=album.folder))
     code = run.front.finished
     return 130 if code is None else code

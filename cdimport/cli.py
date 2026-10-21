@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from . import app, config, ui
 from .config import __version__
@@ -38,7 +39,21 @@ def build_parser() -> argparse.ArgumentParser:
     page.add_argument("--web", action="store_true",
                       help="work on a page in the browser instead of the terminal (only this computer can open it)")
     page.add_argument("--no-browser", action="store_true", help="with --web, print the page's address instead of opening it")
+    page.add_argument("--return-url", metavar="URL",
+                      help="with --web: when done, a button leads back to this local address (lyrembed's page)")
+    page.add_argument("--return-name", metavar="NAME", default="",
+                      help="with --return-url, the name on that button (default: 'the previous page')")
     return parser
+
+
+def local_page(url: str) -> bool:
+    """Whether *url* is a page on this computer: the only kind the page may
+    lead back to, so cdimport cannot be used to send a tab elsewhere."""
+    try:
+        parts = urlsplit(url)
+        return parts.scheme == "http" and parts.hostname in ("127.0.0.1", "localhost") and parts.port is not None
+    except ValueError:
+        return False
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -58,6 +73,12 @@ def main(argv: list[str] | None = None) -> int:
         cfg["color"] = args.color
     if args.no_browser and not args.web:
         parser.error("--no-browser only applies together with --web")
+    if (args.return_url or args.return_name) and not args.web:
+        parser.error("--return-url and --return-name only apply together with --web")
+    if args.return_name and not args.return_url:
+        parser.error("--return-name only applies together with --return-url")
+    if args.return_url and not local_page(args.return_url):
+        parser.error("--return-url must be a page on this computer, such as http://127.0.0.1:8000/")
     if args.web and args.install_cyanrip:
         parser.error("--install-cyanrip needs the terminal (it may ask for your password); run it without --web")
     if args.editor and args.editor != "skip" and args.editor not in cfg["editors"]:
@@ -74,7 +95,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.web:
         from . import web  # not needed in the terminal
 
-        return web.serve(session, open_browser=not args.no_browser)
+        return web.serve(session, open_browser=not args.no_browser,
+                         back=(args.return_url, args.return_name) if args.return_url else None)
     return run_session(session)
 
 

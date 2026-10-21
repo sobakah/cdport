@@ -47,6 +47,8 @@ cover checks, `run_tail` without a terminal and after Ctrl+C, disc merge
 over all tracks with rollback, Flatpak option values.
 0.5.1 (2026-10-21): ready for lyrembed 2.0's browser page (version check,
 texts, how to get back to cdimport).
+0.6.0 (2026-10-21): the page (`--web`, preview) with pictures, the tag editor,
+the lyrics handoff to lyrembed, and `--return-url` for lyrembed's Import a CD.
 
 Layout: `cdimport/` package (`app.py` runs the steps, one module per step:
 `disc`, `rip`, `tags`, `lyrics`, `library`; `state`, `tools`, `proc`,
@@ -401,6 +403,13 @@ A front end that wants live tool progress keeps the pseudo-terminal
   the page, lyrembed's output (also `--auto`'s) goes to it through
   `run_tail`; in the terminal lyrembed still gets the terminal (`proc.run`).
   An older lyrembed opens a tab of its own, as before.
+- Started by lyrembed's "Import a CD" (`--return-url URL --return-name
+  lyrembed`, with `--web` only, local addresses only, `cli.local_page`),
+  the finished run's button leads back there. `serve` ends by printing
+  "cdimport finished: <album folder>" (`FINISHED_LINE`), which lyrembed
+  reads to open the album: keep that wording. The token cookie's name
+  carries the port (`web.cookie_name`), as in lyrembed: cookies belong to
+  a host, not a port, and two pages on 127.0.0.1 overwrote each other's.
 - `static/vendor/preact-htm.js` is the file lyrembed vendors (htm 3.1.1's
   Preact bundle, checksum and licenses in `LICENSES.txt`).
 
