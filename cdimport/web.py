@@ -49,6 +49,11 @@ MAX_BODY = 1024 * 1024
 TOOL_LINES = 400
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 _LINE_BREAK = re.compile(r"\r\n|\n|\r")
+# lyrembed prints its page's address like this (lyrembed/web.py, serve).
+_HANDOFF = re.compile(r"is running at (http://(?:127\.0\.0\.1|localhost):\d+/\?token=[A-Za-z0-9_-]+)")
+# After the other page sends the tab back, cdimport's page needs a moment to
+# load: until then its "closing" from leaving does not count.
+HANDOFF_GRACE = 30.0
 
 
 class Cancelled(KeyboardInterrupt):
@@ -88,6 +93,7 @@ class WebFront(ui.Front):
         self._pending = ""  # output after the last line break: a line still being written
         self._redrawn = ""  # the newest state of a line a progress display redraws with \r
         self.finished: int | None = None
+        self._handoff_end: float | None = None
 
     # recording
     def _bump(self, event: dict) -> None:
@@ -112,6 +118,8 @@ class WebFront(ui.Front):
                     if last:
                         tool["lines"].append(last)
                     tool.update({"running": False, "code": details.get("code"), "partial": ""})
+                    if tool.get("handoff"):
+                        self._handoff_end = time.monotonic()
                     self._pending = self._redrawn = ""
                     self._tool = None
                     self._bump(tool)
@@ -134,8 +142,16 @@ class WebFront(ui.Front):
                 if sep == "\r":
                     self._redrawn = part  # redrawn: only its newest state counts
                 else:
-                    lines.append(_ANSI.sub("", part).rstrip())
+                    line = _ANSI.sub("", part).rstrip()
+                    lines.append(line)
                     self._redrawn = ""
+                    found = _HANDOFF.search(line) if tool.get("handoff") and not tool.get("url") else None
+                    if found:
+                        # The page switches its tab there; the other page leads back.
+                        tool["url"] = found.group(1)
+                        self.events.append({"id": len(self.events), "kind": "handoff", "text": "",
+                                            "name": tool.get("name", ""), "url": found.group(1), "tool": tool["id"]})
+                        self._bump(self.events[-1])
             self._pending = parts[-1]
             tool["partial"] = _ANSI.sub("", self._pending or self._redrawn).rstrip()
             del lines[:-TOOL_LINES]
@@ -285,6 +301,13 @@ class WebFront(ui.Front):
     @property
     def tool_running(self) -> bool:
         return self._tool is not None and self._tool.get("running", False)
+
+    @property
+    def away(self) -> bool:
+        """The tab is on another program's page, or only just came back."""
+        if self._tool is not None and self._tool.get("handoff") and self._tool.get("running"):
+            return True
+        return self._handoff_end is not None and time.monotonic() - self._handoff_end < HANDOFF_GRACE
 
     def snapshot(self, since: int) -> dict:
         with self._cond:
@@ -567,6 +590,8 @@ def serve(session: app.Session, open_browser: bool = True, port: int = 0) -> int
     run = Run(session)
     server = _Server(run, token, port)
     url = f"http://127.0.0.1:{server.port}/?token={token}"
+    # Where lyrembed's page sends the tab back; the cookie is already set.
+    session.page_url = f"http://127.0.0.1:{server.port}/"
     thread = threading.Thread(target=server.serve_forever, name="cdimport-web", daemon=True)
     thread.start()
     _say(f"cdimport is running at {url}")
@@ -576,7 +601,7 @@ def serve(session: app.Session, open_browser: bool = True, port: int = 0) -> int
     sys.stdout.flush()
     try:
         while not server.stop.wait(1.0):
-            if server.page_gone():
+            if server.page_gone() and not run.front.away:
                 if run.front.finished is not None:
                     break
                 if not run.front.tool_running:

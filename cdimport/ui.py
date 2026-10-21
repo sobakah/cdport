@@ -262,11 +262,12 @@ def check(label: str, value: str, ok: bool | None, note: str = "") -> None:
         _print(" " * (4 + LABEL_WIDTH) + _styled(line, "dim"))
 
 
-def tool_start(name: str, command: str = "") -> None:
+def tool_start(name: str, command: str = "", handoff: bool = False) -> None:
     """A frame line above an external tool's output, which otherwise runs
-    straight into cdimport's own text."""
+    straight into cdimport's own text. *handoff*: the tool opens a page of
+    its own and prints its address, which a front end may switch to."""
     if _front is not None:
-        _front.message("tool_start", command, name=name)
+        _front.message("tool_start", command, name=name, handoff=handoff)
         return
     gap()
     _print(style("╭─ ", "dim") + style(name, "bold") + (style(f"  {command}", "dim") if command else ""))

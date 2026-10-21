@@ -611,6 +611,7 @@ def run_cli(tmp_path, monkeypatch, argv, *, lyrembed=None, editor=None):
     monkeypatch.setattr(tools, "start_problem", lambda cmd: None)
     monkeypatch.setattr(lyrics, "can_romanize", lambda lyrembed: False)
     monkeypatch.setattr(lyrics, "opens_page", lambda lyrembed: False)
+    monkeypatch.setattr(lyrics, "can_return", lambda lyrembed: False)
     monkeypatch.setattr(app, "offer_cover", lambda folder: None)
     monkeypatch.setattr(tools, "find_lyrembed", lambda cfg: lyrembed)
     monkeypatch.setattr(tools, "find_editor", lambda cfg, key: editor)
@@ -728,7 +729,7 @@ def test_another_run_after_the_summary(tmp_path, monkeypatch, album_dir, capsys)
 def test_auto_lyrics_failure_falls_back_to_interactive(tmp_path, monkeypatch, album_dir):
     modes = []
 
-    def fake_run(lyrembed, cfg, folder, mode, romanize=None):
+    def fake_run(lyrembed, cfg, folder, mode, romanize=None, return_url=''):
         modes.append(mode)
         return lyrics.EXIT_BATCH_FAILURES if mode == "auto" else lyrics.EXIT_OK
     monkeypatch.setattr(app.lyrics, "run_lyrembed", fake_run)
@@ -741,7 +742,7 @@ def test_auto_lyrics_failure_falls_back_to_interactive(tmp_path, monkeypatch, al
 
 
 def test_ctrl_c_leaves_resumable_state(tmp_path, monkeypatch, album_dir, capsys):
-    def interrupted(lyrembed, cfg, folder, mode, romanize=None):
+    def interrupted(lyrembed, cfg, folder, mode, romanize=None, return_url=''):
         raise KeyboardInterrupt
     monkeypatch.setattr(app.lyrics, "run_lyrembed", interrupted)
     feed_input(monkeypatch, ["c"])
@@ -2055,7 +2056,7 @@ def test_opens_page_reads_lyrembeds_version(monkeypatch):
 def test_interactive_lyrics_say_how_to_get_back(tmp_path, monkeypatch, capsys, album_dir, page):
     session = app.new_session(default_cfg(), app.Options(lyrics="ask"), tmp_path / "config.json")
     session.lyrembed, session.lyrembed_page = "lyrembed", page
-    monkeypatch.setattr(app.lyrics, "run_lyrembed", lambda lyr, cfg, folder, mode, romanize=None: lyrics.EXIT_OK)
+    monkeypatch.setattr(app.lyrics, "run_lyrembed", lambda lyr, cfg, folder, mode, romanize=None, return_url='': lyrics.EXIT_OK)
     album = state.load(album_dir)
     album.mark("tags")
     feed_input(monkeypatch, ["i"])
@@ -2071,7 +2072,7 @@ def test_automatic_lyrics_asks_about_romanization(tmp_path, monkeypatch, album_d
     session.lyrembed, session.lyrembed_romanize = "lyrembed", True
     passed = []
     monkeypatch.setattr(app.lyrics, "run_lyrembed",
-                        lambda lyr, cfg, folder, mode, romanize=None: passed.append(romanize) or lyrics.EXIT_OK)
+                        lambda lyr, cfg, folder, mode, romanize=None, return_url='': passed.append(romanize) or lyrics.EXIT_OK)
     album = state.load(album_dir)
     album.mark("tags")
     feed_input(monkeypatch, [answer, "c"])  # Enter = lyrembed's own setting; then continue without lyrics
@@ -2084,7 +2085,7 @@ def test_old_lyrembed_is_not_asked_and_gets_no_flag(tmp_path, monkeypatch, album
     session.lyrembed = "lyrembed"  # lyrembed_romanize stays False
     passed = []
     monkeypatch.setattr(app.lyrics, "run_lyrembed",
-                        lambda lyr, cfg, folder, mode, romanize=None: passed.append(romanize) or lyrics.EXIT_OK)
+                        lambda lyr, cfg, folder, mode, romanize=None, return_url='': passed.append(romanize) or lyrics.EXIT_OK)
     album = state.load(album_dir)
     album.mark("tags")
     feed_input(monkeypatch, ["c"])  # no lyrics found: continue without them
@@ -2106,7 +2107,7 @@ def test_automatic_lyrics_are_checked_in_the_tags(tmp_path, monkeypatch, capsys,
     codes = [batch_code, lyrics.EXIT_OK]
     called = []
 
-    def fake_run(lyr, cfg, folder, mode, romanize=None):
+    def fake_run(lyr, cfg, folder, mode, romanize=None, return_url=''):
         called.append(mode)
         if mode == "auto" and found:
             make_flac(folder / "01.flac", artist="IU", title="Blueming", lyrics="[00:01.00]la la")
@@ -2553,3 +2554,64 @@ def test_on_the_page_the_tags_step_offers_its_own_editor_first(tmp_path, monkeyp
     first = page.questions[0][2]
     assert first["default"] == "w" and first["options"][0] == ("w", "edit the tags here")
     assert album_after.folder == renamed and page.edited == folder
+
+
+# --- the lyrics step's handoff to lyrembed's page -----------------------------------
+def test_lyrembed_is_told_where_its_page_leads_back(tmp_path, monkeypatch):
+    cfg = default_cfg()
+    cmd = lyrics.lyrembed_command("lyrembed", cfg, tmp_path, "interactive", return_url="http://127.0.0.1:41877/")
+    assert cmd[2:] == ["--no-browser", "--return-url", "http://127.0.0.1:41877/", "--return-name", "cdimport"]
+    assert lyrics.lyrembed_command("lyrembed", cfg, tmp_path, "auto", None, "http://127.0.0.1:1/")[2:] == ["--auto"]
+
+    def help_text(text):
+        return lambda cmd, timeout=10: subprocess.CompletedProcess(cmd, 0, text, "")
+    monkeypatch.setattr(lyrics.proc, "capture", help_text("  --no-browser\n  --return-url URL  a 'Done' button ..."))
+    assert lyrics.can_return("lyrembed")
+    monkeypatch.setattr(lyrics.proc, "capture", help_text("  --no-browser ..."))   # lyrembed 2.0.0
+    assert not lyrics.can_return("lyrembed")
+
+
+def test_the_page_follows_lyrembeds_address_once(monkeypatch):
+    front = web.WebFront()
+    front.message("tool_start", "lyrembed DIR", name="cyanrip")
+    front.tool_output(b"lyrembed is running at http://127.0.0.1:1234/?token=abc\n")   # not a handoff tool
+    front.message("tool_end", name="cyanrip", code=0)
+    assert not any(e["kind"] == "handoff" for e in front.events)
+
+    front.message("tool_start", "lyrembed DIR --no-browser", name="lyrembed", handoff=True)
+    front.tool_output(b"lyrembed is running at http://127.0.0.1:43851/?token=P88t-T_x\nOpen that address\n"
+                      b"lyrembed is running at http://127.0.0.1:9/?token=again\n")
+    handoffs = [e for e in front.events if e["kind"] == "handoff"]
+    assert [e["url"] for e in handoffs] == ["http://127.0.0.1:43851/?token=P88t-T_x"]
+    assert front.away                                  # the tab is on lyrembed's page
+    front.message("tool_end", name="lyrembed", code=0)
+    assert front.away                                  # ... and only just came back
+    monkeypatch.setattr(web, "HANDOFF_GRACE", 0.0)
+    assert not front.away
+
+
+def test_on_the_page_lyrembeds_output_goes_to_the_page(tmp_path, monkeypatch, front):
+    ran = []
+    monkeypatch.setattr(lyrics.proc, "run", lambda cmd: ran.append(("run", cmd)) or 0)
+    monkeypatch.setattr(lyrics.proc, "run_tail", lambda cmd: ran.append(("run_tail", cmd)) or (0, []))
+    ui.use(None)
+    lyrics.run_lyrembed("lyrembed", default_cfg(), tmp_path, "auto")
+    front()
+    lyrics.run_lyrembed("lyrembed", default_cfg(), tmp_path, "auto")
+    assert [kind for kind, _ in ran] == ["run", "run_tail"]
+
+
+def test_the_lyrics_step_hands_over_when_both_can(tmp_path, monkeypatch, capsys, album_dir):
+    session = app.new_session(default_cfg(), app.Options(lyrics="interactive"), tmp_path / "config.json")
+    session.lyrembed, session.lyrembed_page, session.lyrembed_return = "lyrembed", True, True
+    session.page_url = "http://127.0.0.1:41877/"
+    passed = []
+    monkeypatch.setattr(app.lyrics, "run_lyrembed",
+                        lambda lyr, cfg, folder, mode, romanize=None, return_url='': passed.append(return_url) or 0)
+    album = state.load(album_dir)
+    album.mark("tags")
+    assert app.lyrics_step(session, album) and passed == ["http://127.0.0.1:41877/"]
+    assert "Done – back to cdimport" in capsys.readouterr().out
+    session.page_url = ""                              # in the terminal: nothing to come back to
+    album.done.remove("lyrics")
+    assert app.lyrics_step(session, album) and passed[-1] == ""

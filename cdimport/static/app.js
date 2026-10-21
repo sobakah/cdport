@@ -60,6 +60,9 @@ function Item({ event }) {
       return html`<${Tool} event=${event} />`;
     case 'answer':
       return html`<p class="answer"><span class="q">${event.prompt}</span>${event.text}</p>`;
+    case 'handoff':
+      return html`<p class="line k-dim">The album opened on ${event.name}'s page:
+        <a href=${event.url}>go there</a> if this tab did not switch.</p>`;
     default:
       return null;
   }
@@ -369,6 +372,15 @@ function App() {
         try {
           const state = await api(`/state?since=${rev}`);
           rev = state.rev;
+          // Another program's page takes the tab (lyrembed): go there once;
+          // coming back, the same event is not followed again.
+          for (const e of state.events) {
+            if (e.kind !== 'handoff' || !state.toolRunning) continue;
+            const key = `cdimport-handoff-${e.id}-${e.url}`;
+            let seen = false;
+            try { seen = sessionStorage.getItem(key) === '1'; sessionStorage.setItem(key, '1'); } catch (err) { seen = false; }
+            if (!seen) { location.href = e.url; return; }
+          }
           if (state.events.length) {
             setEvents((list) => {
               const next = list.slice();

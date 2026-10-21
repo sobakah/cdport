@@ -386,6 +386,21 @@ A front end that wants live tool progress keeps the pseudo-terminal
   album; the log's content is never changed (its checksum). Everything is
   checked before anything is written, and renames go through temporary
   names, so two tracks that swap titles do not overwrite each other.
+- The lyrics step hands the tab to lyrembed's page, if lyrembed has
+  `--return-url` (`lyrics.can_return`, from its `--help`; lyrembed 2.1.0):
+  - cdimport starts `lyrembed DIR --no-browser --return-url <its own page>
+    --return-name cdimport` with `ui.tool_start(..., handoff=True)`;
+  - `WebFront` reads lyrembed's address from its output line "lyrembed is
+    running at <url>" (`_HANDOFF`) and adds a `handoff` event, and the page
+    follows it once (remembered in `sessionStorage`, so coming back does not
+    send it there again);
+  - lyrembed's "Done – back to cdimport" ends lyrembed, and `run_lyrembed`
+    returns.
+  Leaving sends cdimport's own "closing", so the page does not count as
+  gone while it is away or for `HANDOFF_GRACE` after (`WebFront.away`). On
+  the page, lyrembed's output (also `--auto`'s) goes to it through
+  `run_tail`; in the terminal lyrembed still gets the terminal (`proc.run`).
+  An older lyrembed opens a tab of its own, as before.
 - `static/vendor/preact-htm.js` is the file lyrembed vendors (htm 3.1.1's
   Preact bundle, checksum and licenses in `LICENSES.txt`).
 

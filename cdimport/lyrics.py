@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from . import proc
+from . import proc, ui
 from .tags import TagReadError
 
 # lyrembed's exit codes. In batch mode (--auto) a track without a confident
@@ -62,23 +62,32 @@ def has_lyrics(path: Path) -> bool:
 
 
 def lyrembed_command(lyrembed: str, cfg: dict[str, Any], folder: Path, mode: str,
-                     romanize: bool | None = None) -> list[str]:
+                     romanize: bool | None = None, return_url: str = "") -> list[str]:
     """mode is "auto" (batch, never prompts) or "interactive".
 
     romanize applies to "auto" only; None leaves it to lyrembed's own
-    settings.auto_romanize.
+    settings.auto_romanize. return_url (cdimport's page) makes lyrembed's
+    page lead back there instead of opening a tab of its own.
     """
     cmd = [lyrembed, str(folder)]
     if mode == "auto":
         cmd.append("--auto")
         if romanize is not None:
             cmd.append("--romanize" if romanize else "--no-romanize")
+    elif return_url:
+        cmd += ["--no-browser", "--return-url", return_url, "--return-name", "cdimport"]
     return cmd + cfg["lyrembed"]["extra_args"]
 
 
 def run_lyrembed(lyrembed: str, cfg: dict[str, Any], folder: Path, mode: str,
-                 romanize: bool | None = None) -> int:
-    return proc.run(lyrembed_command(lyrembed, cfg, folder, mode, romanize))
+                 romanize: bool | None = None, return_url: str = "") -> int:
+    """In the terminal lyrembed gets the terminal; on cdimport's page its
+    output goes to the page, which also reads lyrembed's address from it."""
+    cmd = lyrembed_command(lyrembed, cfg, folder, mode, romanize, return_url)
+    if ui.in_terminal():
+        return proc.run(cmd)
+    code, _ = proc.run_tail(cmd)
+    return code
 
 
 def opens_page(lyrembed: str) -> bool:
@@ -88,6 +97,13 @@ def opens_page(lyrembed: str) -> bool:
     result = proc.capture([lyrembed, "--version"])
     match = re.search(r"lyrembed (\d+)\.", result.stdout if result is not None else "")
     return match is not None and int(match.group(1)) >= 2
+
+
+def can_return(lyrembed: str) -> bool:
+    """Whether this lyrembed's page can lead back to cdimport's (--return-url,
+    lyrembed 2.1.0 and newer)."""
+    result = proc.capture([lyrembed, "--help"])
+    return result is not None and "--return-url" in result.stdout
 
 
 def can_romanize(lyrembed: str) -> bool:

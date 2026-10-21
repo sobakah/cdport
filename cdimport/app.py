@@ -48,6 +48,8 @@ class Session:
     lyrembed_problem: str = ""  # found, but does not start
     lyrembed_romanize: bool = False  # lyrembed has --romanize for batch mode
     lyrembed_page: bool = False  # lyrembed 2.0+: the interactive mode is a page in the browser
+    lyrembed_return: bool = False  # lyrembed 2.1+: its page can lead back to cdimport's (--return-url)
+    page_url: str = ""  # cdimport's own page, when it runs on one (web.serve)
     album: AlbumState | None = None  # the album being worked on, for the Ctrl+C message
     failed: bool = False
     logs: list[Path] = field(default_factory=list)  # rip logs moved out of the library
@@ -180,6 +182,7 @@ def check_tools(session: Session) -> None:
         ui.check("lyrembed", ui.tilde(session.lyrembed), True)
         session.lyrembed_romanize = lyrics.can_romanize(session.lyrembed)
         session.lyrembed_page = lyrics.opens_page(session.lyrembed)
+        session.lyrembed_return = session.lyrembed_page and lyrics.can_return(session.lyrembed)
     else:
         ui.check("lyrembed", "not found: the lyrics step is disabled", False,
                  f"To install: {tools.LYREMBED_INSTALL_HINT}")
@@ -887,11 +890,12 @@ def lyrics_step(session: Session, album: AlbumState) -> bool:
         if mode == "skip":
             album.mark("lyrics", skipped=True)
             return True
-        cmd = lyrics.lyrembed_command(session.lyrembed, session.cfg, album.folder, mode, romanize)
+        back = handoff_url(session) if mode == "interactive" else ""
+        cmd = lyrics.lyrembed_command(session.lyrembed, session.cfg, album.folder, mode, romanize, back)
         if mode == "interactive":
             page_hint(session)
-        ui.tool_start("lyrembed", proc.format_command(cmd))
-        code = lyrics.run_lyrembed(session.lyrembed, session.cfg, album.folder, mode, romanize)
+        ui.tool_start("lyrembed", proc.format_command(cmd), handoff=bool(back))
+        code = lyrics.run_lyrembed(session.lyrembed, session.cfg, album.folder, mode, romanize, back)
         ui.tool_end("lyrembed", code)
         if code == lyrics.EXIT_INTERRUPTED:
             raise KeyboardInterrupt
@@ -962,10 +966,11 @@ def offer_lyrics_check(session: Session, album: AlbumState) -> None:
     ], default="c")
     if answer == "c":
         return
-    cmd = lyrics.lyrembed_command(session.lyrembed, session.cfg, album.folder, "interactive")
+    back = handoff_url(session)
+    cmd = lyrics.lyrembed_command(session.lyrembed, session.cfg, album.folder, "interactive", return_url=back)
     page_hint(session)
-    ui.tool_start("lyrembed", proc.format_command(cmd))
-    code = lyrics.run_lyrembed(session.lyrembed, session.cfg, album.folder, "interactive")
+    ui.tool_start("lyrembed", proc.format_command(cmd), handoff=bool(back))
+    code = lyrics.run_lyrembed(session.lyrembed, session.cfg, album.folder, "interactive", return_url=back)
     ui.tool_end("lyrembed", code)
     if code == lyrics.EXIT_INTERRUPTED:
         raise KeyboardInterrupt
@@ -973,10 +978,19 @@ def offer_lyrics_check(session: Session, album: AlbumState) -> None:
         ui.warn(f"lyrembed ended with exit code {code}; the lyrics embedded before stay.")
 
 
+def handoff_url(session: Session) -> str:
+    """cdimport's page, for lyrembed's to lead back to: only when cdimport
+    runs on a page and lyrembed can do it."""
+    return session.page_url if session.page_url and session.lyrembed_return else ""
+
+
 def page_hint(session: Session) -> None:
     """lyrembed 2.0 opens a page and waits; without this the terminal only
     shows an address, and it is not obvious how to get back to cdimport."""
-    if session.lyrembed_page:
+    if handoff_url(session):
+        ui.dim("This tab now switches to lyrembed's page with the album. "
+               "When you're done there, \"Done – back to cdimport\" brings you back here.")
+    elif session.lyrembed_page:
         ui.dim("lyrembed opens the album on its page in your browser. "
                "Quit it there, or close the tab, to continue here.")
 
