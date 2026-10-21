@@ -342,11 +342,32 @@ Every message and question goes through `ui` (`info`, `warn`, `check`,
 external tool's output through `ui.tool_output` (`proc.run_tail`). Without a
 front end that is the terminal, unchanged. `ui.use(front)` hands every call
 to a `ui.Front` instead, with its plain content, which is how the browser
-page (planned, 2026-10-21) runs the same flow: the flow in `app.py` stays
+page runs the same flow: the flow in `app.py` stays
 one, and only the front end differs. So never `print()` or `input()`
 outside `ui`, and keep prompts' options and defaults as data, not text.
 A front end that wants live tool progress keeps the pseudo-terminal
 (`Front.wants_pty`): in a pipe, cyanrip buffers its progress display.
+
+**The page (`--web`, preview)** is `web.py` plus `static/`. `web.Run` runs
+`cli.run_session` (the terminal's flow and ending) in a thread with
+`WebFront` as the front end:
+- `WebFront` keeps the messages and a tool's output as events with revision
+  numbers. The page long-polls `/api/state?since=N`, and a question blocks
+  the flow until `/api/answer`, which is checked against the open question.
+- A tool's output event holds its lines. A line a progress display redraws
+  with `\r` counts only in its newest state; the event's `partial` shows it
+  until a real line break comes.
+- The flow starts on the page's first visit (`Run.start`), not at launch,
+  so nothing runs ahead of what the page can show.
+- Stopping: at an open question it cancels the question (`Cancelled`, a
+  `KeyboardInterrupt`), so the flow ends as on Ctrl+C (130). While a tool
+  runs, `proc.interrupt_tool` sends it SIGINT first, and cyanrip finishes
+  its log. A page that is gone does not stop a running tool.
+- Security as in lyrembed: 127.0.0.1, the token as an HttpOnly SameSite
+  cookie, `Host` and `Origin` checks, JSON only, a CSP. Installing cyanrip
+  stays in the terminal, because it may ask for a sudo password.
+- `static/vendor/preact-htm.js` is the file lyrembed vendors (htm 3.1.1's
+  Preact bundle, checksum and licenses in `LICENSES.txt`).
 
 ## Conventions (shared with lyrembed)
 

@@ -2215,3 +2215,188 @@ def test_tool_output_goes_to_the_front_end(capsys, front, pty):
     code, tail = proc.run_tail([sys.executable, "-c", "print('reading track 1'); print('done')"])
     assert code == 0 and tail == ["reading track 1", "done"]
     assert b"reading track 1" in recorder.output and capsys.readouterr().out == ""
+
+
+# --- the browser page ----------------------------------------------------------
+import http.client  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+
+from cdimport import web  # noqa: E402
+
+
+def _wait_for_question(front, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while front.question is None:
+        assert time.monotonic() < deadline, "no question came"
+        time.sleep(0.01)
+    return front.question
+
+
+def _in_thread(call):
+    result = []
+    thread = threading.Thread(target=lambda: result.append(call()), daemon=True)
+    thread.start()
+    return thread, result
+
+
+def test_web_questions_wait_for_a_checked_answer():
+    front = web.WebFront()
+    thread, result = _in_thread(lambda: front.choose("Rip this disc", [("r", "rip"), ("q", "quit")], default="r"))
+    question = _wait_for_question(front)
+    assert question["options"] == [["r", "rip"], ["q", "quit"]] and question["default"] == "r"
+    with pytest.raises(web.ApiError):
+        front.answer(question["id"], "x")                 # not an option
+    with pytest.raises(web.ApiError):
+        front.answer(question["id"] + 1, "r")             # not the open question
+    front.answer(question["id"], "q")
+    thread.join(2)
+    assert result == ["q"] and front.question is None
+    assert front.events[-1]["kind"] == "answer" and front.events[-1]["text"] == "quit"
+
+    thread, result = _in_thread(lambda: front.ask("Album", "Night Lines"))
+    front.answer(_wait_for_question(front)["id"], "  ")   # empty: the default, as in the terminal
+    thread.join(2)
+    assert result == ["Night Lines"]
+
+
+def test_web_cancel_stops_the_flow_like_ctrl_c():
+    front = web.WebFront()
+    caught = []
+
+    def flow():
+        try:
+            front.confirm("Delete this folder?", default=False)
+        except KeyboardInterrupt as exc:
+            caught.append(exc)
+    thread, _ = _in_thread(flow)
+    _wait_for_question(front)
+    assert front.cancel()
+    thread.join(2)
+    assert caught and isinstance(caught[0], web.Cancelled)
+    assert not front.cancel()                              # nothing open any more
+
+
+def test_web_tool_output_keeps_lines_and_the_newest_progress():
+    front = web.WebFront()
+    front.message("tool_start", "ripping fast", name="cyanrip")
+    front.tool_output(b"Track 1\nprogress 10%\rprogress 5")
+    tool = front.events[-1]
+    assert tool["lines"] == ["Track 1"] and tool["partial"] == "progress 5"
+    front.tool_output(b"0%\r")                             # the line is redrawn
+    assert tool["partial"] == "progress 50%"
+    front.tool_output("\x1b[32mprogress 100%\x1b[0m\nVerz\xc3".encode("latin-1") + b"\xa4ichnis\n")
+    assert tool["lines"] == ["Track 1", "progress 100%", "Verzäichnis"] and tool["partial"] == ""
+    front.tool_output(b"almost done\r")
+    front.message("tool_end", name="cyanrip", code=0)
+    assert tool["lines"][-1] == "almost done" and not tool["running"] and tool["code"] == 0
+
+
+def test_web_run_goes_through_the_flow_and_ends_with_its_code(monkeypatch, tmp_path):
+    def flow(session):
+        ui.step(1, "Disc")
+        if ui.choose("Rip this disc", [("r", "rip"), ("q", "quit")], default="r") == "q":
+            raise app.Quit(0)
+        ui.success("Ripped.")
+        return 0
+
+    monkeypatch.setattr(app, "run", flow)
+    run = web.Run(app.new_session(default_cfg(), app.Options(), tmp_path / "config.json"))
+    try:
+        run.start()
+        run.front.answer(_wait_for_question(run.front)["id"], "r")
+        run.thread.join(2)
+        assert run.front.finished == 0
+        kinds = [e["kind"] for e in run.front.events]
+        assert kinds == ["step", "answer", "success"]
+        run = web.Run(app.new_session(default_cfg(), app.Options(), tmp_path / "config.json"))
+        run.start()
+        _wait_for_question(run.front)
+        run.stop()                                         # the page's "Stop cdimport"
+        run.thread.join(2)
+        assert run.front.finished == 130 and run.front.events[-1]["text"] == "Stopped."
+    finally:
+        ui.use(None)
+
+
+@pytest.fixture
+def page(monkeypatch, tmp_path):
+    """A running page whose flow asks one question."""
+    def flow(session):
+        return 0 if ui.confirm("Continue?") else 1
+
+    monkeypatch.setattr(app, "run", flow)
+    run = web.Run(app.new_session(default_cfg(), app.Options(), tmp_path / "config.json"))
+    server = web._Server(run, "test-token")
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    yield server
+    if run.started:
+        run.stop()
+        run.thread.join(2)
+    ui.use(None)
+    server.shutdown()
+    server.server_close()
+
+
+def _http(server, method, path, body=None, headers=None, cookie=True):
+    conn = http.client.HTTPConnection("127.0.0.1", server.port, timeout=10)
+    sent = {"Host": f"127.0.0.1:{server.port}"}
+    if cookie:
+        sent["Cookie"] = f"{web.COOKIE}=test-token"
+    if body is not None:
+        body = json.dumps(body).encode()
+        sent.update({"Content-Type": "application/json", "Origin": f"http://127.0.0.1:{server.port}"})
+    sent.update(headers or {})
+    conn.request(method, path, body=body, headers=sent)
+    response = conn.getresponse()
+    data = response.read()
+    conn.close()
+    return response, json.loads(data) if data and response.getheader("Content-Type", "").startswith("application/json") else data
+
+
+def test_web_page_needs_its_token_host_and_origin(page):
+    assert _http(page, "GET", "/", cookie=False)[0].status == 403
+    response, _ = _http(page, "GET", "/?token=test-token", cookie=False)
+    assert response.status == 303 and "HttpOnly" in response.getheader("Set-Cookie")
+    response, body = _http(page, "GET", "/")
+    assert response.status == 200 and b"/static/app.js" in body and "default-src 'self'" in response.getheader("Content-Security-Policy")
+    assert _http(page, "GET", "/api/state", headers={"Host": f"evil.example:{page.port}"})[0].status == 400
+    assert _http(page, "POST", "/api/quit", {}, headers={"Origin": "http://evil.example"})[0].status == 403
+    assert _http(page, "POST", "/api/quit", {}, headers={"Content-Type": "text/plain"})[0].status == 415
+    for path in ("/static/../web.py", "/static/%2e%2e/web.py"):
+        assert _http(page, "GET", path)[0].status == 404
+
+
+def test_web_page_answers_the_flow(page):
+    assert not page.run.started                           # nothing runs before the page asks
+    deadline = time.monotonic() + 5
+    state = {}
+    while not state.get("question"):
+        assert time.monotonic() < deadline
+        state = _http(page, "GET", "/api/state?since=0")[1]
+    assert state["question"]["kind"] == "confirm" and state["question"]["prompt"] == "Continue?"
+    assert _http(page, "POST", "/api/answer", {"id": state["question"]["id"], "value": "yes"})[0].status == 400
+    assert _http(page, "POST", "/api/answer", {"id": state["question"]["id"], "value": False})[0].status == 200
+    page.run.thread.join(2)
+    assert page.run.front.finished == 1
+    later = _http(page, "GET", f"/api/state?since={state['rev']}")[1]
+    assert later["finished"] == 1 and later["question"] is None
+
+
+def test_web_flags(capsys):
+    for argv in (["--no-browser"], ["--web", "--install-cyanrip"]):
+        with pytest.raises(SystemExit):
+            cli.main(argv)
+
+
+def test_a_running_tool_can_be_stopped_like_ctrl_c(front):
+    front()
+    script = ("import signal, sys, time\n"
+              "signal.signal(signal.SIGINT, lambda *a: (print('log finished'), sys.exit(3)))\n"
+              "print('ripping', flush=True)\n"
+              "time.sleep(10)\n")
+    stopper = threading.Timer(0.5, proc.interrupt_tool)
+    stopper.start()
+    code, tail = proc.run_tail([sys.executable, "-c", script])
+    assert code == 3 and tail[-1] == "log finished"
+    assert not proc.interrupt_tool()                       # nothing runs any more

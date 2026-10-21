@@ -22,5 +22,8 @@ cdimport-cover = "cdimport.covertool:main"
 [tool.setuptools]
 packages = ["cdimport"]
 
+[tool.setuptools.package-data]
+cdimport = ["static/*.html", "static/*.js", "static/*.css", "static/*.svg", "static/vendor/*"]
+
 [tool.setuptools.dynamic]
 version = { attr = "cdimport.config.__version__" }

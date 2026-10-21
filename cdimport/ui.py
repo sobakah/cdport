@@ -81,6 +81,11 @@ def use(front: Front | None) -> None:
     _front = front
 
 
+def in_terminal() -> bool:
+    """True when no front end is set: output and questions use the terminal."""
+    return _front is None
+
+
 def tool_output(data: bytes) -> None:
     """An external tool's output: copied to the terminal as it is."""
     if _front is not None:

@@ -34,6 +34,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--install-cyanrip", action="store_true",
                         help="install cyanrip, or update and rebuild a source build, before starting")
     parser.add_argument("--color", choices=("auto", "always", "never"), help="override colour handling")
+    page = parser.add_argument_group("browser (preview)")
+    page.add_argument("--web", action="store_true",
+                      help="work on a page in the browser instead of the terminal (only this computer can open it)")
+    page.add_argument("--no-browser", action="store_true", help="with --web, print the page's address instead of opening it")
     return parser
 
 
@@ -52,6 +56,10 @@ def main(argv: list[str] | None = None) -> int:
         cfg["library_dir"] = args.library
     if args.color:
         cfg["color"] = args.color
+    if args.no_browser and not args.web:
+        parser.error("--no-browser only applies together with --web")
+    if args.web and args.install_cyanrip:
+        parser.error("--install-cyanrip needs the terminal (it may ask for your password); run it without --web")
     if args.editor and args.editor != "skip" and args.editor not in cfg["editors"]:
         parser.error(f"unknown editor '{args.editor}' (known: {', '.join(cfg['editors'])}, skip)")
 
@@ -63,13 +71,24 @@ def main(argv: list[str] | None = None) -> int:
                           lyrics=args.lyrics or "", editor=args.editor or "",
                           install_cyanrip=args.install_cyanrip, rip_mode=args.rip_mode or "")
     session = app.new_session(cfg, options, args.config)
+    if args.web:
+        from . import web  # not needed in the terminal
+
+        return web.serve(session, open_browser=not args.no_browser)
+    return run_session(session)
+
+
+def run_session(session: app.Session) -> int:
+    """The flow with its ending: the exit code for quitting, Ctrl+C (130) or
+    a finished run. The page runs it too, in a thread of its own."""
     try:
         return app.run(session)
     except app.Quit as stop:
         _resume_hint(session)
         return stop.code
     except KeyboardInterrupt:
-        print()
+        if ui.in_terminal():  # the cursor is still after ^C
+            print()
         ui.warn("Stopped.")
         _resume_hint(session)
         return 130

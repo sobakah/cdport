@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,32 @@ def format_command(cmd: list[str]) -> str:
     return shlex.join(cmd)
 
 
+# The tool running right now, if any, so a front end without a terminal can
+# send it the Ctrl+C a terminal would (interrupt_tool).
+_running: subprocess.Popen | None = None
+_running_lock = threading.Lock()
+
+
+def _track(proc: subprocess.Popen | None) -> None:
+    global _running
+    with _running_lock:
+        _running = proc
+
+
+def interrupt_tool() -> bool:
+    """Send the running tool SIGINT, as Ctrl+C in a terminal does: cyanrip
+    then finishes its log and stops. True when there was one."""
+    with _running_lock:
+        proc = _running
+    if proc is None or proc.poll() is not None:
+        return False
+    try:
+        proc.send_signal(signal.SIGINT)
+    except OSError:
+        return False
+    return True
+
+
 def run(cmd: list[str], cwd: Path | None = None) -> int:
     """Run a tool attached to the terminal and return its exit code.
 
@@ -39,11 +66,14 @@ def run(cmd: list[str], cwd: Path | None = None) -> int:
     except OSError as exc:
         _cannot_start(cmd, exc)
         return CANNOT_START
+    _track(proc)
     try:
         return proc.wait()
     except KeyboardInterrupt:
         _let_finish(proc)
         raise
+    finally:
+        _track(None)
 
 
 def _cannot_start(cmd: list[str], exc: OSError) -> None:
@@ -104,6 +134,7 @@ def run_tail(cmd: list[str], cwd: Path | None = None, lines: int = 3,
         _cannot_start(cmd, exc)
         return CANNOT_START, [f"cannot start {cmd[0]}: {exc.strerror or exc}"]
     tail = b""
+    _track(output.proc)
 
     def copy() -> None:
         nonlocal tail
@@ -123,6 +154,7 @@ def run_tail(cmd: list[str], cwd: Path | None = None, lines: int = 3,
         reader.join(timeout=1)
         raise
     finally:
+        _track(None)
         output.close()
     return code, last_lines(tail, lines)
 
