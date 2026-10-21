@@ -2528,7 +2528,7 @@ def test_the_tag_editor_question_follows_a_renamed_folder(tmp_path):
     front.moved_tags(tmp_path / "New")
     front.answer(question["id"], None)
     thread.join(2)
-    assert result == [tmp_path / "New"]
+    assert result == [(tmp_path / "New", "done")]
 
 
 def test_on_the_page_the_tags_step_offers_its_own_editor_first(tmp_path, monkeypatch, front):
@@ -2538,7 +2538,7 @@ def test_on_the_page_the_tags_step_offers_its_own_editor_first(tmp_path, monkeyp
 
         def edit_tags(self, folder):
             self.edited = folder
-            return folder.parent / "Renamed"
+            return folder.parent / "Renamed", "done"
 
     folder = tmp_path / "Album"
     folder.mkdir()
@@ -2639,3 +2639,85 @@ def test_the_page_knows_where_done_goes(monkeypatch, tmp_path):
         ui.use(None)
         server.shutdown()
         server.server_close()
+
+
+# --- the tag editor: every tag, numbers, covers -------------------------------------
+def _with_more_tags(folder):
+    import mutagen.flac
+    from mutagen.flac import Picture
+
+    for n, path in enumerate(sorted(folder.glob("*.flac")), 1):
+        audio = mutagen.flac.FLAC(path)
+        audio["musicbrainz_albumid"] = "album-id"
+        audio["label"] = "Sample Label"
+        audio["isrc"] = f"ISRC{n}"
+        audio["discnumber"] = "1"
+        if n == 1:
+            audio["lyrics"] = "[00:01.00]la"
+        picture = Picture()
+        picture.type, picture.mime, picture.data = 3, "image/jpeg", b"\xff\xd8\xff\xe0 cover"
+        audio.add_picture(picture)
+        audio.save()
+
+
+def test_tag_editor_lists_every_tag_and_the_cover(tmp_path):
+    folder = _ripped_album(tmp_path, titles=("A", "B"))
+    _with_more_tags(folder)
+    album = tageditor.read_album(folder)
+    assert album["other"] == {"LABEL": ["Sample Label"], "MUSICBRAINZ_ALBUMID": ["album-id"]}   # the same everywhere
+    assert [t["other"] for t in album["tracks"]] == [{"ISRC": ["ISRC1"], "MUSICBRAINZ_TRACKID": ["id-1"]},
+                                                     {"ISRC": ["ISRC2"], "MUSICBRAINZ_TRACKID": ["id-2"]}]
+    assert [t["hasLyrics"] for t in album["tracks"]] == [True, False]                          # lyrics: not listed
+    assert album["cover"] and album["tracks"][0]["disc"] == "1"
+    assert tageditor.cover(folder, "01 - A.flac") == (b"\xff\xd8\xff\xe0 cover", "image/jpeg")
+    with pytest.raises(tageditor.TagEditError):
+        tageditor.cover(folder, "../elsewhere.flac")
+
+
+def test_tag_editor_writes_numbers_and_other_tags(tmp_path):
+    import mutagen.flac
+
+    folder = _ripped_album(tmp_path, titles=("A", "B"))
+    _with_more_tags(folder)
+    album = tageditor.read_album(folder)
+    album["other"]["LABEL"] = ["Other Label"]                       # the album's: every track
+    album["tracks"][1]["other"]["ISRC"] = ["ISRC9"]                 # a track's: that one
+    album["tracks"][0]["other"]["ISRC"] = []                        # emptied: removed
+    album["tracks"][1]["disc"] = "2"
+    tageditor.save(folder, album)
+    first, second = (mutagen.flac.FLAC(folder / name) for name in ("01 - A.flac", "02 - B.flac"))
+    assert first["label"] == second["label"] == ["Other Label"]
+    assert "isrc" not in first and second["isrc"] == ["ISRC9"] and second["discnumber"] == ["2"]
+    assert first["lyrics"] == ["[00:01.00]la"] and len(first.pictures) == 1                  # untouched
+    album = tageditor.read_album(folder)
+    album["tracks"][0]["other"]["NEW_TAG"] = ["x"]
+    with pytest.raises(tageditor.TagEditError, match="no tag NEW_TAG"):
+        tageditor.save(folder, album)
+
+
+def test_the_editor_can_go_back_to_the_cover_step(tmp_path, monkeypatch, front):
+    class Page(RecordingFront):
+        def supports(self, feature):
+            return feature == "tag_editor"
+
+        def edit_tags(self, folder):
+            self.opened = getattr(self, "opened", 0) + 1
+            return folder, "cover" if self.opened == 1 else "done"
+
+    folder = tmp_path / "Album"
+    folder.mkdir()
+    make_flac(folder / "01.flac", artist="IU", title="Blueming")
+    covers = []
+    monkeypatch.setattr(app, "offer_cover", lambda f: covers.append(f))
+    monkeypatch.setattr(tools, "available_editors", lambda cfg: [])
+    page = Page(["w"])
+    ui.use(page)
+    session = app.new_session(default_cfg(), app.Options(editor="skip"), tmp_path / "config.json")
+    assert app.tags_step(session, state.AlbumState(folder))
+    assert covers == [folder] and page.opened == 2                  # cover step, then the editor again
+
+    web_front = web.WebFront()
+    thread, result = _in_thread(lambda: web_front.edit_tags(folder))
+    web_front.answer(_wait_for_question(web_front)["id"], "cover")
+    thread.join(2)
+    assert result == [(folder, "cover")]

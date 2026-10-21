@@ -49,6 +49,8 @@ over all tracks with rollback, Flatpak option values.
 texts, how to get back to cdimport).
 0.6.0 (2026-10-21): the page (`--web`, preview) with pictures, the tag editor,
 the lyrics handoff to lyrembed, and `--return-url` for lyrembed's Import a CD.
+0.6.1 (2026-10-21): the tag editor shows every tag, disc/track numbers and the
+cover (with a way back to the cover step); the page scrolls like a terminal.
 
 Layout: `cdimport/` package (`app.py` runs the steps, one module per step:
 `disc`, `rip`, `tags`, `lyrics`, `library`; `state`, `tools`, `proc`,
@@ -378,8 +380,16 @@ A front end that wants live tool progress keeps the pseudo-terminal
 - The tag editor (`tageditor.py`, no UI) replaces Ear Tag on the page:
   `ui.supports("tag_editor")` adds the option "w" to the tags step and makes
   it the default, and `ui.edit_tags` returns the folder, renamed if the
-  album changed. Its Continue ends the step (no return to the menu, unlike an
-  outside editor). Several artists follow Picard: `ARTIST` is the credit,
+  album changed, and what comes next: `"done"` (Continue ends the step, no
+  return to the menu, unlike an outside editor) or `"cover"` ("Change the
+  cover…" saves, runs `offer_cover` again and reopens the editor). It shows
+  every tag in the files: the fields it edits (with disc and track number),
+  and the rest under "More tags" (MusicBrainz IDs and the like), album-wide
+  when equal in every track, else per track. It can change or empty those
+  but never add new keys; lyrics tags are lyrembed's and only noted. The
+  embedded front cover (picture type 3, else the first) is shown once when
+  every track has the same, else per track, via `/api/tags/cover` (JPEG and
+  PNG only). Changing a track number does not rename the file. Several artists follow Picard: `ARTIST` is the credit,
   `ARTISTS` holds the names; the same for `ALBUMARTIST`/`ALBUMARTISTS`.
   cyanrip writes the credit only. Names follow the tags only where cyanrip
   built them (`{track} - {title}`, `{album}...`, its default "unicode"
@@ -410,6 +420,12 @@ A front end that wants live tool progress keeps the pseudo-terminal
   reads to open the album: keep that wording. The token cookie's name
   carries the port (`web.cookie_name`), as in lyrembed: cookies belong to
   a host, not a port, and two pages on 127.0.0.1 overwrote each other's.
+- The page scrolls like a terminal: it follows new content only while the
+  view is at the end, and a reader who scrolled up stays put. The same holds
+  inside a tool's output box. A ResizeObserver catches growth after render
+  (a cover that loads late), and the page's own `scrollTo` is flagged
+  (`ownScroll`): its scroll event can arrive after the page grew again and
+  would otherwise count as the reader leaving the end.
 - `static/vendor/preact-htm.js` is the file lyrembed vendors (htm 3.1.1's
   Preact bundle, checksum and licenses in `LICENSES.txt`).
 

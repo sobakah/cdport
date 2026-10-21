@@ -13,7 +13,7 @@ does not rip, tag or fetch lyrics itself.
 5. Finish   offer to move the album into the music library, summary
 ```
 
-Version 0.6.0 · Python 3.10+ · Linux (Windows later)
+Version 0.6.1 · Python 3.10+ · Linux (Windows later)
 
 ## Requirements
 
@@ -97,7 +97,10 @@ a rip. On the page:
   Archive; cdimport fetches only the pictures its questions name).
 - **The tags step has its own editor**, offered first; Ear Tag and co.
   stay as alternatives. It edits album, album artist, date, genre and each
-  track's title and artist. Several artists follow Picard: `ARTIST` holds
+  track's title, artist, disc and track number, and lists every other tag
+  in the files (MusicBrainz IDs and the like) to change or remove. It shows
+  the embedded cover; **Change the cover…** goes back to the cover step
+  and then returns to the editor. Several artists follow Picard: `ARTIST` holds
   the credit ("A feat. B"), `ARTISTS` the single names (and the same for
   `ALBUMARTIST`/`ALBUMARTISTS`); "Move feat. from titles to artists" and
   a search and replace in all titles help. File names follow a changed

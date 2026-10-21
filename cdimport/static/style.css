@@ -174,3 +174,18 @@ input.missing { border-color: var(--bad); }
 .chip button { border: 0; background: none; color: inherit; cursor: pointer; width: 22px; height: 22px; border-radius: 11px; }
 .chip button:hover { background: rgba(0, 0, 0, .08); }
 .chip-input { flex: 0 1 180px !important; padding: 4px 8px !important; font-size: 13px; }
+
+/* the tag editor's covers, numbers and other tags */
+.cover-row { align-items: flex-start; gap: 16px; }
+.album-cover { width: 120px; height: 120px; border-radius: 8px; object-fit: cover; flex-shrink: 0;
+               background: var(--hover); display: inline-flex; align-items: center; justify-content: center;
+               text-align: center; padding: 6px; font-size: 12px; }
+.track-cover { width: 34px; height: 34px; border-radius: 4px; object-fit: cover; }
+.numbers label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+input.number { flex: 0 0 64px !important; width: 64px !important; padding: 4px 8px; }
+.other-tags summary { cursor: pointer; }
+.other-grid { display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 6px 12px;
+              align-items: start; margin-top: 8px; }
+.other-grid label { padding-top: 6px; color: var(--muted); overflow-wrap: anywhere; }
+.other-grid textarea { width: 100%; resize: vertical; font-size: 12.5px; border: 1px solid var(--border-strong);
+                       border-radius: 6px; background: var(--surface); padding: 4px 8px; }

@@ -791,7 +791,12 @@ def tags_step(session: Session, album: AlbumState) -> bool:
             raise Quit(0)
         if answer == "w":
             # The folder follows a changed album name; the state file is in it.
-            album.folder = ui.edit_tags(album.folder)
+            while True:
+                album.folder, then = ui.edit_tags(album.folder)
+                if then != "cover":
+                    break
+                # Back to the cover step from the editor, then into it again.
+                offer_cover(album.folder)
             edited = True
             # The editor's own button means "continue": straight to the check,
             # unlike an outside editor, after which the user comes back here.

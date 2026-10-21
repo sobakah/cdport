@@ -39,6 +39,9 @@ function Linked({ text }) {
 }
 
 const MARKS = { success: '✓', warn: '!', error: '✗' };
+
+// Whether a scroll position is at (or within a few pixels of) the end.
+const atEnd = (bottom, height) => bottom >= height - 40;
 const CHECK_MARKS = { true: ['✓', 'k-success'], false: ['!', 'k-warn'], null: ['–', 'k-dim'] };
 
 function Item({ event }) {
@@ -70,11 +73,13 @@ function Item({ event }) {
 
 function Tool({ event }) {
   const body = useRef(null);
+  // Like a terminal: follow new output only while scrolled to its end.
+  const stick = useRef(true);
   const [stopping, setStopping] = useState(false);
   useEffect(() => {
-    // Follow the output while it runs, as a terminal does.
-    if (event.running && body.current) body.current.scrollTop = body.current.scrollHeight;
+    if (stick.current && body.current) body.current.scrollTop = body.current.scrollHeight;
   });
+  const scrolled = (e) => { stick.current = atEnd(e.target.scrollTop + e.target.clientHeight, e.target.scrollHeight); };
   const stop = async () => {
     if (!confirm(`Stop ${event.name}? It finishes its log first, as on Ctrl+C; cdimport then asks what to do.`)) return;
     setStopping(true);
@@ -89,7 +94,7 @@ function Tool({ event }) {
       <b>${event.name}</b><span class="cmd mono">${event.text}</span>${status}
       ${event.running && html`<button class="btn btn-small" disabled=${stopping} onClick=${stop}>${stopping ? 'Stopping…' : `Stop ${event.name}`}</button>`}
     </div>
-    ${(event.lines.length > 0 || event.partial) && html`<div class="tool-body mono" ref=${body}>${event.lines.join('\n')}${event.partial
+    ${(event.lines.length > 0 || event.partial) && html`<div class="tool-body mono" ref=${body} onScroll=${scrolled}>${event.lines.join('\n')}${event.partial
       ? html`${event.lines.length ? '\n' : ''}<span class="partial">${event.partial}</span>` : ''}</div>`}
   </div>`;
 }
@@ -102,6 +107,21 @@ function Picture({ src }) {
 }
 
 // --- the tag editor (only on the page; the terminal opens Ear Tag and co.) ------
+// The file's other tags as they are, one value per line; emptied, a tag goes.
+function OtherTags({ id, title, note, tags, onChange }) {
+  const names = Object.keys(tags || {});
+  if (!names.length) return null;
+  return html`<details class="other-tags">
+    <summary class="small"><b>${title}</b> <span class="muted">(${names.length}${note ? ', ' + note : ''})</span></summary>
+    <div class="other-grid">
+      ${names.map((name) => html`<label class="mono small" for=${id + '-' + name}>${name}</label>
+        <textarea id=${id + '-' + name} class="mono" rows=${Math.max(1, tags[name].length)} spellcheck="false"
+          value=${tags[name].join('\n')}
+          onInput=${(e) => onChange({ ...tags, [name]: e.target.value.split('\n').map((v) => v.trim()).filter(Boolean) })}></textarea>`)}
+    </div>
+  </details>`;
+}
+
 const FEAT = /\s*[(\[](?:feat\.?|ft\.?|featuring)\s+([^)\]]+)[)\]]/i;
 const JOINS = /\s+(?:feat\.?|ft\.?|featuring|&|and|x|×|with)\s+|\s*,\s*/i;
 
@@ -204,10 +224,28 @@ function TagEditor({ question, onAnswer }) {
   };
   const done = async () => {
     if (dirty && !(await save())) return;
-    onAnswer(question.id, null);
+    onAnswer(question.id, 'done');
   };
+  // Back to the cover step, then into the editor again.
+  const changeCover = async () => {
+    if (dirty && !(await save())) return;
+    onAnswer(question.id, 'cover');
+  };
+  const coverOf = (file, id) => `/api/tags/cover?file=${encodeURIComponent(file)}&v=${id}`;
+  const coverCount = loaded.tracks.filter((t) => t.cover).length;
 
   return html`<div class="editor stack">
+    <div class="row cover-row">
+      ${loaded.cover
+        ? html`<img class="album-cover" src=${coverOf(loaded.tracks[0].file, loaded.cover)} alt="The album's cover" />`
+        : html`<span class="album-cover no-picture">${coverCount ? 'different covers per track' : 'no cover embedded'}</span>`}
+      <div class="stack-tight">
+        <span class="muted small">${loaded.cover ? 'The cover embedded in every track.'
+          : coverCount ? `${coverCount} of ${loaded.tracks.length} tracks have a cover; each shows below.` : 'No track has a cover.'}</span>
+        <div><button class="btn btn-small" type="button" disabled=${busy} onClick=${changeCover}>Change the cover…</button></div>
+        <span class="muted small">Goes back to the cover step${dirty ? ', after saving these changes' : ''}, then returns here.</span>
+      </div>
+    </div>
     <div class="grid">
       <label>Album<input type="text" value=${edit.album} onInput=${(e) => set({ album: e.target.value })} /></label>
       <label>Album artist (credit)<input type="text" value=${edit.albumArtist} onInput=${(e) => set({ albumArtist: e.target.value })} /></label>
@@ -222,6 +260,8 @@ function TagEditor({ question, onAnswer }) {
           onClick=${() => set({ albumArtists: split(edit.albumArtist) })}>Split from the credit</button>`}
       </div>
     </div>
+    <${OtherTags} id="album" title="More tags of the album" note="the same in every track"
+      tags=${edit.other} onChange=${(other) => set({ other })} />
     ${edit.differing.length > 0 && html`<p class="line k-warn"><span class="mark">!</span>The tracks differ in ${edit.differing.join(', ')}; saving gives every track the values above.</p>`}
     ${plan && plan.folderName && html`<p class="line k-dim">The folder will be renamed to <b class="mono">${plan.folderName}</b>.</p>`}
 
@@ -240,8 +280,16 @@ function TagEditor({ question, onAnswer }) {
         const p = planFor(t.file);
         const old = loaded.tracks[i];
         return html`<div class="track-row" key=${t.file}>
-          <span class="mono muted">${t.track || i + 1}</span>
           <div class="stack-tight">
+            <span class="mono muted">${t.track || i + 1}</span>
+            ${!loaded.cover && t.cover && html`<img class="track-cover" src=${coverOf(t.file, t.cover)} alt="" />`}
+          </div>
+          <div class="stack-tight">
+            <div class="row numbers">
+              <label>Disc <input type="text" class="number" value=${t.disc} onInput=${(e) => setTrack(i, { disc: e.target.value })} /></label>
+              <label>Track <input type="text" class="number" value=${t.track} onInput=${(e) => setTrack(i, { track: e.target.value })} /></label>
+              ${old.hasLyrics && html`<span class="muted small">has lyrics (lyrembed edits them)</span>`}
+            </div>
             <label class="sr-only" for=${'title' + i}>Title of track ${i + 1}</label>
             <input id=${'title' + i} type="text" class=${t.title.trim() ? '' : 'missing'} value=${t.title} onInput=${(e) => setTrack(i, { title: e.target.value })} />
             <label class="sr-only" for=${'artist' + i}>Artist of track ${i + 1}</label>
@@ -254,6 +302,8 @@ function TagEditor({ question, onAnswer }) {
             </div>
             <span class="mono small ${p && p.newFile ? '' : 'muted'}">${p && p.newFile
               ? html`<s class="muted">${old.file}</s> → ${p.newFile}` : t.file}${p && p.kept ? html` <span class="muted">(kept: ${p.kept})</span>` : ''}</span>
+            <${OtherTags} id=${'track' + i} title="More tags of this track" note="" tags=${t.other}
+              onChange=${(other) => setTrack(i, { other })} />
           </div>
         </div>`;
       })}
@@ -363,7 +413,9 @@ function App() {
   const [closed, setClosed] = useState(false);
   const [back, setBack] = useState(null);
   const end = useRef(null);
-  const count = useRef(0);
+  const stick = useRef(true);
+  const lastHeight = useRef(0);
+  const ownScroll = useRef(false);
 
   useEffect(() => {
     let alive = true;
@@ -407,12 +459,31 @@ function App() {
     return () => { alive = false; clearInterval(ping); removeEventListener('pagehide', closing); };
   }, []);
 
-  // New output or a new question: keep the newest in view.
+  // Like a terminal: new content scrolls the page only for a reader who was
+  // at its end; one who scrolled up to read stays where they are.
+  // Only the reader's own scrolling decides: by the time the page's own
+  // scroll arrives, a loading picture may have made the page taller again.
+  const follow = () => {
+    const height = document.documentElement.scrollHeight;
+    if (height !== lastHeight.current && stick.current) {
+      ownScroll.current = true;
+      scrollTo(0, height);
+    }
+    lastHeight.current = height;
+  };
   useEffect(() => {
-    const shown = events.length + (question ? 1 : 0);
-    if (shown !== count.current && end.current) end.current.scrollIntoView({ block: 'end' });
-    count.current = shown;
-  });
+    const onScroll = () => {
+      if (ownScroll.current) { ownScroll.current = false; return; }
+      stick.current = atEnd(scrollY + innerHeight, document.documentElement.scrollHeight);
+    };
+    addEventListener('scroll', onScroll, { passive: true });
+    // Pictures (covers in a question) make the page taller after it was
+    // drawn, without a new render: follow the height itself.
+    const grows = new ResizeObserver(follow);
+    grows.observe(document.body);
+    return () => { removeEventListener('scroll', onScroll); grows.disconnect(); };
+  }, []);
+  useEffect(follow);
 
   const answer = async (id, value) => {
     try {

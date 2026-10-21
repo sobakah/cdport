@@ -14,6 +14,7 @@ FILE lines follow; the rip log is never changed, its checksum would fail.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -27,6 +28,13 @@ _TRACK_PREFIX = re.compile(r"^(?:\d+\.)?\d+ - ")
 _CUE_FILE = re.compile(r'^(\s*FILE ")(.*)(".*)$')
 ALBUM_ARTIST_KEYS = ("albumartist", "album artist", "album_artist")
 _ALBUM_FIELDS = ("album", "albumArtist", "albumArtists", "date", "genre")
+# Tags with a field of their own in the editor; every other tag is listed as
+# it is in the file ("other"), lyrics excepted: lyrembed's business, and far
+# too long for a field.
+_OWN_FIELDS = {"title", "artist", "artists", "album", "albumartists", "date", "genre",
+               "tracknumber", "discnumber", *ALBUM_ARTIST_KEYS}
+_LYRICS_KEYS = {"lyrics", "unsyncedlyrics", "syncedlyrics"}
+FRONT_COVER = 3  # FLAC picture type
 
 
 class TagEditError(Exception):
@@ -83,8 +91,24 @@ def _album_artist(audio) -> list[str]:
     return []
 
 
+def _other(audio) -> dict[str, list[str]]:
+    """The tags without a field of their own, by their name in capitals."""
+    keys = sorted({k.lower() for k in (audio.tags.keys() if audio.tags else [])})
+    return {k.upper(): [str(v) for v in audio.get(k) or []]
+            for k in keys if k not in _OWN_FIELDS and k not in _LYRICS_KEYS}
+
+
+def _picture(audio) -> bytes:
+    """The embedded front cover, else the first picture; b"" without one."""
+    pictures = list(getattr(audio, "pictures", []) or [])
+    front = [p for p in pictures if p.type == FRONT_COVER]
+    chosen = (front or pictures)[:1]
+    return chosen[0].data if chosen else b""
+
+
 def _track(path: Path, audio) -> dict:
     artist = _values(audio, "artist")
+    picture = _picture(audio)
     # One ARTIST is a credit; several (some taggers write it so) are names.
     return {
         "file": path.name,
@@ -93,6 +117,9 @@ def _track(path: Path, audio) -> dict:
         "artists": _values(audio, "artists") or (artist if len(artist) > 1 else []),
         "track": _first(audio, "tracknumber"),
         "disc": _first(audio, "discnumber"),
+        "cover": hashlib.sha1(picture).hexdigest()[:12] if picture else "",
+        "hasLyrics": any(_values(audio, k) for k in _LYRICS_KEYS),
+        "other": _other(audio),
     }
 
 
@@ -115,14 +142,41 @@ def read_album(folder: Path) -> dict:
     audios = [_open(f) for f in flac]
     albums = [_album(a) for a in audios]
     first = albums[0] if albums else {k: ([] if k == "albumArtists" else "") for k in _ALBUM_FIELDS}
+    tracks = [_track(f, a) for f, a in zip(flac, audios)]
+    # A tag every track has with the same value is the album's (shown once);
+    # the rest stay with their tracks.
+    shared = {}
+    if tracks:
+        for key, values in tracks[0]["other"].items():
+            if all(t["other"].get(key) == values for t in tracks):
+                shared[key] = values
+    for t in tracks:
+        t["other"] = {k: v for k, v in t["other"].items() if k not in shared}
+    covers = {t["cover"] for t in tracks}
     return {
         "folder": str(folder),
         "folderName": folder.name,
         **first,
         "differing": [k for k in _ALBUM_FIELDS if any(a[k] != first[k] for a in albums)],
-        "tracks": [_track(f, a) for f, a in zip(flac, audios)],
+        "other": shared,
+        # One cover in every track is the album's.
+        "cover": covers.pop() if len(covers) == 1 else "",
+        "tracks": tracks,
         "others": len(files) - len(flac),
     }
+
+
+def cover(folder: Path, name: str) -> tuple[bytes, str]:
+    """The embedded cover of track *name* and its type, for the editor."""
+    path = next((f for f in _flac(folder) if f.name == name), None)
+    if path is None:
+        raise TagEditError("No such track in the album.")
+    data = _picture(_open(path))
+    if data.startswith(b"\xff\xd8\xff"):
+        return data, "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return data, "image/png"
+    raise TagEditError("The track has no cover the page can show.")
 
 
 # --- checking and planning an edit -----------------------------------------------
@@ -138,6 +192,21 @@ def _names(value: object, what: str) -> list[str]:
     return [v.strip() for v in value if v.strip()]
 
 
+def _others(value: object, known: dict[str, list[str]], where: str) -> dict[str, list[str]]:
+    """Edited values of tags the file has; no new names, so a typo cannot
+    add a stray tag. An empty list removes the tag."""
+    if value is None:
+        return dict(known)
+    if not isinstance(value, dict):
+        raise TagEditError(f"The tags of {where} must be name: values.")
+    clean = {}
+    for key, values in value.items():
+        if key not in known:
+            raise TagEditError(f"{where} has no tag {key}; only the file's tags can be changed here.")
+        clean[key] = _names(values, f"{key} of {where}")
+    return {**known, **clean}
+
+
 def _checked(folder: Path, edit: dict) -> tuple[dict, dict]:
     """The current tags and the edit, cleaned; raises for an edit that does
     not fit the folder or lacks what lyrembed searches with."""
@@ -150,6 +219,7 @@ def _checked(folder: Path, edit: dict) -> tuple[dict, dict]:
         "albumArtists": _names(edit.get("albumArtists", []), "The album artists"),
         "date": _text(edit.get("date", ""), "The date"),
         "genre": _text(edit.get("genre", ""), "The genre"),
+        "other": _others(edit.get("other"), current["other"], "the album"),
         "tracks": [],
     }
     known = {t["file"] for t in current["tracks"]}
@@ -157,11 +227,15 @@ def _checked(folder: Path, edit: dict) -> tuple[dict, dict]:
     for track in edit["tracks"]:
         if not isinstance(track, dict) or track.get("file") not in known:
             raise TagEditError("The edit names a file that is not in the album (anymore); reload the editor.")
+        old = next(t for t in current["tracks"] if t["file"] == track["file"])
         given[track["file"]] = {
             "file": track["file"],
             "title": _text(track.get("title", ""), "A title"),
             "artist": _text(track.get("artist", ""), "An artist"),
             "artists": _names(track.get("artists", []), "The artists"),
+            "track": _text(track.get("track", old["track"]), "A track number"),
+            "disc": _text(track.get("disc", old["disc"]), "A disc number"),
+            "other": _others(track.get("other"), old["other"], track["file"]),
         }
     if set(given) != known:
         raise TagEditError("The edit does not cover every track; reload the editor.")
@@ -263,6 +337,19 @@ def save(folder: Path, edit: dict) -> dict:
         for field, key in (("date", "date"), ("genre", "genre")):
             if album_changed[field]:
                 _set(audio, key, [clean[field]] if clean[field] else [])
+                touched = True
+        for field, key in (("track", "tracknumber"), ("disc", "discnumber")):
+            if new[field] != old[field]:
+                _set(audio, key, [new[field]] if new[field] else [])
+                touched = True
+        # The album's shared tags go to every track, a track's own to it alone.
+        for key, values in clean["other"].items():
+            if values != current["other"].get(key):
+                _set(audio, key.lower(), values)
+                touched = True
+        for key, values in new["other"].items():
+            if values != old["other"].get(key):
+                _set(audio, key.lower(), values)
                 touched = True
         if touched:
             try:

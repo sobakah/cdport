@@ -199,7 +199,7 @@ class WebFront(ui.Front):
                 if not isinstance(value, bool):
                     raise ApiError(400, "Answer yes or no.")
             elif kind == "tag_editor":
-                value = question["folder"]
+                value = (question["folder"], value if value in ("done", "cover") else "done")
             elif kind in ("ask", "ask_path"):
                 if not isinstance(value, str):
                     raise ApiError(400, "Expected text.")
@@ -284,10 +284,12 @@ class WebFront(ui.Front):
     def supports(self, feature: str) -> bool:
         return feature == "tag_editor"
 
-    def edit_tags(self, folder: Path) -> Path:
+    def edit_tags(self, folder: Path) -> tuple[Path, str]:
         """The page's tag editor; the question holds the folder, which a save
-        that renames it updates, and is answered when the user is done."""
-        return Path(self._ask("tag_editor", "Edit the tags", folder=str(folder)))
+        that renames it updates, and is answered when the user is done or
+        wants to change the cover."""
+        folder_now, then = self._ask("tag_editor", "Edit the tags", folder=str(folder))
+        return Path(folder_now), then
 
     def tag_folder(self) -> Path:
         """The folder of the open tag-editor question."""
@@ -345,7 +347,7 @@ def _answer_text(kind: str, answer: object, details: dict) -> str:
     if kind == "wait":
         return "Done"
     if kind == "tag_editor":
-        return "Tags edited"
+        return "Change the cover" if answer[1] == "cover" else "Tags edited"
     return str(answer) if answer else "(empty)"
 
 
@@ -505,7 +507,9 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             body = self._body(json_required=url.path != "/api/closing") if method == "POST" else {}
             self.server.contact()
-            self._send_json(200, self._api(method, url.path, parse_qs(url.query), body))
+            result = self._api(method, url.path, parse_qs(url.query), body)
+            if result is not None:  # None: _api sent the answer itself (a picture)
+                self._send_json(200, result)
             # Only once the answer is out: stopping first could end the
             # program while the answer is still being written.
             if url.path == "/api/closing":
@@ -566,6 +570,13 @@ class _Handler(BaseHTTPRequestHandler):
             return {"ok": True}
         if method == "GET" and path == "/api/tags":
             return tageditor.read_album(front.tag_folder())
+        if method == "GET" and path == "/api/tags/cover":
+            try:
+                data, mime = tageditor.cover(front.tag_folder(), (query.get("file") or [""])[0])
+            except tageditor.TagEditError as exc:
+                raise ApiError(404, str(exc)) from exc
+            self._send(200, data, mime)
+            return None
         if method == "POST" and path == "/api/tags/plan":
             return tageditor.plan(front.tag_folder(), body)
         if method == "POST" and path == "/api/tags/save":

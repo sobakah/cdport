@@ -78,9 +78,10 @@ class Front:
         """Whether this front end has *feature* ("tag_editor") of its own."""
         return False
 
-    def edit_tags(self, folder: Path) -> Path:
+    def edit_tags(self, folder: Path) -> tuple[Path, str]:
         """Let the user edit the album's tags; returns the album's folder,
-        which follows a changed album name."""
+        which follows a changed album name, and what next: "done", or
+        "cover" to change the cover first and come back."""
         raise NotImplementedError
 
 
@@ -112,7 +113,7 @@ def supports(feature: str) -> bool:
     return _front is not None and _front.supports(feature)
 
 
-def edit_tags(folder: Path) -> Path:
+def edit_tags(folder: Path) -> tuple[Path, str]:
     """The front end's own tag editor; only call it when supports("tag_editor")."""
     if _front is None:
         raise RuntimeError("the terminal has no tag editor of its own")

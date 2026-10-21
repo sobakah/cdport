@@ -3,6 +3,24 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.1] — 2026-10-21
+
+### Added
+
+* **The tag editor shows every tag** in the files: disc and track number
+  to edit, and all other tags (MusicBrainz IDs and the like) under "More
+  tags", once for the album when every track has the same value, else per
+  track. They can be changed or removed; lyrics stay lyrembed's.
+* **The tag editor shows the embedded cover**, once for the album or per
+  track when they differ. **Change the cover…** saves, goes back to the
+  cover step and returns to the editor.
+
+### Changed
+
+* **The page scrolls like a terminal**: it follows new output and
+  questions only while you are at the end, and stays where you are when
+  you have scrolled up. The same inside cyanrip's output box.
+
 ## [0.6.0] — 2026-10-21
 
 ### Added
