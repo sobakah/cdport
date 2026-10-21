@@ -47,6 +47,7 @@ class Session:
     lyrembed: str | None = None
     lyrembed_problem: str = ""  # found, but does not start
     lyrembed_romanize: bool = False  # lyrembed has --romanize for batch mode
+    lyrembed_page: bool = False  # lyrembed 2.0+: the interactive mode is a page in the browser
     album: AlbumState | None = None  # the album being worked on, for the Ctrl+C message
     failed: bool = False
     logs: list[Path] = field(default_factory=list)  # rip logs moved out of the library
@@ -178,6 +179,7 @@ def check_tools(session: Session) -> None:
     elif session.lyrembed:
         ui.check("lyrembed", ui.tilde(session.lyrembed), True)
         session.lyrembed_romanize = lyrics.can_romanize(session.lyrembed)
+        session.lyrembed_page = lyrics.opens_page(session.lyrembed)
     else:
         ui.check("lyrembed", "not found: the lyrics step is disabled", False,
                  f"To install: {tools.LYREMBED_INSTALL_HINT}")
@@ -863,7 +865,8 @@ def lyrics_step(session: Session, album: AlbumState) -> bool:
     if mode == "ask":
         mode = {"a": "auto", "i": "interactive", "s": "skip"}[ui.choose("Lyrics", [
             ("a", "automatic: embed confident matches, no questions"),
-            ("i", "interactive: choose for each track"),
+            ("i", "interactive: choose for each track" + (" on lyrembed's page in the browser"
+                                                          if session.lyrembed_page else "")),
             ("s", "skip"),
         ], default="a")]
     romanize = ask_romanize(session) if mode == "auto" else None
@@ -872,6 +875,8 @@ def lyrics_step(session: Session, album: AlbumState) -> bool:
             album.mark("lyrics", skipped=True)
             return True
         cmd = lyrics.lyrembed_command(session.lyrembed, session.cfg, album.folder, mode, romanize)
+        if mode == "interactive":
+            page_hint(session)
         ui.tool_start("lyrembed", proc.format_command(cmd))
         code = lyrics.run_lyrembed(session.lyrembed, session.cfg, album.folder, mode, romanize)
         ui.tool_end("lyrembed", code)
@@ -921,7 +926,8 @@ def after_automatic_lyrics(session: Session, album: AlbumState, files: list[Path
     for f in left:
         ui.dim(f"  {f.name}")
     ui.dim("lyrembed's output above says why. Instrumental tracks stay without lyrics.")
-    answer = ui.choose("Then", [("i", "go through them interactively (lyrembed shows every track)"),
+    where = "its page in the browser shows every track" if session.lyrembed_page else "lyrembed shows every track"
+    answer = ui.choose("Then", [("i", f"go through them interactively ({where})"),
                                 ("c", "continue without them")], default="i")
     if answer == "i":
         return False
@@ -932,17 +938,19 @@ def after_automatic_lyrics(session: Session, album: AlbumState, files: list[Path
 def offer_lyrics_check(session: Session, album: AlbumState) -> None:
     """After automatic mode, let the user look over what it embedded.
 
-    Interactive lyrembed shows every track, including those that now have
-    lyrics, so it doubles as the review. The step is already marked done:
+    Interactive lyrembed (its page, from 2.0.0) shows every track, including
+    those that now have lyrics, so it doubles as the review. The step is already marked done:
     the lyrics are embedded whatever happens in the check.
     """
     answer = ui.choose("Lyrics embedded", [
         ("c", "continue"),
-        ("l", "check them: open the album in lyrembed (interactive)"),
+        ("l", "check them: open the album " + ("on lyrembed's page in the browser" if session.lyrembed_page
+                                                else "in lyrembed (interactive)")),
     ], default="c")
     if answer == "c":
         return
     cmd = lyrics.lyrembed_command(session.lyrembed, session.cfg, album.folder, "interactive")
+    page_hint(session)
     ui.tool_start("lyrembed", proc.format_command(cmd))
     code = lyrics.run_lyrembed(session.lyrembed, session.cfg, album.folder, "interactive")
     ui.tool_end("lyrembed", code)
@@ -950,6 +958,14 @@ def offer_lyrics_check(session: Session, album: AlbumState) -> None:
         raise KeyboardInterrupt
     if code != lyrics.EXIT_OK:
         ui.warn(f"lyrembed ended with exit code {code}; the lyrics embedded before stay.")
+
+
+def page_hint(session: Session) -> None:
+    """lyrembed 2.0 opens a page and waits; without this the terminal only
+    shows an address, and it is not obvious how to get back to cdimport."""
+    if session.lyrembed_page:
+        ui.dim("lyrembed opens the album on its page in your browser. "
+               "Quit it there, or close the tab, to continue here.")
 
 
 def ask_romanize(session: Session) -> bool | None:

@@ -12,7 +12,7 @@
   "library_dir": "",
   "_library_layout": "Where an album goes inside the library: {albumartist} comes from the tags, {folder} is the album folder's own name. '/' separates folder levels; the values are made safe as folder names, so 'AC/DC' cannot add a level.",
   "library_layout": "{albumartist}/{folder}",
-  "_lyrics_mode": "\"ask\" (each run, automatic preselected), \"auto\" (lyrembed --auto: embed confident matches without questions), \"interactive\" (choose for each track) or \"skip\".",
+  "_lyrics_mode": "\"ask\" (each run, automatic preselected), \"auto\" (lyrembed --auto: embed confident matches without questions), \"interactive\" (choose for each track; lyrembed 2.0 and newer do that on a page in the browser) or \"skip\".",
   "lyrics_mode": "ask",
   "_editor": "Tag editor to offer by default: a key from \"editors\", or \"skip\".",
   "editor": "eartag",

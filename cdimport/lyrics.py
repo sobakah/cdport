@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +79,15 @@ def lyrembed_command(lyrembed: str, cfg: dict[str, Any], folder: Path, mode: str
 def run_lyrembed(lyrembed: str, cfg: dict[str, Any], folder: Path, mode: str,
                  romanize: bool | None = None) -> int:
     return proc.run(lyrembed_command(lyrembed, cfg, folder, mode, romanize))
+
+
+def opens_page(lyrembed: str) -> bool:
+    """Whether this lyrembed works on a page in the browser (2.0.0 and newer)
+    rather than in terminal menus. Either way cdimport starts `lyrembed DIR`
+    and waits for it to end; only what to tell the user differs."""
+    result = proc.capture([lyrembed, "--version"])
+    match = re.search(r"lyrembed (\d+)\.", result.stdout if result is not None else "")
+    return match is not None and int(match.group(1)) >= 2
 
 
 def can_romanize(lyrembed: str) -> bool:

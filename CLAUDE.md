@@ -45,6 +45,8 @@ checked against the code first: lyrics left after `--auto`, one-time
 offset, config falls back per setting, link punctuation, re-rip leftovers,
 cover checks, `run_tail` without a terminal and after Ctrl+C, disc merge
 over all tracks with rollback, Flatpak option values.
+0.5.1 (2026-10-21): ready for lyrembed 2.0's browser page (version check,
+texts, how to get back to cdimport).
 
 Layout: `cdimport/` package (`app.py` runs the steps, one module per step:
 `disc`, `rip`, `tags`, `lyrics`, `library`; `state`, `tools`, `proc`,
@@ -98,7 +100,11 @@ regenerate it (see `config.write_example`); a test fails until then.
   -I` ran on the drive during the maintainer's rip (AccurateRip still
   matched 6/6). Versions before this fix do not take the lock.
 - **Lyrics mode** chosen by the user each run: automatic (`lyrembed DIR
-  --auto`) or interactive (`lyrembed DIR`).
+  --auto`) or interactive (`lyrembed DIR`). From lyrembed 2.0.0 the
+  interactive mode is a page in the browser; cdimport still starts
+  `lyrembed DIR` and waits for it to exit (Quit on the page, or closing the
+  tab, ends it), so only the texts differ (`lyrics.opens_page`,
+  `Session.lyrembed_page`, `app.page_hint`).
 - **Tag editor**: Ear Tag by default, others selectable (Kid3, Picard),
   configurable as a command template, or skip.
 
@@ -283,8 +289,13 @@ installed with pipx)
 - Batch mode (`--auto`) never prompts; `--dry-run`, `--overwrite`,
   `--color never` exist.
 - Planned in lyrembed, not built yet: "automatic, then prompt only for the
-  tracks it could not decide". When it exists, offer it as a third lyrics
-  mode.
+  tracks it could not decide" (in 2.0: open the page with only those
+  tracks), and a "Done – back to cdimport" button with a return address.
+  When they exist, offer the first as a third lyrics mode.
+- **lyrembed 2.0.0** (2026-10-21) replaced its terminal menus with a page in
+  the browser. Its CLI flags, `--auto` and exit codes are unchanged; it
+  prints the page's address and waits. `lyrics.opens_page` tells 2.0 from
+  1.x by `lyrembed --version`.
 - **Romanization in batch mode** was added to lyrembed on 2026-10-11 at the
   maintainer's request (released as lyrembed 1.0.1): `settings.auto_romanize` (default false) and `--romanize` /
   `--no-romanize` for `--auto`, reusing its bulk-action `auto_romanize`.

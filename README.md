@@ -9,11 +9,11 @@ does not rip, tag or fetch lyrics itself.
 1. Disc     wait for an audio CD, preview the MusicBrainz match (cyanrip -I)
 2. Rip      cyanrip → FLAC with tags, cover, AccurateRip log
 3. Tags     Ear Tag (or Kid3, Picard, ...) for manual revision, then a tag check
-4. Lyrics   lyrembed, automatic or interactive
+4. Lyrics   lyrembed, automatic or interactive (lyrembed 2.0: a page in the browser)
 5. Finish   offer to move the album into the music library, summary
 ```
 
-Version 0.5.0 · Python 3.10+ · Linux (Windows later)
+Version 0.5.1 · Python 3.10+ · Linux (Windows later)
 
 ## Requirements
 
@@ -160,6 +160,13 @@ them; instrumental tracks stay without lyrics either way. When every track
 got lyrics, `l` opens the album in lyrembed's interactive mode to check them,
 and Enter continues with the next step. lyrembed tags FLAC, MP3, Ogg, Opus
 and M4A; an album in other formats skips the lyrics step.
+
+From lyrembed 2.0.0 on, its interactive mode is a page in your browser
+instead of terminal menus; cdimport finds out from `lyrembed --version` and
+says so in its choices. lyrembed opens the page with the album and cdimport
+waits: quit lyrembed on the page, or close the tab, and cdimport continues
+with the next step. Older lyrembed versions keep their terminal menus and
+work as before.
 
 ## Cover art on its own: cdimport-cover
 

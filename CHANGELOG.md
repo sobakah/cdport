@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.1] — 2026-10-21
+
+### Changed
+
+* **Ready for lyrembed 2.0**, whose interactive mode is a page in the
+  browser instead of terminal menus. cdimport tells the versions apart by
+  `lyrembed --version`. With 2.0 its choices say that the album opens on
+  lyrembed's page, and before it opens cdimport says how to get back:
+  quit lyrembed on the page, or close the tab, and cdimport continues with
+  the next step. Older lyrembed versions work and read as before.
+
 ## [0.5.0] — 2026-10-15
 
 ### Fixed

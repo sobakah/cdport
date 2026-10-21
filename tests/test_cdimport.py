@@ -610,6 +610,7 @@ def run_cli(tmp_path, monkeypatch, argv, *, lyrembed=None, editor=None):
     # The fake tools only exist as names, and the cover offer has tests of its own.
     monkeypatch.setattr(tools, "start_problem", lambda cmd: None)
     monkeypatch.setattr(lyrics, "can_romanize", lambda lyrembed: False)
+    monkeypatch.setattr(lyrics, "opens_page", lambda lyrembed: False)
     monkeypatch.setattr(app, "offer_cover", lambda folder: None)
     monkeypatch.setattr(tools, "find_lyrembed", lambda cfg: lyrembed)
     monkeypatch.setattr(tools, "find_editor", lambda cfg, key: editor)
@@ -2038,6 +2039,30 @@ def test_can_romanize_reads_lyrembeds_help(monkeypatch):
     assert lyrics.can_romanize("lyrembed")
     monkeypatch.setattr(lyrics.proc, "capture", help_text("  --auto ...\n  --dry-run ..."))  # lyrembed 1.0.0
     assert not lyrics.can_romanize("lyrembed")
+
+
+def test_opens_page_reads_lyrembeds_version(monkeypatch):
+    def version(text):
+        return lambda cmd, timeout=10: subprocess.CompletedProcess(cmd, 0, text, "")
+    for text, page in (("lyrembed 2.0.0\n", True), ("lyrembed 12.1.0", True), ("lyrembed 1.1.3\n", False), ("", False)):
+        monkeypatch.setattr(lyrics.proc, "capture", version(text))
+        assert lyrics.opens_page("lyrembed") is page, text
+    monkeypatch.setattr(lyrics.proc, "capture", lambda cmd, timeout=10: None)   # does not start
+    assert not lyrics.opens_page("lyrembed")
+
+
+@pytest.mark.parametrize("page", [True, False])
+def test_interactive_lyrics_say_how_to_get_back(tmp_path, monkeypatch, capsys, album_dir, page):
+    session = app.new_session(default_cfg(), app.Options(lyrics="ask"), tmp_path / "config.json")
+    session.lyrembed, session.lyrembed_page = "lyrembed", page
+    monkeypatch.setattr(app.lyrics, "run_lyrembed", lambda lyr, cfg, folder, mode, romanize=None: lyrics.EXIT_OK)
+    album = state.load(album_dir)
+    album.mark("tags")
+    feed_input(monkeypatch, ["i"])
+    assert app.lyrics_step(session, album)
+    out = capsys.readouterr().out
+    assert ("on lyrembed's page in the browser" in out) is page
+    assert ("Quit it there, or close the tab, to continue here." in out) is page
 
 
 @pytest.mark.parametrize("answer, expected", [("", None), ("y", True), ("n", False)])
