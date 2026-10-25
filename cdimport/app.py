@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 import shutil
 import tempfile
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -51,6 +50,9 @@ class Session:
     lyrembed_return: bool = False  # lyrembed 2.1+: its page can lead back to cdimport's (--return-url)
     page_url: str = ""  # cdimport's own page, when it runs on one (web.serve)
     album: AlbumState | None = None  # the album being worked on, for the Ctrl+C message
+    # The newest album of any run; a later run without one keeps it, so the
+    # page's "cdimport finished" line still names it.
+    last_album: AlbumState | None = None
     failed: bool = False
     logs: list[Path] = field(default_factory=list)  # rip logs moved out of the library
     one_time_offset: bool = False  # cfg's offset is "0 for this rip only", not saved
@@ -87,7 +89,7 @@ def run(session: Session) -> int:
             album = offer_resume(session) or disc_and_rip(session)
         if album is None:
             break
-        session.album = album
+        session.album = session.last_album = album
         continue_album(session, album)
         summary(session, album)
         ui.gap()
@@ -140,6 +142,9 @@ def ask_missing_folders(session: Session) -> None:
 # --- 0. Tools ----------------------------------------------------------------
 # Notes under a checklist line start where its text does.
 INDENT = " " * (4 + ui.LABEL_WIDTH)
+# Installing and building may ask for a sudo password, which only the
+# terminal can take: the page names the command instead.
+TERMINAL_INSTALL = "To do it, run cdimport --install-cyanrip in a terminal (it may ask for your password)."
 
 
 def check_tools(session: Session) -> None:
@@ -180,9 +185,9 @@ def check_tools(session: Session) -> None:
         session.lyrembed, session.lyrembed_problem = None, problem
     elif session.lyrembed:
         ui.check("lyrembed", ui.tilde(session.lyrembed), True)
-        session.lyrembed_romanize = lyrics.can_romanize(session.lyrembed)
-        session.lyrembed_page = lyrics.opens_page(session.lyrembed)
-        session.lyrembed_return = session.lyrembed_page and lyrics.can_return(session.lyrembed)
+        features = lyrics.probe(session.lyrembed)
+        session.lyrembed_romanize, session.lyrembed_page = features.romanize, features.page
+        session.lyrembed_return = features.return_url
     else:
         ui.check("lyrembed", "not found: the lyrics step is disabled", False,
                  f"To install: {tools.LYREMBED_INSTALL_HINT}")
@@ -196,6 +201,9 @@ def offer_cyanrip_install(session: Session) -> None:
     route = install.choose_route(channel=session.cfg["cyanrip"]["channel"])
     if not session.options.install_cyanrip:
         ui.dim(f"{INDENT}To install: {install.route_hint(route)}")
+        if route.kind != "download" and not ui.in_terminal():
+            ui.dim(f"{INDENT}{TERMINAL_INSTALL}")
+            return
         if route.kind == "download" or not ui.confirm("Install cyanrip now?", default=True):
             return
     ui.gap()
@@ -221,6 +229,9 @@ def offer_cyanrip_update(session: Session, installed: install.Installed) -> None
     ui.info(f"{INDENT}{ui.style(offer.message, 'yellow')}")
     if not offer.can_build:
         ui.dim(f"{INDENT}Your package manager updates it once the distribution packages the new version.")
+        return
+    if not ui.in_terminal():
+        ui.dim(f"{INDENT}{TERMINAL_INSTALL}")
         return
     if not ui.confirm("Build the new cyanrip now?", default=True):
         return
@@ -354,7 +365,8 @@ def find_disc(session: Session) -> str | AlbumState:
             for d in drives:
                 ui.info(d.describe())
             answer = ui.choose("No free drive with an audio CD" if taken else "No audio CD", [("c", "check again"),
-                                               ("w", "wait for a disc or a free drive (Ctrl+C to stop waiting)"),
+                                               ("w", "wait for a disc or a free drive"
+                                                     + (" (Ctrl+C to stop waiting)" if ui.in_terminal() else "")),
                                                ("f", "continue with an existing album folder"),
                                                ("q", "quit")], default="c")
             if answer == "w":
@@ -380,9 +392,10 @@ def wait_for_disc(wanted: str) -> str | None:
                 if d.has_audio and (not wanted or d.device == wanted) and not disc.busy(d.device):
                     ui.success(d.describe())
                     return d.device
-            time.sleep(POLL_SECONDS)
+            ui.pause(POLL_SECONDS)
     except KeyboardInterrupt:
-        print()
+        if ui.in_terminal():  # the cursor is still after ^C
+            print()
         return None
 
 
@@ -883,13 +896,16 @@ def lyrics_step(session: Session, album: AlbumState) -> bool:
         return True
     if len(taggable) < len(files):
         ui.dim(f"lyrembed leaves {len(files) - len(taggable)} file(s) in other formats alone.")
+    if mode == "interactive" and not interactive_lyrics(session):
+        ui.warn(NO_INTERACTIVE_LYRICS)
+        mode = "ask"
     if mode == "ask":
-        mode = {"a": "auto", "i": "interactive", "s": "skip"}[ui.choose("Lyrics", [
-            ("a", "automatic: embed confident matches, no questions"),
-            ("i", "interactive: choose for each track" + (" on lyrembed's page in the browser"
-                                                          if session.lyrembed_page else "")),
-            ("s", "skip"),
-        ], default="a")]
+        options = [("a", "automatic: embed confident matches, no questions")]
+        if interactive_lyrics(session):
+            options.append(("i", "interactive: choose for each track" + (" on lyrembed's page in the browser"
+                                                                         if session.lyrembed_page else "")))
+        mode = {"a": "auto", "i": "interactive", "s": "skip"}[ui.choose("Lyrics", options + [("s", "skip")],
+                                                                        default="a")]
     romanize = ask_romanize(session) if mode == "auto" else None
     while True:
         if mode == "skip":
@@ -948,6 +964,10 @@ def after_automatic_lyrics(session: Session, album: AlbumState, files: list[Path
     for f in left:
         ui.dim(f"  {f.name}")
     ui.dim("lyrembed's output above says why. Instrumental tracks stay without lyrics.")
+    if not interactive_lyrics(session):
+        ui.dim(NO_INTERACTIVE_LYRICS)
+        album.mark("lyrics")
+        return True
     where = "its page in the browser shows every track" if session.lyrembed_page else "lyrembed shows every track"
     answer = ui.choose("Then", [("i", f"go through them interactively ({where})"),
                                 ("c", "continue without them")], default="i")
@@ -964,6 +984,8 @@ def offer_lyrics_check(session: Session, album: AlbumState) -> None:
     those that now have lyrics, so it doubles as the review. The step is already marked done:
     the lyrics are embedded whatever happens in the check.
     """
+    if not interactive_lyrics(session):
+        return
     answer = ui.choose("Lyrics embedded", [
         ("c", "continue"),
         ("l", "check them: open the album " + ("on lyrembed's page in the browser" if session.lyrembed_page
@@ -981,6 +1003,16 @@ def offer_lyrics_check(session: Session, album: AlbumState) -> None:
         raise KeyboardInterrupt
     if code != lyrics.EXIT_OK:
         ui.warn(f"lyrembed ended with exit code {code}; the lyrics embedded before stay.")
+
+
+NO_INTERACTIVE_LYRICS = ("Going through tracks interactively needs lyrembed 2.0 or newer on this page, "
+                         "or cdimport in a terminal.")
+
+
+def interactive_lyrics(session: Session) -> bool:
+    """Whether interactive lyrembed can be used: lyrembed before 2.0 asks in
+    terminal menus, which the page shows but cannot answer."""
+    return ui.in_terminal() or session.lyrembed_page
 
 
 def handoff_url(session: Session) -> str:

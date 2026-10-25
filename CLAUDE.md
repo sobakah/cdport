@@ -51,6 +51,9 @@ texts, how to get back to cdimport).
 the lyrics handoff to lyrembed, and `--return-url` for lyrembed's Import a CD.
 0.6.1 (2026-10-21): the tag editor shows every tag, disc/track numbers and the
 cover (with a way back to the cover step); the page scrolls like a terminal.
+0.6.2 (2026-10-25): fixes from a code review of the page: stopping (disc
+wait, Ctrl+C during a rip), no install or lyrembed 1.x menus on the page,
+lyrembed's address split over two reads, tag-editor renames put back.
 
 Layout: `cdimport/` package (`app.py` runs the steps, one module per step:
 `disc`, `rip`, `tags`, `lyrics`, `library`; `state`, `tools`, `proc`,
@@ -107,7 +110,7 @@ regenerate it (see `config.write_example`); a test fails until then.
   --auto`) or interactive (`lyrembed DIR`). From lyrembed 2.0.0 the
   interactive mode is a page in the browser; cdimport still starts
   `lyrembed DIR` and waits for it to exit (Quit on the page, or closing the
-  tab, ends it), so only the texts differ (`lyrics.opens_page`,
+  tab, ends it), so only the texts differ (`lyrics.probe`,
   `Session.lyrembed_page`, `app.page_hint`).
 - **Tag editor**: Ear Tag by default, others selectable (Kid3, Picard),
   configurable as a command template, or skip.
@@ -298,14 +301,14 @@ installed with pipx)
   When they exist, offer the first as a third lyrics mode.
 - **lyrembed 2.0.0** (2026-10-21) replaced its terminal menus with a page in
   the browser. Its CLI flags, `--auto` and exit codes are unchanged; it
-  prints the page's address and waits. `lyrics.opens_page` tells 2.0 from
+  prints the page's address and waits. `lyrics.probe` tells 2.0 from
   1.x by `lyrembed --version`.
 - **Romanization in batch mode** was added to lyrembed on 2026-10-11 at the
   maintainer's request (released as lyrembed 1.0.1): `settings.auto_romanize` (default false) and `--romanize` /
   `--no-romanize` for `--auto`, reusing its bulk-action `auto_romanize`.
   cdimport asks in automatic mode; Enter passes no flag, so lyrembed's own
   setting decides. It only asks when `lyrembed --help` lists `--romanize`
-  (`lyrics.can_romanize`); older versions would reject the flag.
+  (`lyrics.probe`); older versions would reject the flag.
 
 **Disc detection (Linux)**
 - udev reports audio discs: `ID_CDROM_MEDIA_TRACK_COUNT_AUDIO` in
@@ -363,10 +366,19 @@ A front end that wants live tool progress keeps the pseudo-terminal
   until a real line break comes.
 - The flow starts on the page's first visit (`Run.start`), not at launch,
   so nothing runs ahead of what the page can show.
-- Stopping: at an open question it cancels the question (`Cancelled`, a
+- Stopping (`WebFront.stop`) is final: the open question, every later one
+  and a pause (`ui.pause`, the disc wait) raise `Cancelled` (a
   `KeyboardInterrupt`), so the flow ends as on Ctrl+C (130). While a tool
   runs, `proc.interrupt_tool` sends it SIGINT first, and cyanrip finishes
-  its log. A page that is gone does not stop a running tool.
+  its log. A page that is gone does not stop a running tool. Ctrl+C in
+  `serve`'s terminal already reached the tool (same process group,
+  `proc.terminal_interrupts_tools`), so it gets no second SIGINT: cyanrip
+  quits on that without finishing its log ("Force quitting",
+  `on_quit_signal`, checked 2026-10-25).
+- Anything that may ask for a sudo password stays in the terminal: on the
+  page step 0 only names `cdimport --install-cyanrip`. lyrembed before 2.0
+  asks in terminal menus, so the page offers no interactive lyrics with it
+  (`app.interactive_lyrics`).
 - Security as in lyrembed: 127.0.0.1, the token as an HttpOnly SameSite
   cookie, `Host` and `Origin` checks, JSON only, a CSP. Installing cyanrip
   stays in the terminal, because it may ask for a sudo password.
@@ -399,7 +411,7 @@ A front end that wants live tool progress keeps the pseudo-terminal
   checked before anything is written, and renames go through temporary
   names, so two tracks that swap titles do not overwrite each other.
 - The lyrics step hands the tab to lyrembed's page, if lyrembed has
-  `--return-url` (`lyrics.can_return`, from its `--help`; lyrembed 2.1.0):
+  `--return-url` (`lyrics.probe`, from its `--help`; lyrembed 2.1.0):
   - cdimport starts `lyrembed DIR --no-browser --return-url <its own page>
     --return-name cdimport` with `ui.tool_start(..., handoff=True)`;
   - `WebFront` reads lyrembed's address from its output line "lyrembed is

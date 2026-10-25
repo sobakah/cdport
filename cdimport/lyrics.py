@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -90,26 +91,21 @@ def run_lyrembed(lyrembed: str, cfg: dict[str, Any], folder: Path, mode: str,
     return code
 
 
-def opens_page(lyrembed: str) -> bool:
-    """Whether this lyrembed works on a page in the browser (2.0.0 and newer)
-    rather than in terminal menus. Either way cdimport starts `lyrembed DIR`
-    and waits for it to end; only what to tell the user differs."""
-    result = proc.capture([lyrembed, "--version"])
-    match = re.search(r"lyrembed (\d+)\.", result.stdout if result is not None else "")
-    return match is not None and int(match.group(1)) >= 2
+@dataclass
+class Features:
+    """What the installed lyrembed can do."""
+    page: bool = False        # 2.0.0+: the interactive mode is a page in the browser, not terminal menus
+    romanize: bool = False    # --romanize for batch mode (added after 1.0.0; older versions reject it)
+    return_url: bool = False  # 2.1.0+: --return-url, its page can lead back to cdimport's
 
 
-def can_return(lyrembed: str) -> bool:
-    """Whether this lyrembed's page can lead back to cdimport's (--return-url,
-    lyrembed 2.1.0 and newer)."""
-    result = proc.capture([lyrembed, "--help"])
-    return result is not None and "--return-url" in result.stdout
-
-
-def can_romanize(lyrembed: str) -> bool:
-    """Whether this lyrembed has --romanize for batch mode (added after 1.0.0).
-
-    Older versions reject the flag, so it is only offered when --help lists it.
-    """
-    result = proc.capture([lyrembed, "--help"])
-    return result is not None and "--romanize" in result.stdout
+def probe(lyrembed: str) -> Features:
+    """Read the features from one --version and one --help: each start of a
+    pipx tool costs a Python start. Either way cdimport starts `lyrembed DIR`
+    and waits for it to end; the page only changes what to tell the user."""
+    version = proc.capture([lyrembed, "--version"])
+    match = re.search(r"lyrembed (\d+)\.", version.stdout if version is not None else "")
+    page = match is not None and int(match.group(1)) >= 2
+    found = proc.capture([lyrembed, "--help"])
+    usage = found.stdout if found is not None else ""
+    return Features(page, "--romanize" in usage, page and "--return-url" in usage)

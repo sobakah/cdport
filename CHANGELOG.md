@@ -3,6 +3,38 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.2] — 2026-10-25
+
+### Fixed
+
+* **Waiting for a disc on the page** could not be stopped: "Stop
+  cdimport" and closing the tab now end the wait at once.
+* **Ctrl+C in the terminal of `cdimport --web` during a rip** sent cyanrip
+  a second Ctrl+C, on which it quits without finishing its log, and then
+  waited up to four minutes for an answer nobody could give. cyanrip now
+  gets only the terminal's own, and cdimport ends once it has finished.
+  The same after the page's Stop: the flow ends instead of asking on.
+* **Installing or rebuilding cyanrip** is no longer offered on the page,
+  where its password prompt cannot be answered; the page names
+  `cdimport --install-cyanrip` for the terminal.
+* **lyrembed before 2.0 on the page:** its interactive mode asks in the
+  terminal, so the page waited forever. The page now offers only automatic
+  lyrics with such a lyrembed and says what interactive mode needs.
+* **lyrembed's address could get lost** when a line break arrived split
+  over two reads, and the page then never switched to lyrembed's page.
+* **The page could show an internal error** while a tool was printing (its
+  state was turned into JSON while the flow changed it).
+* **The tag editor:** a rename the system refuses puts the names back
+  instead of leaving files under temporary names, and a title or album too
+  long for a file name is refused before anything is written.
+* **"cdimport finished"** (for lyrembed's Import a CD) names the imported
+  album also when another run was started after it and ended without one.
+
+### Changed
+
+* Step 0 starts lyrembed three times instead of four (one `--help` for
+  all its features).
+
 ## [0.6.1] — 2026-10-21
 
 ### Added

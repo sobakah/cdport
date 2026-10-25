@@ -609,9 +609,7 @@ def run_cli(tmp_path, monkeypatch, argv, *, lyrembed=None, editor=None):
     monkeypatch.setattr(install, "choose_route", lambda *a, **k: install.Route("download", "later"))
     # The fake tools only exist as names, and the cover offer has tests of its own.
     monkeypatch.setattr(tools, "start_problem", lambda cmd: None)
-    monkeypatch.setattr(lyrics, "can_romanize", lambda lyrembed: False)
-    monkeypatch.setattr(lyrics, "opens_page", lambda lyrembed: False)
-    monkeypatch.setattr(lyrics, "can_return", lambda lyrembed: False)
+    monkeypatch.setattr(lyrics, "probe", lambda lyrembed: lyrics.Features())
     monkeypatch.setattr(app, "offer_cover", lambda folder: None)
     monkeypatch.setattr(tools, "find_lyrembed", lambda cfg: lyrembed)
     monkeypatch.setattr(tools, "find_editor", lambda cfg, key: editor)
@@ -2033,23 +2031,24 @@ def test_romanize_flag_only_in_automatic_mode(tmp_path):
     assert lyrics.lyrembed_command("lyrembed", cfg, tmp_path, "interactive", True)[2:] == []
 
 
-def test_can_romanize_reads_lyrembeds_help(monkeypatch):
-    def help_text(text):
-        return lambda cmd, timeout=10: subprocess.CompletedProcess(cmd, 0, text, "")
-    monkeypatch.setattr(lyrics.proc, "capture", help_text("  --auto ...\n  --romanize  in --auto mode ..."))
-    assert lyrics.can_romanize("lyrembed")
-    monkeypatch.setattr(lyrics.proc, "capture", help_text("  --auto ...\n  --dry-run ..."))  # lyrembed 1.0.0
-    assert not lyrics.can_romanize("lyrembed")
+def _answers(by_flag):
+    """A fake proc.capture that answers lyrembed's --version and --help."""
+    def capture(cmd, timeout=10):
+        text = by_flag.get(cmd[-1])
+        return None if text is None else subprocess.CompletedProcess(cmd, 0, text, "")
+    return capture
 
 
-def test_opens_page_reads_lyrembeds_version(monkeypatch):
-    def version(text):
-        return lambda cmd, timeout=10: subprocess.CompletedProcess(cmd, 0, text, "")
-    for text, page in (("lyrembed 2.0.0\n", True), ("lyrembed 12.1.0", True), ("lyrembed 1.1.3\n", False), ("", False)):
-        monkeypatch.setattr(lyrics.proc, "capture", version(text))
-        assert lyrics.opens_page("lyrembed") is page, text
-    monkeypatch.setattr(lyrics.proc, "capture", lambda cmd, timeout=10: None)   # does not start
-    assert not lyrics.opens_page("lyrembed")
+def test_probe_reads_lyrembeds_version_and_help(monkeypatch):
+    calls = []
+    for version, page in (("lyrembed 2.0.0\n", True), ("lyrembed 12.1.0", True), ("lyrembed 1.1.3\n", False),
+                          ("", False), (None, False)):   # None: does not start
+        fake = _answers({"--version": version, "--help": "  --auto ...\n  --romanize  in --auto mode ..."})
+        monkeypatch.setattr(lyrics.proc, "capture", lambda cmd, timeout=10: calls.append(cmd[-1]) or fake(cmd))
+        assert lyrics.probe("lyrembed") == lyrics.Features(page=page, romanize=True), version
+    assert calls.count("--help") == 5 and calls.count("--version") == 5   # one start each
+    monkeypatch.setattr(lyrics.proc, "capture", _answers({"--version": "lyrembed 1.0.0", "--help": "  --dry-run ..."}))
+    assert lyrics.probe("lyrembed") == lyrics.Features()
 
 
 @pytest.mark.parametrize("page", [True, False])
@@ -2261,21 +2260,84 @@ def test_web_questions_wait_for_a_checked_answer():
     assert result == ["Night Lines"]
 
 
-def test_web_cancel_stops_the_flow_like_ctrl_c():
+def test_web_stop_ends_the_open_question_and_every_later_one():
     front = web.WebFront()
     caught = []
 
     def flow():
-        try:
-            front.confirm("Delete this folder?", default=False)
-        except KeyboardInterrupt as exc:
-            caught.append(exc)
+        for _ in range(2):                                 # the flow's next question after a failed step
+            try:
+                front.confirm("Delete this folder?", default=False)
+            except KeyboardInterrupt as exc:
+                caught.append(exc)
     thread, _ = _in_thread(flow)
     _wait_for_question(front)
-    assert front.cancel()
+    assert front.stop()
     thread.join(2)
-    assert caught and isinstance(caught[0], web.Cancelled)
-    assert not front.cancel()                              # nothing open any more
+    assert len(caught) == 2 and all(isinstance(exc, web.Cancelled) for exc in caught)
+    assert not front.stop()                               # nothing open any more
+
+
+def test_waiting_for_a_disc_on_the_page_ends_on_stop(monkeypatch):
+    monkeypatch.setattr(app.disc, "find_drives", lambda: [])
+    front = web.WebFront()
+    ui.use(front)
+    try:
+        thread, result = _in_thread(lambda: app.wait_for_disc(""))
+        time.sleep(0.05)
+        stopped = time.monotonic()
+        front.stop()                                      # the page's "Stop cdimport"
+        thread.join(2)
+        assert result == [None] and time.monotonic() - stopped < 1   # not after the next poll
+    finally:
+        ui.use(None)
+
+
+def test_after_ctrl_c_on_the_page_the_tool_gets_no_second_one(monkeypatch, tmp_path):
+    sent = []
+    monkeypatch.setattr(web.proc, "interrupt_tool", lambda: sent.append("SIGINT") or True)
+    run = web.Run(app.new_session(default_cfg(), app.Options(), tmp_path / "config.json"))
+    run.stop(interrupt_tool=False)                        # the terminal's Ctrl+C reached it already
+    assert sent == []
+    with pytest.raises(web.Cancelled):
+        run.front.confirm("Rip again?")                   # after the tool: the flow ends, nobody asks
+    run.stop()
+    assert sent == ["SIGINT"]
+
+
+def test_terminal_interrupts_tools_only_in_the_foreground(monkeypatch):
+    class Terminal:
+        def fileno(self):
+            return 0
+    monkeypatch.setattr(sys, "stdin", Terminal())
+    monkeypatch.setattr(proc.os, "tcgetpgrp", lambda fd: proc.os.getpgrp())
+    assert proc.terminal_interrupts_tools()
+    monkeypatch.setattr(proc.os, "tcgetpgrp", lambda fd: proc.os.getpgrp() + 1)   # in the background
+    assert not proc.terminal_interrupts_tools()
+
+    def no_terminal(fd):
+        raise OSError(25, "Inappropriate ioctl for device")
+    monkeypatch.setattr(proc.os, "tcgetpgrp", no_terminal)
+    assert not proc.terminal_interrupts_tools()
+
+
+def test_a_line_break_split_between_reads_keeps_the_line():
+    front = web.WebFront()
+    front.message("tool_start", "lyrembed DIR --no-browser", name="lyrembed", handoff=True)
+    front.tool_output(b"lyrembed is running at http://127.0.0.1:43851/?token=abc\r")   # the pty's \r\n, cut
+    front.tool_output(b"\nOpen that address\r\n")
+    tool = front.events[0]
+    assert tool["lines"] == ["lyrembed is running at http://127.0.0.1:43851/?token=abc", "Open that address"]
+    assert [e["url"] for e in front.events if e["kind"] == "handoff"] == ["http://127.0.0.1:43851/?token=abc"]
+
+
+def test_the_state_sent_is_a_copy():
+    front = web.WebFront()
+    front.message("tool_start", "ripping", name="cyanrip")
+    front.tool_output(b"Track 1\n")
+    sent = front.snapshot(0)
+    front.tool_output(b"Track 2\nprogress 5%")                  # the flow goes on while it is sent
+    assert sent["events"][0]["lines"] == ["Track 1"] and sent["events"][0]["partial"] == ""
 
 
 def test_web_tool_output_keeps_lines_and_the_newest_progress():
@@ -2563,12 +2625,11 @@ def test_lyrembed_is_told_where_its_page_leads_back(tmp_path, monkeypatch):
     assert cmd[2:] == ["--no-browser", "--return-url", "http://127.0.0.1:41877/", "--return-name", "cdimport"]
     assert lyrics.lyrembed_command("lyrembed", cfg, tmp_path, "auto", None, "http://127.0.0.1:1/")[2:] == ["--auto"]
 
-    def help_text(text):
-        return lambda cmd, timeout=10: subprocess.CompletedProcess(cmd, 0, text, "")
-    monkeypatch.setattr(lyrics.proc, "capture", help_text("  --no-browser\n  --return-url URL  a 'Done' button ..."))
-    assert lyrics.can_return("lyrembed")
-    monkeypatch.setattr(lyrics.proc, "capture", help_text("  --no-browser ..."))   # lyrembed 2.0.0
-    assert not lyrics.can_return("lyrembed")
+    help_2_1 = "  --no-browser\n  --return-url URL  a 'Done' button ..."
+    monkeypatch.setattr(lyrics.proc, "capture", _answers({"--version": "lyrembed 2.1.0", "--help": help_2_1}))
+    assert lyrics.probe("lyrembed").return_url
+    monkeypatch.setattr(lyrics.proc, "capture", _answers({"--version": "lyrembed 2.0.0", "--help": "  --no-browser"}))
+    assert not lyrics.probe("lyrembed").return_url
 
 
 def test_the_page_follows_lyrembeds_address_once(monkeypatch):
@@ -2721,3 +2782,81 @@ def test_the_editor_can_go_back_to_the_cover_step(tmp_path, monkeypatch, front):
     web_front.answer(_wait_for_question(web_front)["id"], "cover")
     thread.join(2)
     assert result == [(folder, "cover")]
+
+
+# --- fixes from the review of the page (0.6.2) ---------------------------------
+def test_the_page_never_installs_or_builds_cyanrip(tmp_path, monkeypatch, front):
+    monkeypatch.setattr(install, "choose_route", lambda *a, **k: install.Route("source", "build"))
+    monkeypatch.setattr(install, "install_cyanrip", lambda *a: pytest.fail("installed from the page"))
+    monkeypatch.setattr(install, "build_from_source", lambda *a: pytest.fail("built from the page"))
+    monkeypatch.setattr(install, "remote_info", lambda: REMOTE)
+    cfg = default_cfg()
+    cfg["cyanrip"]["channel"] = "master"
+    session = app.new_session(cfg, app.Options(), tmp_path / "config.json")
+    recorder = front([])                                  # any question fails
+    app.offer_cyanrip_install(session)
+    session.cyanrip = "/usr/bin/cyanrip"
+    app.offer_cyanrip_update(session, install.Installed("0.9.3.1", None))
+    assert recorder.questions == []
+    assert sum("--install-cyanrip in a terminal" in text for _, text, _ in recorder.messages) == 2
+
+
+def test_old_lyrembed_on_the_page_is_not_offered_interactively(tmp_path, monkeypatch, album_dir, front):
+    session = app.new_session(default_cfg(), app.Options(lyrics="interactive"), tmp_path / "config.json")
+    session.lyrembed = "lyrembed"                         # 1.x: terminal menus the page cannot answer
+    modes = []
+    monkeypatch.setattr(app.lyrics, "run_lyrembed",
+                        lambda lyr, cfg, folder, mode, romanize=None, return_url='': modes.append(mode) or 0)
+    album = state.load(album_dir)
+    album.mark("tags")
+    recorder = front(["a"])                               # only the mode; no lyrics found asks nothing more
+    assert app.lyrics_step(session, album)
+    assert modes == ["auto"] and len(recorder.questions) == 1
+    assert [key for key, _ in recorder.questions[0][2]["options"]] == ["a", "s"]
+    assert "lyrics" in state.load(album_dir).done
+
+
+def test_tag_editor_puts_names_back_when_a_rename_fails(tmp_path, monkeypatch):
+    import mutagen.flac
+
+    folder = _ripped_album(tmp_path, titles=("A", "B"))
+    album = tageditor.read_album(folder)
+    album["tracks"][0]["title"], album["tracks"][1]["title"] = "A2", "B2"
+    real_rename = Path.rename
+
+    def rename(self, target):
+        if Path(target).name == "02 - B2.flac":
+            raise PermissionError(13, "Permission denied")
+        return real_rename(self, target)
+    monkeypatch.setattr(Path, "rename", rename)
+    with pytest.raises(tageditor.TagEditError, match="tags are saved.*keep their names"):
+        tageditor.save(folder, album)
+    assert sorted(p.name for p in folder.glob("*.flac")) == ["01 - A.flac", "02 - B.flac"]
+    assert not list(folder.glob(".cdimport-rename-*"))
+    assert mutagen.flac.FLAC(folder / "01 - A.flac")["title"] == ["A2"]
+
+
+def test_tag_editor_refuses_a_name_too_long_before_writing(tmp_path):
+    import mutagen.flac
+
+    folder = _ripped_album(tmp_path, titles=("A", "B"))
+    album = tageditor.read_album(folder)
+    album["tracks"][0]["title"] = "가" * 90               # 270 bytes in UTF-8
+    assert "too long" in tageditor.plan(folder, album)["problem"]
+    with pytest.raises(tageditor.TagEditError, match="too long"):
+        tageditor.save(folder, album)
+    assert mutagen.flac.FLAC(folder / "01 - A.flac")["title"] == ["A"]
+
+
+def test_a_later_run_without_an_album_keeps_the_finished_one(tmp_path, monkeypatch, album_dir):
+    album = state.load(album_dir)
+    found = [album, None]
+    for name in ("ask_missing_folders", "check_tools", "offer_staging_cleanup", "offer_resume"):
+        monkeypatch.setattr(app, name, lambda session: None)
+    monkeypatch.setattr(app, "disc_and_rip", lambda session: found.pop(0))
+    monkeypatch.setattr(app, "continue_album", lambda session, album: None)
+    monkeypatch.setattr(app, "summary", lambda session, album: None)
+    monkeypatch.setattr(app.ui, "confirm", lambda prompt, default=True: True)   # start another run
+    session = app.new_session(default_cfg(), app.Options(), tmp_path / "config.json")
+    assert app.run(session) == 0
+    assert session.album is None and session.last_album is album   # what serve's finished line names

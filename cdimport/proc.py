@@ -54,6 +54,21 @@ def interrupt_tool() -> bool:
     return True
 
 
+def terminal_interrupts_tools() -> bool:
+    """Whether a Ctrl+C in cdimport's terminal also reaches the tools.
+
+    They run in cdimport's process group, which gets the terminal's SIGINT
+    when it is in the foreground. Sending them another one would be a
+    second Ctrl+C, on which cyanrip quits without finishing its log.
+    """
+    if sys.platform == "win32":  # pragma: no cover - platform dependent
+        return True
+    try:
+        return os.tcgetpgrp(sys.stdin.fileno()) == os.getpgrp()
+    except (OSError, ValueError):  # no terminal: the SIGINT came from elsewhere
+        return False
+
+
 def run(cmd: list[str], cwd: Path | None = None) -> int:
     """Run a tool attached to the terminal and return its exit code.
 

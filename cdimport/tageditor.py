@@ -15,10 +15,11 @@ FILE lines follow; the rip log is never changed, its checksum would fail.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from pathlib import Path
 
-from . import tags
+from . import cover as cover_module, tags
 
 # cyanrip's default sanitation (src/naming.c, crip_char_replacement, with
 # CRIP_SANITIZE_UNICODE from cyanrip_main.c): look-alikes, and straight
@@ -35,6 +36,7 @@ _OWN_FIELDS = {"title", "artist", "artists", "album", "albumartists", "date", "g
                "tracknumber", "discnumber", *ALBUM_ARTIST_KEYS}
 _LYRICS_KEYS = {"lyrics", "unsyncedlyrics", "syncedlyrics"}
 FRONT_COVER = 3  # FLAC picture type
+NAME_MAX = 255  # bytes in a file name, on Linux file systems
 
 
 class TagEditError(Exception):
@@ -172,11 +174,10 @@ def cover(folder: Path, name: str) -> tuple[bytes, str]:
     if path is None:
         raise TagEditError("No such track in the album.")
     data = _picture(_open(path))
-    if data.startswith(b"\xff\xd8\xff"):
-        return data, "image/jpeg"
-    if data.startswith(b"\x89PNG\r\n\x1a\n"):
-        return data, "image/png"
-    raise TagEditError("The track has no cover the page can show.")
+    try:
+        return data, cover_module.image_type(data)[0]
+    except cover_module.CoverError as exc:
+        raise TagEditError("The track has no cover the page can show.") from exc
 
 
 # --- checking and planning an edit -----------------------------------------------
@@ -272,6 +273,14 @@ def _renames(folder: Path, current: dict, edit: dict) -> tuple[list[dict], str |
     return files, folder_name
 
 
+def _too_long(files: list[dict], folder_name: str | None) -> None:
+    """Raise for a new name the file system cannot hold (255 bytes on
+    Linux), before anything is written."""
+    for name in [f["newFile"] for f in files if f["newFile"]] + ([folder_name] if folder_name else []):
+        if len(os.fsencode(name)) > NAME_MAX:
+            raise TagEditError(f"'{name[:40]}…' is too long for a file name; shorten the title or album.")
+
+
 def plan(folder: Path, edit: dict) -> dict:
     """The renames a save would make, for the editor to show while typing.
     An edit that cannot be saved yet still gets a plan, with its problem."""
@@ -280,6 +289,10 @@ def plan(folder: Path, edit: dict) -> dict:
     except TagEditError as exc:
         return {"problem": str(exc), "files": [], "folderName": None}
     files, folder_name = _renames(folder, current, clean)
+    try:
+        _too_long(files, folder_name)
+    except TagEditError as exc:
+        return {"problem": str(exc), "files": files, "folderName": folder_name}
     return {"problem": "", "files": files, "folderName": folder_name}
 
 
@@ -295,10 +308,12 @@ def save(folder: Path, edit: dict) -> dict:
     """Write the changed tags, then rename what follows them.
 
     Every rename is checked before anything is written, so an edit is saved
-    whole or not at all (a file that cannot be written is the exception;
-    the error names it)."""
+    whole or not at all. The exceptions: a file that cannot be written (the
+    error names it), and a rename the system refuses anyway, which is put
+    back, so the tags are saved and the names stay as they were."""
     current, clean = _checked(folder, edit)
     files, folder_name = _renames(folder, current, clean)
+    _too_long(files, folder_name)
     targets = [f["newFile"] for f in files if f["newFile"] and f["newFile"] != f["file"]]
     if len(set(targets)) != len(targets):
         raise TagEditError("Two tracks would get the same file name; give them different titles.")
@@ -359,27 +374,39 @@ def save(folder: Path, edit: dict) -> dict:
             changed += 1
 
     # Through temporary names first: two tracks that swap titles would
-    # otherwise overwrite each other's file.
+    # otherwise overwrite each other's file. A rename that fails anyway
+    # (permissions) puts the names back: tags written, names as before.
     moving = [e for e in files if e["newFile"] and e["newFile"] != e["file"]]
-    for i, entry in enumerate(moving):
-        (folder / entry["file"]).rename(folder / f".cdimport-rename-{i}{Path(entry['file']).suffix}")
-    renamed = []
-    for i, entry in enumerate(moving):
-        (folder / f".cdimport-rename-{i}{Path(entry['file']).suffix}").rename(folder / entry["newFile"])
-        renamed.append([entry["file"], entry["newFile"]])
+    done: list[tuple[Path, Path]] = []
+    try:
+        for i, entry in enumerate(moving):
+            _move(folder / entry["file"], folder / f".cdimport-rename-{i}{Path(entry['file']).suffix}", done)
+        for i, entry in enumerate(moving):
+            _move(folder / f".cdimport-rename-{i}{Path(entry['file']).suffix}", folder / entry["newFile"], done)
+    except OSError as exc:
+        stuck = _undo(done)
+        raise TagEditError(f"The tags are saved, but renaming the files failed ({exc}); "
+                           f"they keep their names.{stuck}") from exc
+    renamed = [[entry["file"], entry["newFile"]] for entry in moving]
     if renamed:
         _follow_in_cue_sheets(folder, dict(renamed))
     folder_renamed = []
     if new_folder != folder:
         old_prefix, new_prefix = cyanrip_name(current["album"]), cyanrip_name(clean["album"])
-        for side in sorted(folder.iterdir()):
-            # cyanrip names them "{album}" and "{album} CD{disc}" (-L, -M).
-            if side.suffix.lower() in (".cue", ".log") and side.stem.startswith(old_prefix):
-                target = folder / (new_prefix + side.name[len(old_prefix):])
-                if not target.exists():
-                    side.rename(target)
-                    folder_renamed.append([side.name, target.name])
-        folder.rename(new_folder)
+        done = []
+        try:
+            for side in sorted(folder.iterdir()):
+                # cyanrip names them "{album}" and "{album} CD{disc}" (-L, -M).
+                if side.suffix.lower() in (".cue", ".log") and side.stem.startswith(old_prefix):
+                    target = folder / (new_prefix + side.name[len(old_prefix):])
+                    if not target.exists():
+                        _move(side, target, done)
+                        folder_renamed.append([side.name, target.name])
+            _move(folder, new_folder, done)
+        except OSError as exc:
+            stuck = _undo(done)
+            raise TagEditError(f"The tags are saved{' and the tracks renamed' if renamed else ''}, "
+                               f"but renaming the folder failed ({exc}); it keeps its name.{stuck}") from exc
     return {
         "folder": str(new_folder),
         "changed": changed,
@@ -387,6 +414,23 @@ def save(folder: Path, edit: dict) -> dict:
         "folderRenamed": new_folder != folder,
         "kept": [f["file"] for f in files if f["kept"]],
     }
+
+
+def _move(source: Path, target: Path, done: list[tuple[Path, Path]]) -> None:
+    source.rename(target)
+    done.append((source, target))
+
+
+def _undo(done: list[tuple[Path, Path]]) -> str:
+    """Put renamed files back, newest first; what stayed under the new name,
+    for the error message, or ""."""
+    stuck = []
+    for source, target in reversed(done):
+        try:
+            target.rename(source)
+        except OSError:
+            stuck.append(target.name)
+    return f" These could not be renamed back: {', '.join(stuck)}." if stuck else ""
 
 
 def _follow_in_cue_sheets(folder: Path, renamed: dict[str, str]) -> None:
@@ -403,4 +447,8 @@ def _follow_in_cue_sheets(folder: Path, renamed: dict[str, str]) -> None:
                 ending = line[len(line.rstrip("\r\n")):]
                 line = match.group(1) + renamed[match.group(2)] + match.group(3) + ending
             lines.append(line)
-        sheet.write_text("".join(lines), encoding="utf-8")
+        try:
+            sheet.write_text("".join(lines), encoding="utf-8")
+        except OSError as exc:
+            raise TagEditError(f"The tags are saved and the tracks renamed, but {sheet.name} could not be "
+                               f"updated ({exc}); its FILE lines still name the old files.") from exc

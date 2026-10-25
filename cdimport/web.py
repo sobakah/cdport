@@ -11,6 +11,7 @@ lyrembed).
 from __future__ import annotations
 
 import codecs
+import copy
 import hmac
 import json
 import logging
@@ -101,6 +102,9 @@ class WebFront(ui.Front):
         self._redrawn = ""  # the newest state of a line a progress display redraws with \r
         self.finished: int | None = None
         self._handoff_end: float | None = None
+        # Set by stop(): every question from then on, and a pause, ends the
+        # flow, so it stops after a tool it let finish instead of asking on.
+        self._stopping = False
 
     # recording
     def _bump(self, event: dict) -> None:
@@ -121,7 +125,7 @@ class WebFront(ui.Front):
             elif kind == "tool_end":
                 tool = self._tool
                 if tool is not None:
-                    last = _ANSI.sub("", self._pending or self._redrawn).rstrip()
+                    last = _ANSI.sub("", self._pending.rstrip("\r") or self._redrawn).rstrip()
                     if last:
                         tool["lines"].append(last)
                     tool.update({"running": False, "code": details.get("code"), "partial": ""})
@@ -142,6 +146,11 @@ class WebFront(ui.Front):
                                     "lines": [], "running": True, "code": None})
                 tool = self._tool = self.events[-1]
             text = self._pending + self._decoder.decode(data)
+            # A read can end between the \r and \n of a line break (the
+            # pseudo-terminal turns every \n into \r\n): a trailing \r waits
+            # for the next output, or the line would count as redrawn.
+            held = "\r" if text.endswith("\r") else ""
+            text = text[:-1] if held else text
             parts = _LINE_BREAK.split(text)
             separators = _LINE_BREAK.findall(text)
             lines = tool["lines"]
@@ -159,14 +168,16 @@ class WebFront(ui.Front):
                         self.events.append({"id": len(self.events), "kind": "handoff", "text": "",
                                             "name": tool.get("name", ""), "url": found.group(1), "tool": tool["id"]})
                         self._bump(self.events[-1])
-            self._pending = parts[-1]
-            tool["partial"] = _ANSI.sub("", self._pending or self._redrawn).rstrip()
+            tool["partial"] = _ANSI.sub("", parts[-1] or self._redrawn).rstrip()
+            self._pending = parts[-1] + held
             del lines[:-TOOL_LINES]
             self._bump(tool)
 
     # questions
     def _ask(self, kind: str, prompt: str, **details: object) -> object:
         with self._cond:
+            if self._stopping:
+                raise Cancelled()
             self._next_question += 1
             qid = self._next_question
             self.question = {"id": qid, "kind": kind, "prompt": prompt, **details}
@@ -211,14 +222,23 @@ class WebFront(ui.Front):
             self._answers[qid] = value
             self._cond.notify_all()
 
-    def cancel(self) -> bool:
-        """Stop the flow at the open question; False when none is open."""
+    def stop(self) -> bool:
+        """Stop the flow: at the open question or pause at once, else at the
+        next one. False when no question was open."""
         with self._cond:
+            self._stopping = True
+            self._cond.notify_all()
             if self.question is None:
                 return False
             self._answers[self.question["id"]] = Cancelled()
-            self._cond.notify_all()
             return True
+
+    def pause(self, seconds: float) -> None:
+        with self._cond:
+            if not self._stopping:
+                self._cond.wait_for(lambda: self._stopping, timeout=seconds)
+            if self._stopping:
+                raise Cancelled()
 
     def finish(self, code: int) -> None:
         with self._cond:
@@ -319,14 +339,16 @@ class WebFront(ui.Front):
         return self._handoff_end is not None and time.monotonic() - self._handoff_end < HANDOFF_GRACE
 
     def snapshot(self, since: int) -> dict:
+        """What is newer than *since*, copied: the flow thread keeps changing
+        a tool's event while the answer is turned into JSON."""
         with self._cond:
-            return {
+            return copy.deepcopy({
                 "rev": self._rev,
                 "events": [e for e in self.events if e["rev"] > since],
                 "question": self.question,
                 "toolRunning": self.tool_running,
                 "finished": self.finished,
-            }
+            })
 
     def wait_for_change(self, since: int, timeout: float) -> None:
         """Return once something newer than *since* exists, or after *timeout*:
@@ -389,10 +411,11 @@ class Run:
         finally:
             self.front.finish(code)
 
-    def stop(self) -> None:
+    def stop(self, interrupt_tool: bool = True) -> None:
         """End the run: at an open question at once, a running tool first
-        gets Ctrl+C."""
-        if not self.front.cancel():
+        gets Ctrl+C (unless it already has: *interrupt_tool* False). The flow
+        ends at its next question."""
+        if not self.front.stop() and interrupt_tool:
             proc.interrupt_tool()
 
 
@@ -641,7 +664,9 @@ def serve(session: app.Session, open_browser: bool = True, port: int = 0,
                     run.stop()
     except KeyboardInterrupt:
         if run.started:
-            run.stop()
+            # A running tool already got the terminal's Ctrl+C; the flow
+            # ends at its next question once the tool has finished.
+            run.stop(interrupt_tool=not proc.terminal_interrupts_tools())
             run.thread.join(timeout=120)
     finally:
         server.shutdown()
@@ -649,7 +674,7 @@ def serve(session: app.Session, open_browser: bool = True, port: int = 0,
         ui.use(None)
     if run.started:
         run.thread.join(timeout=120)
-    album = session.album
+    album = session.last_album
     if album is not None and album.folder.is_dir():
         _say(FINISHED_LINE.format(folder=album.folder))
     code = run.front.finished

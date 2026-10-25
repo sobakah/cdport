@@ -13,6 +13,7 @@ import glob
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 # The stdlib module is POSIX-only; on Windows pyreadline3 may stand in, else
@@ -74,6 +75,12 @@ class Front:
     def wait_for_enter(self, prompt: str) -> None:
         raise NotImplementedError
 
+    def pause(self, seconds: float) -> None:
+        """Wait while nothing is asked (polling for a disc). Raises
+        KeyboardInterrupt when the front end stops meanwhile, as Ctrl+C
+        does in the terminal."""
+        time.sleep(seconds)
+
     def supports(self, feature: str) -> bool:
         """Whether this front end has *feature* ("tag_editor") of its own."""
         return False
@@ -106,6 +113,14 @@ def tool_output(data: bytes) -> None:
         return
     sys.stdout.buffer.write(data)
     sys.stdout.flush()
+
+
+def pause(seconds: float) -> None:
+    """Wait *seconds*; a front end can end it with KeyboardInterrupt."""
+    if _front is not None:
+        _front.pause(seconds)
+        return
+    time.sleep(seconds)
 
 
 def supports(feature: str) -> bool:
