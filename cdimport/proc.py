@@ -111,7 +111,8 @@ def _let_finish(proc: subprocess.Popen) -> None:
             proc.wait()
 
 
-_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+# Colours and cursor moves (CSI), and links and titles (OSC, ended by BEL or ST).
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 
 
 def last_lines(output: bytes, count: int = 3) -> list[str]:
@@ -119,7 +120,7 @@ def last_lines(output: bytes, count: int = 3) -> list[str]:
 
     Progress displays redraw one line with \\r, so \\r ends a line too.
     """
-    text = _ANSI_ESCAPE.sub("", output.decode(errors="replace"))
+    text = ANSI_ESCAPE.sub("", output.decode(errors="replace"))
     lines = [line.strip() for line in re.split(r"\r\n|\r|\n", text)]
     return [line for line in lines if line][-count:]
 
@@ -264,6 +265,11 @@ class Launched:
         self.stderr_file.seek(0)
         text = self.stderr_file.read().decode(errors="replace").strip()
         return text or f"exited with code {code}"
+
+    def close(self) -> None:
+        """Done checking: close cdimport's end of the error output (the
+        program keeps writing to its own)."""
+        self.stderr_file.close()
 
 
 def launch(cmd: list[str], settle_seconds: float = 2.0) -> Launched:

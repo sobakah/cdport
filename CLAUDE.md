@@ -54,6 +54,10 @@ cover (with a way back to the cover step); the page scrolls like a terminal.
 0.6.2 (2026-10-25): fixes from a code review of the page: stopping (disc
 wait, Ctrl+C during a rip), no install or lyrembed 1.x menus on the page,
 lyrembed's address split over two reads, tag-editor renames put back.
+0.6.3 (2026-10-26): fixes from a second outside review (Gemini), each
+checked first: page closed before its first request, merge leftovers, the
+rip lock taken before the folder exists, the tag editor's folder followed
+at each save, case-only renames, the track range kept without MusicBrainz.
 
 Layout: `cdimport/` package (`app.py` runs the steps, one module per step:
 `disc`, `rip`, `tags`, `lyrics`, `library`; `state`, `tools`, `proc`,
@@ -99,7 +103,9 @@ regenerate it (see `config.write_example`); a test fails until then.
   the album.
 - **A running rip is locked** (`<staging>.lock`, flock): another cdimport
   must not offer to delete it as an interrupted rip. Found 2026-10-11 when
-  a test run did exactly that while the maintainer was ripping.
+  a test run did exactly that while the maintainer was ripping. The lock is taken
+  before the folder exists (`rip.staging_dir`), and `rip.in_use` opens it
+  read-only, so checking never creates a lock file again (2026-10-26).
 - **A drive in use is locked too** (`disc.hold`, flock on
   `$XDG_RUNTIME_DIR/cdimport/drive-<sr0>.lock`, held from the disc preview
   to the end of the rip). Another cdimport skips that drive, also for the
@@ -385,7 +391,9 @@ A front end that wants live tool progress keeps the pseudo-terminal
 - Pictures: `ui.choose(..., info={"images": {key: {"url"|"file": ...}}})`
   gives an option a picture; the terminal ignores `info`. `WebFront`
   registers each source under a random id, and `/api/image/<id>` serves only
-  those, so the page cannot make cdimport fetch arbitrary addresses. Only
+  those, so the page cannot make cdimport fetch arbitrary addresses. A file
+  (the cover preview, deleted after its question and rewritten under the
+  same name) is read when registered, under a new id each time. Only
   JPEG and PNG are served (`cover.image_type`), and downloads are cached.
   Release thumbnails come from `cover.release_thumbnail` (Cover Art Archive,
   404 when there is none).
@@ -401,7 +409,9 @@ A front end that wants live tool progress keeps the pseudo-terminal
   but never add new keys; lyrics tags are lyrembed's and only noted. The
   embedded front cover (picture type 3, else the first) is shown once when
   every track has the same, else per track, via `/api/tags/cover` (JPEG and
-  PNG only). Changing a track number does not rename the file. Several artists follow Picard: `ARTIST` is the credit,
+  PNG only). A save that renames the folder calls `edit_tags`'s `moved`
+  at once, so the flow knows the folder even if it is stopped before
+  Continue. Changing a track number does not rename the file. Several artists follow Picard: `ARTIST` is the credit,
   `ARTISTS` holds the names; the same for `ALBUMARTIST`/`ALBUMARTISTS`.
   cyanrip writes the credit only. Names follow the tags only where cyanrip
   built them (`{track} - {title}`, `{album}...`, its default "unicode"

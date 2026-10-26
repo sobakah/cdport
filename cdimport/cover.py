@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -31,6 +32,7 @@ FRONT_COVER = 3  # FLAC picture type
 # MusicBrainz allows one request per second per client.
 MB_INTERVAL_SECONDS = 1.1
 _last_mb_request = 0.0
+_mb_lock = threading.Lock()
 # MusicBrainz answers 503 when it is busy or a client is too fast; it asks
 # clients to back off and retry.
 MB_RETRIES = 2
@@ -52,16 +54,23 @@ class Candidate:
     page: str  # the full image, for the user to look at
 
 
+def _wait_for_musicbrainz() -> None:
+    """At most one request per second, also from several threads (the page
+    serves each request in a thread of its own)."""
+    global _last_mb_request
+    with _mb_lock:
+        wait = _last_mb_request + MB_INTERVAL_SECONDS - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        _last_mb_request = time.monotonic()
+
+
 def http_get(url: str, timeout: float = 20) -> bytes:
     """The only network access in this module; tests replace it."""
-    global _last_mb_request
     musicbrainz = url.startswith(MB_URL)
     for attempt in range(MB_RETRIES + 1 if musicbrainz else 1):
         if musicbrainz:
-            wait = _last_mb_request + MB_INTERVAL_SECONDS - time.monotonic()
-            if wait > 0:
-                time.sleep(wait)
-            _last_mb_request = time.monotonic()
+            _wait_for_musicbrainz()
         request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:

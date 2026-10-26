@@ -427,6 +427,10 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
     mode = session.options.rip_mode or session.cfg["cyanrip"]["mode"]
     shown: rip.Preview | None = None
     refresh = False
+    # What the first preview learned about the disc itself: a preview with
+    # -N (no MusicBrainz) prints no submission link, which holds the tracks.
+    disc_tracks: tuple[int, int] | None = None
+    submission_url = ""
     while True:
         if shown is None or refresh:  # the first time, and after another release or tags
             refresh = False
@@ -434,14 +438,17 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
             shown = rip.preview(session.cyanrip, session.cfg, device=device, release=release,
                                 no_musicbrainz=no_mb, tags=typed)
             ui.tool_end("cyanrip", shown.code)
+            disc_tracks = shown.tracks or disc_tracks
+            if shown.disc_unknown and shown.submission_url:
+                submission_url = shown.submission_url
         if shown.needs_tags:
             ui.warn("MusicBrainz does not know this disc, and cyanrip does not rip it without tags.")
         elif shown.releases:
             ui.warn("Several MusicBrainz releases have this disc; pick one to see its tags.")
         elif shown.code != 0:
             ui.warn(f"cyanrip -I exited with code {shown.code}:{rip.explain(shown.tail) or ' see above.'}")
-        if shown.disc_unknown and shown.submission_url and not no_mb:
-            explain_submission(shown.submission_url)
+        if submission_url and not no_mb:
+            explain_submission(submission_url)
         ui.dim(f"Rip settings: {describe_rip_settings(session.cfg, mode)}")
         options = [(str(i), f"{label}\n      {musicbrainz.release_page(mbid)}")
                    for i, (mbid, label) in enumerate(shown.releases, 1)]
@@ -469,7 +476,7 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
             release, no_mb = shown.releases[int(answer) - 1][0], False
             continue
         if answer == "s":
-            found = search_release(typed, shown.tracks)
+            found = search_release(typed, disc_tracks)
             if found:
                 release, no_mb = found, False
             continue
@@ -483,7 +490,7 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
                     ui.warn("That is neither a list number nor a MusicBrainz release ID or link.")
             continue
         if answer == "t":
-            typed = ask_tags(typed, shown.tracks)
+            typed = ask_tags(typed, disc_tracks)
             continue
         if answer == "n":
             no_mb = True
@@ -528,8 +535,8 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
         if fast:
             check_fast_rip(session, folder, device, release=release, no_mb=no_mb, typed=typed)
         session.forget_one_time_offset()
-        if shown.disc_unknown and shown.submission_url:
-            ui.info(f"To add this disc to MusicBrainz later: {shown.submission_url}")
+        if submission_url:
+            ui.info(f"To add this disc to MusicBrainz later: {submission_url}")
         return album
 
 
@@ -804,8 +811,12 @@ def tags_step(session: Session, album: AlbumState) -> bool:
             raise Quit(0)
         if answer == "w":
             # The folder follows a changed album name; the state file is in it.
+            # Each save that renames it tells at once: the run may be stopped
+            # before the editor returns, and its resume hint needs the folder.
+            def follow(folder: Path) -> None:
+                album.folder = folder
             while True:
-                album.folder, then = ui.edit_tags(album.folder)
+                album.folder, then = ui.edit_tags(album.folder, moved=follow)
                 if then != "cover":
                     break
                 # Back to the cover step from the editor, then into it again.
@@ -840,17 +851,20 @@ def run_editor(editor: tools.Editor, folder: Path) -> bool:
     except OSError as exc:
         ui.error(f"Cannot start {editor.name}: {exc}")
         return False
-    problem = launched.failure()
-    if problem:
-        ui.error(f"{editor.name} failed to start:\n{problem}")
-        return False
-    # Single-instance apps return at once, so the process says nothing about
-    # when editing is done; only the user knows.
-    ui.wait_for_enter(f"Edit and save in {editor.name}, then press Enter here")
-    problem = launched.failure()
-    if problem:
-        ui.warn(f"{editor.name} reported an error:\n{problem}")
-    return True
+    try:
+        problem = launched.failure()
+        if problem:
+            ui.error(f"{editor.name} failed to start:\n{problem}")
+            return False
+        # Single-instance apps return at once, so the process says nothing about
+        # when editing is done; only the user knows.
+        ui.wait_for_enter(f"Edit and save in {editor.name}, then press Enter here")
+        problem = launched.failure()
+        if problem:
+            ui.warn(f"{editor.name} reported an error:\n{problem}")
+        return True
+    finally:
+        launched.close()
 
 
 def check_tags(folder: Path) -> bool:
@@ -1100,13 +1114,19 @@ def finish_step(session: Session, album: AlbumState) -> bool:
         try:
             if merge:
                 library.merge_disc(merge, target)
-                album.remove()  # the state file stays behind in the working folder otherwise
-                album.folder.rmdir()
             else:
                 library.move_album(album.folder, target)
         except (library.MoveError, OSError) as exc:
             ui.error(f"Move failed: {exc}")
             continue
+        if merge:
+            # The disc is in the library now; what is left here is not part of it.
+            try:
+                album.remove()  # the state file stays behind in the working folder otherwise
+                album.folder.rmdir()
+            except OSError as exc:
+                ui.warn(f"The working folder {ui.tilde(album.folder)} stayed ({exc.strerror or exc}); "
+                        "the disc's files are in the library.")
         album.folder = target
         album.mark("finish")
         album.remove()

@@ -15,6 +15,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from typing import Callable
 
 # The stdlib module is POSIX-only; on Windows pyreadline3 may stand in, else
 # prompts work without prefill and completion.
@@ -85,10 +86,12 @@ class Front:
         """Whether this front end has *feature* ("tag_editor") of its own."""
         return False
 
-    def edit_tags(self, folder: Path) -> tuple[Path, str]:
+    def edit_tags(self, folder: Path, moved: Callable[[Path], None] | None = None) -> tuple[Path, str]:
         """Let the user edit the album's tags; returns the album's folder,
         which follows a changed album name, and what next: "done", or
-        "cover" to change the cover first and come back."""
+        "cover" to change the cover first and come back. *moved* gets the
+        new folder at once on each save that renames it: the flow may be
+        stopped before the editor returns."""
         raise NotImplementedError
 
 
@@ -128,11 +131,11 @@ def supports(feature: str) -> bool:
     return _front is not None and _front.supports(feature)
 
 
-def edit_tags(folder: Path) -> tuple[Path, str]:
+def edit_tags(folder: Path, moved: Callable[[Path], None] | None = None) -> tuple[Path, str]:
     """The front end's own tag editor; only call it when supports("tag_editor")."""
     if _front is None:
         raise RuntimeError("the terminal has no tag editor of its own")
-    return _front.edit_tags(folder)
+    return _front.edit_tags(folder, moved)
 
 
 def wants_pty() -> bool:

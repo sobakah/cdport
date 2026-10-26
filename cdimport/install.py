@@ -396,13 +396,26 @@ class UpdateOffer:
     daily: bool      # a news item, shown at most once a day
 
 
+# Pre-release markers, oldest first; they sort below the release itself.
+_PRE_RELEASES = ("dev", "alpha", "beta", "pre", "rc")
+_PRE_RELEASE = re.compile(r"[-._~]?(" + "|".join(_PRE_RELEASES) + r")\.?(\d*)")
+
+
 def version_key(version: str) -> tuple:
-    """Sort key: 0.9.3.1 < 0.9.4-rc3 < 0.9.4."""
+    """Sort key: 0.9.3.1 < 0.9.4-rc1 < 0.9.4-rc3 < 0.9.4.
+
+    Only a pre-release marker ranks below the release. Any other suffix (a
+    packager's "-1" or "+dfsg") counts as the release, so it never makes a
+    release of the same number look newer than what is installed.
+    """
     match = re.match(r"(\d+(?:\.\d+)*)(.*)", version)
     if not match:
-        return ((), 0)
+        return ((), 0, ())
     numbers = tuple(int(n) for n in match.group(1).split("."))
-    return (numbers, 0 if match.group(2) else 1)
+    pre = _PRE_RELEASE.match(match.group(2).lower())
+    if pre:
+        return (numbers, 0, (_PRE_RELEASES.index(pre.group(1)), int(pre.group(2) or 0)))
+    return (numbers, 1, ())
 
 
 def installed_version(cyanrip: str) -> Installed | None:

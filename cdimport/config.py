@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-__version__ = "0.6.2"
+__version__ = "0.6.3"
 
 # File names cdimport owns inside the working folder and album folders.
 STATE_FILE_NAME = ".cdimport.json"
@@ -159,6 +159,8 @@ EXAMPLE_ABOUT = [
 
 # Settings whose default is None but which accept a value of this type.
 _NULLABLE: dict[tuple[str, ...], type] = {("cyanrip", "offset"): int}
+# What an entry in "editors" holds; a user's own editor is checked against it.
+_EDITOR_KEYS = ("name", "commands")
 # bool is a subclass of int in Python, but "offset": true is no offset.
 _NOT_NULLABLE_TYPES = (bool,)
 
@@ -264,13 +266,22 @@ def _merge(base: dict[str, Any], override: dict[str, Any], path: tuple[str, ...]
         if isinstance(current, dict) and isinstance(value, dict):
             _merge(current, value, path + (key,), problems)
             continue
-        if current is None:
+        if path == ("editors",) and current is None:
+            # An editor of the user's own: the same keys as the built-in ones.
+            if not isinstance(value, dict):
+                problems.append(f"'{where}' must be an object with \"name\" and \"commands\"")
+                continue
+            unknown = [k for k in value if not str(k).startswith("_") and k not in _EDITOR_KEYS]
+            if unknown:
+                problems.extend(f"unknown setting '{where}.{k}'" for k in unknown)
+                value = {k: v for k, v in value.items() if k not in unknown}
+        elif current is None:
             expected = _NULLABLE.get(path + (key,))
             if expected and value is not None and (not isinstance(value, expected)
                                                    or isinstance(value, _NOT_NULLABLE_TYPES)):
                 problems.append(f"'{where}' must be {expected.__name__} or null")
                 continue
-        elif type(value) is not type(current) and not (path == ("editors",) and isinstance(value, dict)):
+        elif type(value) is not type(current):
             problems.append(f"'{where}' must be {type(current).__name__}, not {type(value).__name__}")
             continue
         base[key] = copy.deepcopy(value)

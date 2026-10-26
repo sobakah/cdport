@@ -96,7 +96,8 @@ def main(argv: list[str] | None = None) -> int:
         from . import web  # not needed in the terminal
 
         return web.serve(session, open_browser=not args.no_browser,
-                         back=(args.return_url, args.return_name) if args.return_url else None)
+                         back=(args.return_url, args.return_name) if args.return_url else None,
+                         warnings=[f"Warning: {message}" for message in warnings])
     return run_session(session)
 
 

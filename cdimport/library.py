@@ -17,7 +17,8 @@ _UNSAFE = re.compile(r'[\x00/\\:*?"<>|]')
 
 def safe_component(text: str) -> str:
     """Make a tag value usable as one folder name."""
-    cleaned = _UNSAFE.sub("_", text).strip().rstrip(".")
+    # Windows and SMB shares refuse names that end in a dot or a space.
+    cleaned = _UNSAFE.sub("_", text).strip().rstrip(". ")
     return cleaned or "_"
 
 
@@ -149,7 +150,10 @@ def _artists(tracks: list[dict[str, str]]) -> set[str]:
 
 
 def _disc(t: dict[str, str]) -> str:
-    return t.get("discnumber", "").split("/")[0].strip().lstrip("0")
+    """The disc number without leading zeros ("01/2" is "1"); disc 0 (a
+    bonus disc) stays "0", "" means none."""
+    raw = t.get("discnumber", "").split("/")[0].strip()
+    return raw.lstrip("0") or ("0" if raw else "")
 
 
 def _disc_order(disc: str) -> tuple[int, str]:

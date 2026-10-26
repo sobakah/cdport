@@ -760,11 +760,11 @@ def test_ctrl_c_leaves_resumable_state(tmp_path, monkeypatch, album_dir, capsys)
 def test_editor_is_opened_and_tags_rechecked(tmp_path, monkeypatch, album_dir):
     make_flac(album_dir / "02.flac", artist="IU")  # no title
     editor = tools.Editor("eartag", "Ear Tag", ["eartag", "{files}"])
-    launched_with = []
+    launched_with, closed = [], []
 
     def fake_launch(cmd, settle_seconds=2.0):
         launched_with.append(cmd)
-        return SimpleNamespace(failure=lambda: None)
+        return SimpleNamespace(failure=lambda: None, close=lambda: closed.append(True))
     monkeypatch.setattr(app.tags.proc, "launch", fake_launch)
     # Tags: open (default), Enter when done, continue, refuse "continue anyway",
     # continue again and accept; finish: keep.
@@ -772,6 +772,7 @@ def test_editor_is_opened_and_tags_rechecked(tmp_path, monkeypatch, album_dir):
     code = run_cli(tmp_path, monkeypatch, [str(album_dir), "--lyrics", "skip"], editor=editor)
     assert code == 0
     assert launched_with == [["eartag", str(album_dir / "01.flac"), str(album_dir / "02.flac")]]
+    assert closed == [True]                               # its error output is not left open
 
 
 LS_REMOTE = (
@@ -1692,20 +1693,35 @@ def test_music_dir_suggestion_falls_back_to_music():
 # --- a rip running in another cdimport ---------------------------------------
 @pytest.mark.skipif(sys.platform == "win32", reason="the lock uses flock")
 def test_running_rip_is_locked_and_left_alone(tmp_path, monkeypatch, capsys):
-    staging = tmp_path / f"{STAGING_PREFIX}20261011-191037"
-    (staging / "Album").mkdir(parents=True)
-    (staging / "Album" / "01.flac").write_text("x")
     session = offset_session(tmp_path)
     session.work_dir = tmp_path
-    with rip.hold_lock(staging):
+    with rip.staging_dir(tmp_path) as staging:
+        (staging / "Album").mkdir()
+        (staging / "Album" / "01.flac").write_text("x")
         assert rip.in_use(staging)
         feed_input(monkeypatch, [])  # must not even ask
         app.offer_staging_cleanup(session)
         assert "leaving it alone" in capsys.readouterr().out
     assert not rip.lock_path(staging).exists() and rip.in_use(staging) is False
+    assert not rip.lock_path(staging).exists()            # checking did not create it again
     feed_input(monkeypatch, ["n"])  # now it is a leftover: asked, and kept
     app.offer_staging_cleanup(session)
     assert staging.exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the lock uses flock")
+def test_staging_folder_is_locked_before_it_exists(tmp_path, monkeypatch):
+    seen = []
+    real_mkdir = Path.mkdir
+
+    def mkdir(self, *args, **kwargs):
+        if self.name.startswith(STAGING_PREFIX):
+            seen.append(rip.in_use(self))                 # what another cdimport would see
+        return real_mkdir(self, *args, **kwargs)
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+    with rip.staging_dir(tmp_path) as first, rip.staging_dir(tmp_path) as second:
+        assert first != second and first.is_dir() and second.is_dir()   # the same second: another name
+    assert seen == [True, True]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="the lock uses flock")
@@ -2598,7 +2614,7 @@ def test_on_the_page_the_tags_step_offers_its_own_editor_first(tmp_path, monkeyp
         def supports(self, feature):
             return feature == "tag_editor"
 
-        def edit_tags(self, folder):
+        def edit_tags(self, folder, moved=None):
             self.edited = folder
             return folder.parent / "Renamed", "done"
 
@@ -2761,7 +2777,7 @@ def test_the_editor_can_go_back_to_the_cover_step(tmp_path, monkeypatch, front):
         def supports(self, feature):
             return feature == "tag_editor"
 
-        def edit_tags(self, folder):
+        def edit_tags(self, folder, moved=None):
             self.opened = getattr(self, "opened", 0) + 1
             return folder, "cover" if self.opened == 1 else "done"
 
@@ -2860,3 +2876,185 @@ def test_a_later_run_without_an_album_keeps_the_finished_one(tmp_path, monkeypat
     session = app.new_session(default_cfg(), app.Options(), tmp_path / "config.json")
     assert app.run(session) == 0
     assert session.album is None and session.last_album is album   # what serve's finished line names
+
+
+# --- fixes from the second outside review (0.6.3) ------------------------------
+def test_without_musicbrainz_the_disc_keeps_its_tracks_and_link(tmp_path, monkeypatch, capsys):
+    session, previews, ripped = unknown_disc_session(tmp_path, monkeypatch)
+
+    def preview(cyanrip, cfg, **kwargs):
+        previews.append(kwargs)
+        if kwargs["no_musicbrainz"]:                      # -N: no link, so no track range either
+            return rip.parse_preview(0, ["Disc tracks: 6"])
+        return rip.parse_preview(1, UNKNOWN_DISC)
+    monkeypatch.setattr(app.rip, "preview", preview)
+    # No MusicBrainz, then type the tags: six titles without "Number of tracks"; rip.
+    answers = feed_input(monkeypatch, ["n", "t", "Album", "X", "", "1", "2", "3", "4", "5", "6", "r"])
+    assert app.preview_and_rip(session, "/dev/sr0") is not None and answers == []
+    assert ripped[0]["no_musicbrainz"] and len(ripped[0]["tags"].titles) == 6
+    assert f"To add this disc to MusicBrainz later: {UNKNOWN_DISC[2]}" in capsys.readouterr().out
+
+
+def test_a_merge_with_something_left_in_the_working_folder_still_counts(tmp_path, monkeypatch, capsys):
+    library_folder = disc_folder(tmp_path / "lib" / "BTS" / "Young Forever", 1, 2)
+    second = disc_folder(tmp_path / "work" / "Young Forever", 2, 2)
+    (second / "Young Forever CD2.log").write_text("log 2")
+    state.AlbumState(second, done=["rip", "tags", "lyrics"]).save()
+    real_merge = library.merge_disc
+
+    def merge_disc(plan, target):
+        real_merge(plan, target)
+        (second / ".directory").write_text("[Dolphin]")  # a file manager looked meanwhile
+    monkeypatch.setattr(app.library, "merge_disc", merge_disc)
+    session = app.new_session(dict(default_cfg(), library_dir=str(tmp_path / "lib")), app.Options(),
+                              tmp_path / "config.json")
+    session.work_dir, session.library_dir = tmp_path / "work", tmp_path / "lib"
+    album = state.load(second)
+    feed_input(monkeypatch, [""])                          # add the disc; nothing asked again
+    assert app.finish_step(session, album) and album.folder == library_folder
+    assert (library_folder / "2.01 - T1.flac").exists()
+    assert (tmp_path / "work" / "logs" / "Young Forever CD2.log").exists()   # the log still left the library
+    captured = capsys.readouterr()
+    assert "stayed" in captured.out + captured.err and "Move failed" not in captured.out + captured.err
+
+
+def test_disc_zero_and_names_ending_in_dots_and_spaces():
+    assert library._disc({"discnumber": "0"}) == "0" and library._disc({"discnumber": "01/2"}) == "1"
+    assert library._disc({}) == ""
+    assert library.safe_component("Vol. 1 .") == "Vol. 1" and library.safe_component(" . ") == "_"
+
+
+def test_the_page_stops_when_closed_before_the_flow_started(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "run", lambda session: pytest.fail("the flow started"))
+    run = web.Run(app.new_session(default_cfg(), app.Options(), tmp_path / "config.json"))
+    assert run.prevent_start() and not run.started
+    run.start()                                            # the page's first request, too late
+    assert not run.thread.is_alive() and not run.prevent_start()
+    started = web.Run(app.new_session(default_cfg(), app.Options(), tmp_path / "config.json"))
+    started._started.acquire()                             # as start() does
+    assert not started.prevent_start() and started.started
+
+
+def test_a_picture_file_is_read_when_its_question_comes(tmp_path):
+    front = web.WebFront()
+    preview = tmp_path / "cover-preview.png"
+    preview.write_bytes(b"\x89PNG\r\n\x1a\nfirst")
+    first = front._register_image({"file": preview})
+    preview.write_bytes(b"\x89PNG\r\n\x1a\nsecond")       # a changed cover under the same name
+    second = front._register_image({"file": preview})
+    preview.unlink()                                        # deleted after the question
+    assert first != second
+    assert front.image(first) == (b"\x89PNG\r\n\x1a\nfirst", "image/png")
+    assert front.image(second)[0].endswith(b"second")
+    with pytest.raises(web.ApiError) as missing:
+        front.image(front._register_image({"file": tmp_path / "gone.png"}))
+    assert missing.value.status == 502
+
+
+def test_the_page_shows_no_file_link_for_the_cover(tmp_path, monkeypatch, front):
+    shown = tmp_path / "cover-preview.jpg"
+    monkeypatch.setattr(covertool.cover, "preview", lambda flac: shown)
+    recorder = front()
+    assert covertool._show_preview([]) == shown
+    assert not any("file://" in text for _, text, _ in recorder.messages)
+    ui.use(None)
+    assert covertool._show_preview([]) == shown            # the terminal links it
+
+
+def test_the_flow_follows_a_folder_the_tag_editor_renamed(tmp_path):
+    front = web.WebFront()
+    followed = []
+    def edit():
+        try:
+            front.edit_tags(tmp_path / "Old", moved=followed.append)
+        except web.Cancelled:
+            pass                                           # the stop below, as on Ctrl+C
+    thread, _ = _in_thread(edit)
+    _wait_for_question(front)
+    front.moved_tags(tmp_path / "New")                     # a save renamed it; the editor is still open
+    assert followed == [tmp_path / "New"]
+    front.stop()                                           # stopped before Continue
+    thread.join(2)
+    front.moved_tags(tmp_path / "Newer")                   # no editor open: nobody to tell
+    assert followed == [tmp_path / "New"]
+
+
+def test_tag_editor_checks_the_cue_and_log_names_too(tmp_path):
+    import mutagen.flac
+
+    folder = _ripped_album(tmp_path, titles=("A", "B"))
+    long_album = "x" * 238                                 # folder 248 bytes: fits
+    (folder / "Night∶ Lines (secure re-rip).log").write_text("re-rip log")   # 238 + 20 bytes: does not
+    album = tageditor.read_album(folder)
+    album["album"] = long_album
+    with pytest.raises(tageditor.TagEditError, match="too long"):
+        tageditor.save(folder, album)
+    assert mutagen.flac.FLAC(folder / "01 - A.flac")["album"] == ["Night: Lines"]   # nothing written
+
+
+def test_tag_editor_allows_a_change_of_case_on_a_case_insensitive_disk(tmp_path, monkeypatch):
+    folder = _ripped_album(tmp_path, titles=("opening", "B"), album="night lines")
+    real_exists = Path.exists
+
+    def exists(self):                                      # as exFAT or SMB answer
+        if real_exists(self):
+            return True
+        parent = self.parent
+        return real_exists(parent) and any(p.name.lower() == self.name.lower() for p in parent.iterdir())
+    monkeypatch.setattr(Path, "exists", exists)
+    monkeypatch.setattr(tageditor, "_same", lambda a, b: a.parent == b.parent and a.name.lower() == b.name.lower())
+    album = tageditor.read_album(folder)
+    album["album"] = "Night Lines"
+    album["tracks"][0]["title"] = "Opening"
+    result = tageditor.save(folder, album)
+    moved = tmp_path / "Night Lines (Limited)"
+    assert result["folder"] == str(moved)
+    assert sorted(p.name for p in moved.iterdir()) == ["01 - Opening.flac", "02 - B.flac",
+                                                        "Night Lines.cue", "Night Lines.log"]
+
+
+def test_version_suffixes_only_rank_pre_releases_lower():
+    key = install.version_key
+    assert key("0.9.3.1") < key("0.9.4-rc1") < key("0.9.4-rc3") < key("0.9.4")
+    assert key("0.9.4-beta2") < key("0.9.4-rc1") and key("0.9.4-dev") < key("0.9.4-alpha")
+    assert not key("0.9.3.1-1") < key("0.9.3.1") and not key("0.9.3.1+dfsg") < key("0.9.3.1")
+
+
+def test_own_editors_are_checked_like_the_built_in_ones(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"editors": {
+        "puddletag": {"name": "Puddletag", "commands": [["puddletag", "{dir}"]], "cmd": "typo"},
+        "broken": "puddletag {dir}",
+        "eartag": "not an object"}}), encoding="utf-8")
+    with pytest.raises(config.ConfigError) as problems:
+        config.load_config(path)
+    text = str(problems.value)
+    assert "unknown setting 'editors.puddletag.cmd'" in text
+    assert "'editors.broken' must be an object" in text and "'editors.eartag' must be dict" in text
+
+
+def test_config_warnings_are_repeated_on_the_page(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "run", lambda session: 0)
+    run = web.Run(app.new_session(default_cfg(), app.Options(), tmp_path / "config.json"),
+                  warnings=["Warning: 'lyrics_mode' must be one of ask, auto, interactive, skip"])
+    try:
+        run.start()
+        run.thread.join(2)
+        assert [(e["kind"], e["text"]) for e in run.front.events][0] == (
+            "warn", "Warning: 'lyrics_mode' must be one of ask, auto, interactive, skip")
+    finally:
+        ui.use(None)
+
+
+def test_musicbrainz_requests_keep_their_distance_across_threads(monkeypatch):
+    clock = [100.0]
+    slept = []
+    monkeypatch.setattr(cover.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(cover.time, "sleep", lambda s: slept.append(s) or clock.__setitem__(0, clock[0] + s))
+    monkeypatch.setattr(cover, "_last_mb_request", 0.0)
+    threads = [threading.Thread(target=cover._wait_for_musicbrainz) for _ in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(2)
+    assert slept == pytest.approx([cover.MB_INTERVAL_SECONDS] * 2)   # one after another

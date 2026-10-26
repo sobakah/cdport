@@ -80,7 +80,7 @@ def _show_preview(flac: list[Path]) -> Path | None:
     except OSError as exc:
         ui.warn(f"Cannot show the current cover: {exc}")
         return None
-    if path:
+    if path and ui.in_terminal():  # a page shows the picture itself; it cannot open file:// links
         ui.info(f"Current cover: {path.as_uri()}")
     return path
 

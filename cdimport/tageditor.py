@@ -273,12 +273,34 @@ def _renames(folder: Path, current: dict, edit: dict) -> tuple[list[dict], str |
     return files, folder_name
 
 
-def _too_long(files: list[dict], folder_name: str | None) -> None:
+def _too_long(names: list[str]) -> None:
     """Raise for a new name the file system cannot hold (255 bytes on
     Linux), before anything is written."""
-    for name in [f["newFile"] for f in files if f["newFile"]] + ([folder_name] if folder_name else []):
+    for name in names:
         if len(os.fsencode(name)) > NAME_MAX:
             raise TagEditError(f"'{name[:40]}…' is too long for a file name; shorten the title or album.")
+
+
+def _new_names(files: list[dict], folder_name: str | None) -> list[str]:
+    return [f["newFile"] for f in files if f["newFile"]] + ([folder_name] if folder_name else [])
+
+
+def _sidecars(folder: Path, old_album: str, new_album: str) -> list[tuple[Path, Path]]:
+    """The .cue and .log files that follow a renamed album: cyanrip names
+    them "{album}" and "{album} CD{disc}" (-L, -M)."""
+    old_prefix, new_prefix = cyanrip_name(old_album), cyanrip_name(new_album)
+    return [(side, folder / (new_prefix + side.name[len(old_prefix):]))
+            for side in sorted(folder.iterdir())
+            if side.suffix.lower() in (".cue", ".log") and side.stem.startswith(old_prefix)]
+
+
+def _same(a: Path, b: Path) -> bool:
+    """Whether two names are one file: on a case-insensitive file system
+    (exFAT, NTFS, SMB, Windows) "opening" and "Opening" are."""
+    try:
+        return a.samefile(b)
+    except OSError:
+        return False
 
 
 def plan(folder: Path, edit: dict) -> dict:
@@ -290,7 +312,7 @@ def plan(folder: Path, edit: dict) -> dict:
         return {"problem": str(exc), "files": [], "folderName": None}
     files, folder_name = _renames(folder, current, clean)
     try:
-        _too_long(files, folder_name)
+        _too_long(_new_names(files, folder_name))
     except TagEditError as exc:
         return {"problem": str(exc), "files": files, "folderName": folder_name}
     return {"problem": "", "files": files, "folderName": folder_name}
@@ -313,19 +335,22 @@ def save(folder: Path, edit: dict) -> dict:
     back, so the tags are saved and the names stay as they were."""
     current, clean = _checked(folder, edit)
     files, folder_name = _renames(folder, current, clean)
-    _too_long(files, folder_name)
     targets = [f["newFile"] for f in files if f["newFile"] and f["newFile"] != f["file"]]
     if len(set(targets)) != len(targets):
         raise TagEditError("Two tracks would get the same file name; give them different titles.")
     staying = {f["file"] for f in files if not (f["newFile"] and f["newFile"] != f["file"])}
-    tracks = {f["file"] for f in files}
+    moving = {f["file"] for f in files} - staying
     for name in targets:
-        # A target may be a track that moves away itself, never one that stays or another file.
-        if name in staying or ((folder / name).exists() and name not in tracks):
+        # A target may be a track that moves away itself (also by a change of
+        # case only), never one that stays or another file.
+        target = folder / name
+        if name in staying or (target.exists() and not any(_same(target, folder / m) for m in moving)):
             raise TagEditError(f"A file named '{name}' is already there.")
     new_folder = folder.parent / folder_name if folder_name and folder_name != folder.name else folder
-    if new_folder != folder and new_folder.exists():
+    if new_folder != folder and new_folder.exists() and not _same(new_folder, folder):
         raise TagEditError(f"A folder named '{new_folder.name}' is already there; choose another album name.")
+    sidecars = _sidecars(folder, current["album"], clean["album"]) if new_folder != folder else []
+    _too_long(_new_names(files, folder_name) + [target.name for _, target in sidecars])
 
     album_changed = {k: clean[k] != current[k] or k in current["differing"] for k in _ALBUM_FIELDS}
     changed = 0
@@ -392,17 +417,14 @@ def save(folder: Path, edit: dict) -> dict:
         _follow_in_cue_sheets(folder, dict(renamed))
     folder_renamed = []
     if new_folder != folder:
-        old_prefix, new_prefix = cyanrip_name(current["album"]), cyanrip_name(clean["album"])
         done = []
         try:
-            for side in sorted(folder.iterdir()):
-                # cyanrip names them "{album}" and "{album} CD{disc}" (-L, -M).
-                if side.suffix.lower() in (".cue", ".log") and side.stem.startswith(old_prefix):
-                    target = folder / (new_prefix + side.name[len(old_prefix):])
-                    if not target.exists():
-                        _move(side, target, done)
-                        folder_renamed.append([side.name, target.name])
-            _move(folder, new_folder, done)
+            for side, target in sidecars:
+                if target.exists() and not _same(target, side):
+                    continue  # never over another file
+                _rename(side, target, done)
+                folder_renamed.append([side.name, target.name])
+            _rename(folder, new_folder, done)
         except OSError as exc:
             stuck = _undo(done)
             raise TagEditError(f"The tags are saved{' and the tracks renamed' if renamed else ''}, "
@@ -419,6 +441,17 @@ def save(folder: Path, edit: dict) -> dict:
 def _move(source: Path, target: Path, done: list[tuple[Path, Path]]) -> None:
     source.rename(target)
     done.append((source, target))
+
+
+def _rename(source: Path, target: Path, done: list[tuple[Path, Path]]) -> None:
+    """A rename that also works when only the case changes: some
+    case-insensitive file systems ignore that, so it goes through a
+    temporary name."""
+    if _same(source, target):
+        temporary = source.with_name(f".cdimport-rename-{source.name}")
+        _move(source, temporary, done)
+        source = temporary
+    _move(source, target, done)
 
 
 def _undo(done: list[tuple[Path, Path]]) -> str:

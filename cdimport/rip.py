@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import itertools
 import os
 import re
 import shutil
@@ -164,22 +165,6 @@ def explain(lines: list[str]) -> str:
     return "".join(f"\n  cyanrip: {line}" for line in lines)
 
 
-def new_staging_dir(work_dir: Path) -> Path:
-    """A fresh folder for one rip.
-
-    cyanrip names the album folder from metadata only it knows, so it rips
-    into an empty folder of its own; whatever appears there is the album.
-    """
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    path = work_dir / f"{STAGING_PREFIX}{stamp}"
-    n = 1
-    while path.exists():
-        n += 1
-        path = work_dir / f"{STAGING_PREFIX}{stamp}-{n}"
-    path.mkdir(parents=True)
-    return path
-
-
 def lock_path(staging: Path) -> Path:
     """The lock file next to (not inside) a staging folder, so it never
     counts as something cyanrip left behind."""
@@ -187,40 +172,61 @@ def lock_path(staging: Path) -> Path:
 
 
 @contextlib.contextmanager
-def hold_lock(staging: Path) -> Iterator[None]:
-    """Mark a staging folder as in use while cyanrip rips into it.
+def staging_dir(work_dir: Path) -> Iterator[Path]:
+    """A fresh folder for one rip, marked as in use until the rip is done.
 
+    cyanrip names the album folder from metadata only it knows, so it rips
+    into an empty folder of its own; whatever appears there is the album.
     Another cdimport started meanwhile must not take it for an interrupted
-    rip and offer to delete it. The operating system drops the lock when
-    this process ends in any way, so a crashed run's folder shows as free.
+    rip and offer to delete it, so the lock is taken before the folder
+    exists: no moment shows the folder unlocked. The operating system drops
+    the lock when this process ends in any way, so a crashed run's folder
+    shows as free.
     """
-    path = lock_path(staging)
-    with open(path, "w", encoding="utf-8") as handle:
-        try:
-            import fcntl
-        except ImportError:  # pragma: no cover - Windows: in_use() then says "cannot tell"
-            fcntl = None
-        if fcntl:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        handle.write(f"{os.getpid()}\n")
-        handle.flush()
-        try:
-            yield
-        finally:
-            path.unlink(missing_ok=True)
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - Windows: in_use() then says "cannot tell"
+        fcntl = None
+    work_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    for n in itertools.count(1):
+        path = work_dir / (f"{STAGING_PREFIX}{stamp}" + (f"-{n}" if n > 1 else ""))
+        if path.exists():
+            continue
+        with open(lock_path(path), "a", encoding="utf-8") as handle:
+            if fcntl:
+                try:
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    continue  # another cdimport took this name in the same second
+            try:
+                path.mkdir()
+            except FileExistsError:
+                continue
+            handle.truncate(0)
+            handle.write(f"{os.getpid()}\n")
+            handle.flush()
+            try:
+                yield path
+            finally:
+                lock_path(path).unlink(missing_ok=True)
+            return
 
 
 def in_use(staging: Path) -> bool | None:
     """Whether a running cdimport holds the staging folder; None when this
     platform cannot tell."""
-    path = lock_path(staging)
-    if not path.exists():
-        return False
     try:
         import fcntl
     except ImportError:  # pragma: no cover - Windows
         return None
-    with open(path, "a", encoding="utf-8") as handle:
+    # Read-only: opening to write would create the file again when the rip
+    # just ended and removed it, and leave it behind.
+    try:
+        handle = open(lock_path(staging), encoding="utf-8")
+    except FileNotFoundError:
+        return False
+    with handle:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -279,10 +285,9 @@ def rip(cyanrip: str, cfg: dict[str, Any], work_dir: Path, *, device: str = "",
     Returns the album folder and, when cyanrip left other files next to it,
     the staging folder that still holds them.
     """
-    staging = new_staging_dir(work_dir)
     cmd = [cyanrip] + cyanrip_args(cfg, device=device, release=release, no_musicbrainz=no_musicbrainz,
                                    tags=tags, paranoia=paranoia, eject=eject)
-    with hold_lock(staging):
+    with staging_dir(work_dir) as staging:
         _run_into(cmd, staging)
         album = find_album_dir(staging)
         target = unique_path(work_dir / album.name)
@@ -345,12 +350,11 @@ def rerip(cyanrip: str, cfg: dict[str, Any], album: Path, work_dir: Path, tracks
     one as "<name> (secure re-rip).log") and the staging folder if cyanrip
     left anything else there (as rip() does), else None.
     """
-    staging = new_staging_dir(work_dir)
     cmd = [cyanrip] + cyanrip_args(cfg, device=device, release=release, no_musicbrainz=no_musicbrainz,
                                    tags=tags, paranoia="max", tracks=tracks, eject=eject)
     replaced: list[Path] = []
     log = None
-    with hold_lock(staging):
+    with staging_dir(work_dir) as staging:
         _run_into(cmd, staging)
         new = find_album_dir(staging)
         for f in sorted(new.iterdir()):

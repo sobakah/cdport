@@ -3,6 +3,46 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.3] — 2026-10-26
+
+### Fixed
+
+* **The page closed right after opening** (before its first request) left
+  cdimport running forever; it now ends.
+* **Adding a second disc to the library** counted as failed when something
+  appeared in the emptied working folder meanwhile (a file manager's
+  `.directory`), and the next try said the folder already exists. The
+  merge now counts, and the leftover folder is only mentioned.
+* **The current cover on the page** could show the old picture after a
+  cover change, and a useless `file://` line; the page now shows the
+  picture as it was when asked.
+* **The tag editor renames the album folder:** stopping before Continue
+  lost the resume hint and lyrembed's "cdimport finished" line; cdimport
+  now follows the folder at every save.
+* **The tag editor** also checks the `.cue`/`.log` names for length before
+  writing, and allows changing only the case of a title or album on
+  case-insensitive disks (exFAT, NTFS, SMB).
+* **Ripping without MusicBrainz** forgot the disc's track count (typed tags
+  asked for it again) and the link for adding the disc to MusicBrainz.
+* **Rip lock:** another cdimport could see a new rip's folder for a moment
+  before it was locked, and checking the lock could leave an empty `.lock`
+  file behind in the working folder.
+* **Disc 0** of an album (a bonus disc) is merged like any other; folder
+  names drop trailing spaces as well as dots (Windows, SMB shares).
+* **Config warnings** are repeated on the page; started from lyrembed,
+  nobody sees the terminal.
+* **Custom tag editors** in the config get the same checks as the built-in
+  ones (unknown keys are reported).
+
+### Changed
+
+* Version comparison for cyanrip updates ranks only pre-releases (`rc`,
+  `beta`, ...) below a release; a packager's suffix such as `-1` counts as
+  the release.
+* Small cleanups: the tag editor's error output file is closed, links
+  (OSC 8) are stripped from tool output like colours, MusicBrainz's
+  one-request-per-second limit also holds across threads.
+
 ## [0.6.2] — 2026-10-25
 
 ### Fixed

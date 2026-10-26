@@ -23,6 +23,7 @@ import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Callable
 from urllib.parse import parse_qs, urlsplit
 
 from . import app, cover, proc, tageditor, ui
@@ -55,7 +56,7 @@ MAX_BODY = 1024 * 1024
 # Lines of a tool's output the page keeps; cyanrip's preview of a long disc
 # fits, its progress lines overwrite each other.
 TOOL_LINES = 400
-_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+_ANSI = proc.ANSI_ESCAPE
 _LINE_BREAK = re.compile(r"\r\n|\n|\r")
 # lyrembed prints its page's address like this (lyrembed/web.py, serve).
 _HANDOFF = re.compile(r"is running at (http://(?:127\.0\.0\.1|localhost):\d+/\?token=[A-Za-z0-9_-]+)")
@@ -97,7 +98,7 @@ class WebFront(ui.Front):
         # Pictures the flow handed over with a question, by id: the only ones
         # /api/image serves, so the page cannot make cdimport fetch anything else.
         self._images: dict[str, tuple[str, str]] = {}
-        self._image_cache: dict[str, tuple[bytes, str]] = {}
+        self._image_cache: dict[str, tuple[bytes, str] | Exception] = {}
         self._pending = ""  # output after the last line break: a line still being written
         self._redrawn = ""  # the newest state of a line a progress display redraws with \r
         self.finished: int | None = None
@@ -105,6 +106,7 @@ class WebFront(ui.Front):
         # Set by stop(): every question from then on, and a pause, ends the
         # flow, so it stops after a tool it let finish instead of asking on.
         self._stopping = False
+        self._tags_moved: Callable[[Path], None] | None = None  # the open tag editor's edit_tags(moved=...)
 
     # recording
     def _bump(self, event: dict) -> None:
@@ -261,38 +263,55 @@ class WebFront(ui.Front):
         return self._ask("choose", prompt, options=[[k, d] for k, d in options], default=default, images=images)
 
     def _register_image(self, source: dict) -> str:
-        """An id for a picture the flow names: {"url": ...} or {"file": ...}."""
-        kind, value = ("file", str(source["file"])) if "file" in source else ("url", str(source["url"]))
+        """An id for a picture the flow names: {"url": ...} or {"file": ...}.
+
+        A file is read now, under a new id each time: the cover preview is
+        deleted after its question and rewritten under the same name with
+        another cover, which an old id would show from the browser's cache.
+        A download keeps its id, so going back and forth costs no requests.
+        """
+        if "file" in source:
+            image_id = secrets.token_urlsafe(8)
+            try:
+                data = Path(source["file"]).read_bytes()
+                found = (data, cover.image_type(data)[0])
+            except (OSError, cover.CoverError) as exc:
+                found = exc
+            with self._cond:
+                self._images[image_id] = ("file", str(source["file"]))
+                self._image_cache[image_id] = found
+            return image_id
+        value = str(source["url"])
         with self._cond:
             for image_id, known in self._images.items():
-                if known == (kind, value):
+                if known == ("url", value):
                     return image_id
             image_id = secrets.token_urlsafe(8)
-            self._images[image_id] = (kind, value)
+            self._images[image_id] = ("url", value)
             return image_id
 
     def image(self, image_id: str) -> tuple[bytes, str]:
-        """The picture behind *image_id* and its type. A file is read when
-        asked for (the cover preview is deleted after its question); a
-        download is kept, so going back and forth costs no new requests."""
+        """The picture behind *image_id* and its type: a file as read when its
+        question came, a download fetched once."""
         with self._cond:
             source = self._images.get(image_id)
             cached = self._image_cache.get(image_id)
         if source is None:
             raise ApiError(404, "No such picture.")
+        if isinstance(cached, Exception):  # the file could not be read
+            raise ApiError(502, f"Cannot get the picture: {cached}")
         if cached is not None:
             return cached
-        kind, value = source
+        _, value = source
         try:
-            data = Path(value).read_bytes() if kind == "file" else cover.http_get(value)
+            data = cover.http_get(value)
             mime, _ = cover.image_type(data)
         except cover.NotFound as exc:
             raise ApiError(404, "There is no such cover.") from exc
         except (cover.CoverError, OSError) as exc:
             raise ApiError(502, f"Cannot get the picture: {exc}") from exc
-        if kind == "url":
-            with self._cond:
-                self._image_cache[image_id] = (data, mime)
+        with self._cond:
+            self._image_cache[image_id] = (data, mime)
         return data, mime
 
     def ask_path(self, prompt: str, prefill: str = "") -> str:
@@ -304,11 +323,15 @@ class WebFront(ui.Front):
     def supports(self, feature: str) -> bool:
         return feature == "tag_editor"
 
-    def edit_tags(self, folder: Path) -> tuple[Path, str]:
+    def edit_tags(self, folder: Path, moved: Callable[[Path], None] | None = None) -> tuple[Path, str]:
         """The page's tag editor; the question holds the folder, which a save
         that renames it updates, and is answered when the user is done or
         wants to change the cover."""
-        folder_now, then = self._ask("tag_editor", "Edit the tags", folder=str(folder))
+        self._tags_moved = moved
+        try:
+            folder_now, then = self._ask("tag_editor", "Edit the tags", folder=str(folder))
+        finally:
+            self._tags_moved = None
         return Path(folder_now), then
 
     def tag_folder(self) -> Path:
@@ -320,11 +343,16 @@ class WebFront(ui.Front):
             return Path(question["folder"])
 
     def moved_tags(self, folder: Path) -> None:
+        """A save renamed the album's folder: the editor and the flow follow."""
         with self._cond:
-            if self.question is not None and self.question["kind"] == "tag_editor":
-                self.question["folder"] = str(folder)
-                self._rev += 1
-                self._cond.notify_all()
+            if self.question is None or self.question["kind"] != "tag_editor":
+                return
+            self.question["folder"] = str(folder)
+            self._rev += 1
+            self._cond.notify_all()
+            moved = self._tags_moved
+        if moved is not None:
+            moved(folder)
 
     # the page's view
     @property
@@ -377,14 +405,19 @@ def _answer_text(kind: str, answer: object, details: dict) -> str:
 class Run:
     """The flow (cli.run_session) in a thread, with the page as front end."""
 
-    def __init__(self, session: app.Session, back: tuple[str, str] | None = None) -> None:
+    def __init__(self, session: app.Session, back: tuple[str, str] | None = None,
+                 warnings: list[str] | None = None) -> None:
         self.session = session
+        # Said in the terminal before the page existed (the config's); the
+        # page repeats them, as nobody may look at that terminal.
+        self.warnings = list(warnings or [])
         self.front = WebFront()
         # Another program's page that started cdimport (--return-url): the
         # finished run's button leads back there.
         self.back_url, self.back_name = back if back else ("", "")
         self.thread = threading.Thread(target=self._run, name="cdimport-flow", daemon=True)
         self._started = threading.Lock()
+        self._prevented = False
 
     def start(self) -> None:
         """Start the flow, once. The page does this on its first visit, so
@@ -395,14 +428,23 @@ class Run:
         ui.use(self.front)
         self.thread.start()
 
+    def prevent_start(self) -> bool:
+        """Keep the flow from ever starting; False when it already has."""
+        if not self._started.acquire(blocking=False):
+            return False
+        self._prevented = True
+        return True
+
     @property
     def started(self) -> bool:
-        return self._started.locked()
+        return self._started.locked() and not self._prevented
 
     def _run(self) -> None:
         from .cli import run_session
 
         code = 1
+        for message in self.warnings:
+            ui.warn(message)
         try:
             code = run_session(self.session)
         except Exception as exc:  # shown on the page, not lost in the thread
@@ -635,10 +677,10 @@ FINISHED_LINE = "cdimport finished: {folder}"
 
 
 def serve(session: app.Session, open_browser: bool = True, port: int = 0,
-          back: tuple[str, str] | None = None) -> int:
+          back: tuple[str, str] | None = None, warnings: list[str] | None = None) -> int:
     """Run the flow with the page as its front end; returns its exit code."""
     token = secrets.token_urlsafe(24)
-    run = Run(session, back)
+    run = Run(session, back, warnings)
     server = _Server(run, token, port)
     url = f"http://127.0.0.1:{server.port}/?token={token}"
     # Where lyrembed's page sends the tab back; the cookie is already set.
@@ -657,7 +699,9 @@ def serve(session: app.Session, open_browser: bool = True, port: int = 0,
     try:
         while not server.stop.wait(1.0):
             if server.page_gone() and not run.front.away:
-                if run.front.finished is not None:
+                # Closed before its first request started the flow: nothing
+                # runs that could finish.
+                if run.front.finished is not None or run.prevent_start():
                     break
                 if not run.front.tool_running:
                     # Nobody can answer any more; a running rip is left to finish first.
