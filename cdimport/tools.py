@@ -123,6 +123,15 @@ def available_editors(cfg: dict[str, Any]) -> list[Editor]:
     return [e for e in (find_editor(cfg, k) for k in cfg["editors"]) if e]
 
 
+def editor_or_fallback(cfg: dict[str, Any], key: str) -> Editor | None:
+    """The editor named by key, else the first one installed.
+
+    Ear Tag, the default, only comes as a Flatpak; on a system without it,
+    an installed Kid3 or Picard is offered instead of no editor at all.
+    """
+    return find_editor(cfg, key) or next(iter(available_editors(cfg)), None)
+
+
 # --- system information -------------------------------------------------------
 def read_os_release(path: Path = Path("/etc/os-release")) -> dict[str, str]:
     """Parse os-release; empty when the file is missing (non-Linux)."""

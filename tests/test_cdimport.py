@@ -12,7 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from cdimport import app, cli, config, cover, covertool, disc, install, library, lyrics, musicbrainz, proc, rip, state, tags, tools, ui  # noqa: E402
+from cdimport import app, cli, config, cover, covertool, disc, install, library, lyrics, musicbrainz, proc, rip, selfupdate, state, tags, tools, ui  # noqa: E402
 from cdimport.config import STAGING_PREFIX, STATE_FILE_NAME  # noqa: E402
 
 
@@ -29,7 +29,7 @@ def private_dirs(tmp_path, tmp_path_factory, monkeypatch):
 # Real programs a test must never start: they read the drive, eject it, go
 # online or change the system. Test doubles are started by path, not by name.
 REAL_TOOLS = {"cyanrip", "eject", "udevadm", "lyrembed", "flatpak", "kid3", "picard", "git",
-              "dnf", "sudo", "apt", "meson", "ninja", "pipx", "pkg-config"}
+              "dnf", "sudo", "apt", "pacman", "zypper", "meson", "ninja", "pipx", "pkg-config"}
 
 
 @pytest.fixture(autouse=True)
@@ -46,6 +46,15 @@ def no_real_tools(monkeypatch, tmp_path_factory):
                 raise AssertionError(f"test tried to run the real {program}: {args}")
             super().__init__(args, *rest, **kwargs)
     monkeypatch.setattr(subprocess, "Popen", GuardedPopen)
+
+
+@pytest.fixture(autouse=True)
+def no_update_check(monkeypatch):
+    """The check for a newer cdimport asks GitHub: never in tests, unless a
+    test fakes its answer itself (the cache is private_dirs' business)."""
+    def offline(timeout=30):
+        raise selfupdate.UpdateError("no network in tests")
+    monkeypatch.setattr(selfupdate, "latest", offline)
 
 
 def default_cfg():
@@ -406,6 +415,15 @@ def test_find_editor_takes_first_available_command(monkeypatch):
     editor = tools.find_editor(default_cfg(), "kid3")
     assert editor.command[0] == "flatpak" and editor.name == "Kid3"
 
+
+
+def test_a_missing_editor_falls_back_to_an_installed_one(monkeypatch):
+    monkeypatch.setattr(tools, "command_available", lambda cmd: cmd[0] == "kid3")
+    cfg = default_cfg()
+    assert tools.find_editor(cfg, "eartag") is None
+    assert tools.editor_or_fallback(cfg, "eartag").key == "kid3"
+    monkeypatch.setattr(tools, "command_available", lambda cmd: False)
+    assert tools.editor_or_fallback(cfg, "eartag") is None
 
 def test_executable_found_in_local_bin(tmp_path, monkeypatch):
     local = tmp_path / ".local" / "bin"
@@ -968,6 +986,55 @@ def test_source_build_on_fedora(tmp_path, monkeypatch):
     assert ran[3][0][2] == str(build)  # meson setup <build>
 
 
+
+def test_build_dependencies_for_each_package_manager(monkeypatch):
+    monkeypatch.setattr(install.os, "geteuid", lambda: 1000)
+    names = ["ninja", "pkg-config", "libavcodec", "libavutil", "libcdio_paranoia", "libcurl"]
+    mint = install.dependency_command({"ID": "linuxmint", "ID_LIKE": "ubuntu debian"}, names)
+    assert mint == ("apt", ["sudo", "apt", "install", "ninja-build", "pkgconf", "libavcodec-dev",
+                            "libavutil-dev", "libcdio-paranoia-dev", "libcurl4-openssl-dev"])
+    manjaro = install.dependency_command({"ID": "manjaro", "ID_LIKE": "arch"}, names)
+    assert manjaro == ("pacman", ["sudo", "pacman", "-S", "--needed", "ninja", "pkgconf", "ffmpeg",
+                                  "libcdio-paranoia", "curl"])  # FFmpeg once
+    leap = install.dependency_command({"ID": "opensuse-leap", "ID_LIKE": "suse opensuse"}, ["meson", "libavcodec"])
+    assert leap == ("zypper", ["sudo", "zypper", "install", "meson", "pkgconfig(libavcodec) >= 59.24.100"])
+    assert install.dependency_command({"ID": "gentoo"}, names) is None
+    monkeypatch.setattr(install.os, "geteuid", lambda: 0)
+    assert install.dependency_command({"ID": "debian"}, ["git"]) == ("apt", ["apt", "install", "git"])
+
+
+def test_build_dependencies_without_a_known_package_manager_are_listed(monkeypatch, capsys):
+    state = {"installed": False}
+    monkeypatch.setattr(install, "missing_tools", lambda which=None: [] if state["installed"] else ["meson"])
+    monkeypatch.setattr(install, "missing_libs", lambda libs: [])
+    ran = []
+    monkeypatch.setattr(install.proc, "run", lambda cmd, cwd=None: ran.append(cmd) or 0)
+
+    def enter(prompt=""):
+        state["installed"] = True
+        return ""
+    monkeypatch.setattr("builtins.input", enter)
+    assert install.install_dependencies({"ID": "gentoo"})
+    assert ran == [] and "program meson" in capsys.readouterr().out
+
+
+def test_build_dependencies_on_debian_run_apt(monkeypatch):
+    state = {"installed": False}
+    monkeypatch.setattr(install.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(install, "missing_tools", lambda which=None: [] if state["installed"] else ["meson"])
+    monkeypatch.setattr(install, "missing_libs",
+                        lambda libs: [] if state["installed"] or libs is install.OPTIONAL_LIBS else ["libmusicbrainz5"])
+    ran = []
+
+    def run(cmd, cwd=None):
+        ran.append(cmd)
+        state["installed"] = True
+        return 0
+    monkeypatch.setattr(install.proc, "run", run)
+    feed_input(monkeypatch, [""])  # run it: yes
+    assert install.install_dependencies({"ID": "debian"})
+    assert ran == [["sudo", "apt", "install", "meson", "libmusicbrainz5-dev"]]
+
 def test_source_build_stops_at_failed_command(tmp_path, monkeypatch):
     monkeypatch.setattr(install, "install_dependencies", lambda os_release: True)
     monkeypatch.setattr(install, "remote_info", lambda max_age=0: install.Remote("v0.9.3.1", "b40c1f0aa"))
@@ -1004,6 +1071,178 @@ def test_step_0_offers_install_when_cyanrip_is_missing(tmp_path, monkeypatch):
     app.check_tools(session)
     assert calls == [tmp_path / "config.json"] and session.cyanrip == "/x/cyanrip"
 
+
+
+# --- a newer cdimport ----------------------------------------------------------
+REAL_LATEST = selfupdate.latest  # before no_update_check replaces it
+
+
+def fake_ls_remote(monkeypatch, stdout="", code=0, stderr=""):
+    asked = []
+
+    def run(cmd, **kwargs):
+        asked.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, code, stdout, stderr)
+    monkeypatch.setattr(selfupdate.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(selfupdate.subprocess, "run", run)
+    return asked
+
+
+def test_the_newest_release_tag(monkeypatch):
+    refs = "".join(f"abc\trefs/tags/{tag}\n" for tag in ("0.1.0", "0.10.0", "0.9.2", "1.0.0-rc1", "v2.0.0", "x"))
+    asked = fake_ls_remote(monkeypatch, refs)
+    assert REAL_LATEST() == "0.10.0"  # by number, only plain x.y.z tags
+    cmd, kwargs = asked[0]
+    assert cmd[-1] == selfupdate.REPO and kwargs["env"]["GIT_TERMINAL_PROMPT"] == "0"
+
+
+def test_no_releases_or_no_access(monkeypatch):
+    fake_ls_remote(monkeypatch, "abc\trefs/tags/testing\n")
+    with pytest.raises(selfupdate.UpdateError, match="no releases"):
+        REAL_LATEST()
+    fake_ls_remote(monkeypatch, code=128, stderr="fatal: could not read Username for 'https://github.com'\n")
+    with pytest.raises(selfupdate.UpdateError, match="^could not read Username"):
+        REAL_LATEST()
+
+
+def test_newer_versions():
+    assert selfupdate.newer("1.0.1", "1.0.0") and selfupdate.newer("1.10.0", "1.9.9")
+    assert not selfupdate.newer("1.0.0", "1.0.0") and not selfupdate.newer("0.6.0", "1.0.0")
+    assert not selfupdate.newer("rubbish", "1.0.0")
+
+
+def pipx_venv(tmp_path, url, pip_args=()):
+    venv = tmp_path / "venv"
+    venv.mkdir()
+    (venv / "pipx_metadata.json").write_text(json.dumps({
+        "main_package": {"package": "cdimport", "package_or_url": url, "pip_args": list(pip_args)},
+        "venv_args": []}), encoding="utf-8")
+    return venv
+
+
+def test_a_pipx_install_is_upgraded_or_stays_pinned(tmp_path):
+    how = selfupdate.how_installed("1.1.0", pipx_venv(tmp_path, "git+https://github.com/sobakah/cdimport.git"))
+    assert how.kind == "pipx" and how.argv[1:] == ["upgrade", "cdimport"] and how.command == "pipx upgrade cdimport"
+    (tmp_path / "venv" / "pipx_metadata.json").unlink()
+    (tmp_path / "venv").rmdir()
+    how = selfupdate.how_installed("1.1.0", pipx_venv(tmp_path, "git+https://github.com/sobakah/cdimport.git@0.6.3"))
+    assert how.command == "pipx install --force git+https://github.com/sobakah/cdimport.git@1.1.0"
+
+
+def test_a_checkout_or_another_install_gets_a_command(tmp_path):
+    top = tmp_path / "checkout"
+    (top / ".git").mkdir(parents=True)
+    how = selfupdate.how_installed("1.1.0", tmp_path / "no-venv", top / "cdimport")
+    assert how.kind == "checkout" and how.argv is None and how.command == f"git -C {top} pull"
+    how = selfupdate.how_installed("1.1.0", tmp_path / "no-venv", tmp_path / "site" / "cdimport")
+    assert how.kind == "other" and how.argv is None and how.command.endswith("cdimport.git@1.1.0")
+
+
+def test_the_check_runs_once_a_day(tmp_path):
+    state_file = tmp_path / "self-update.json"
+    assert selfupdate.due(state_file)
+    state_file.write_text("not json", encoding="utf-8")
+    assert selfupdate.due(state_file)
+    assert selfupdate.mark_checked(state_file, now=1000.0) is None
+    assert not selfupdate.due(state_file, now=1000.0 + 3600)
+    assert selfupdate.due(state_file, now=1000.0 + 25 * 3600)
+    assert selfupdate.due(state_file, now=500.0)  # clock set back
+
+
+def test_restart_command(monkeypatch, tmp_path):
+    script = tmp_path / "cdimport"
+    script.write_text("#!/bin/sh\n")
+    script.chmod(0o755)
+    monkeypatch.setattr(sys, "argv", [str(script), "--web"])
+    assert selfupdate.restart_argv() == [str(script), "--web"]
+    monkeypatch.setattr(sys, "argv", ["/somewhere/cdimport/__main__.py"])
+    assert selfupdate.restart_argv() == [sys.executable, "-m", "cdimport"]
+    monkeypatch.setattr(sys, "argv", ["run.py"])
+    assert selfupdate.restart_argv() == [sys.executable, "run.py"]
+
+
+def update_session(tmp_path, monkeypatch, mode, found="9.0.0", argv=("/usr/bin/pipx", "upgrade", "cdimport")):
+    monkeypatch.setattr(selfupdate, "latest", lambda timeout=30: found)
+    monkeypatch.setattr(selfupdate, "how_installed", lambda version: selfupdate.Install(
+        "pipx", "pipx upgrade cdimport", list(argv) if argv else None))
+    return app.new_session(default_cfg(), app.Options(self_update=mode), tmp_path / "config.json")
+
+
+def test_a_newer_cdimport_is_installed_and_started_again(tmp_path, monkeypatch, capsys):
+    session = update_session(tmp_path, monkeypatch, "now")
+    ran = []
+    monkeypatch.setattr(app.proc, "run", lambda cmd, cwd=None: ran.append(cmd) or 0)
+    monkeypatch.setattr(sys, "argv", ["/home/u/.local/bin/cdimport", "--update", "-w", "x"])
+    monkeypatch.setattr(selfupdate.os, "access", lambda path, mode: True)
+    feed_input(monkeypatch, [""])  # update now? yes
+    with pytest.raises(app.Restart) as restart:
+        app.offer_self_update(session)
+    assert ran == [["/usr/bin/pipx", "upgrade", "cdimport"]]
+    assert restart.value.argv == ["/home/u/.local/bin/cdimport", "-w", "x"]  # without --update
+    out = capsys.readouterr().out
+    assert "9.0.0 is available" in out and "releases/tag/9.0.0" in out
+
+
+def test_a_failed_update_goes_on_with_this_version(tmp_path, monkeypatch, capsys):
+    session = update_session(tmp_path, monkeypatch, "daily")
+    monkeypatch.setattr(app.proc, "run", lambda cmd, cwd=None: 1)
+    feed_input(monkeypatch, [""])
+    app.offer_self_update(session)
+    out = capsys.readouterr()
+    assert "did not work (exit code 1)" in out.out + out.err
+    assert not selfupdate.due(app.self_update_state())  # asked today: not again until tomorrow
+
+
+def test_the_daily_check_and_its_switch(tmp_path, monkeypatch, capsys):
+    session = update_session(tmp_path, monkeypatch, "daily", found=config.__version__)
+    feed_input(monkeypatch, [])
+    app.offer_self_update(session)
+    assert capsys.readouterr().out == ""  # up to date: nothing to say
+    monkeypatch.setattr(selfupdate, "latest", lambda timeout=30: pytest.fail("asked twice a day"))
+    app.offer_self_update(session)
+    app.offer_self_update(update_session(tmp_path, monkeypatch, "never"))
+    monkeypatch.setattr(selfupdate, "latest", lambda timeout=30: pytest.fail("asked although never"))
+    session.options.self_update = "never"
+    app.offer_self_update(session)
+
+
+def test_the_page_and_other_installs_get_the_command(tmp_path, monkeypatch, front):
+    session = update_session(tmp_path, monkeypatch, "now")
+    monkeypatch.setattr(app.proc, "run", lambda cmd, cwd=None: pytest.fail("updated on the page"))
+    recorder = front()
+    app.offer_self_update(session)
+    assert any("To update: pipx upgrade cdimport" in text for _, text, _ in recorder.messages)
+    assert recorder.questions == []
+    ui.use(None)
+    session = update_session(tmp_path, monkeypatch, "now", argv=None)
+    feed_input(monkeypatch, [])
+    app.offer_self_update(session)
+
+
+def test_update_options_on_the_command_line(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(cli, "run_session", lambda session: seen.append(session.options.self_update) or 0)
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text("{}", encoding="utf-8")
+    assert cli.main(["--config", str(cfg_path)]) == 0
+    assert cli.main(["--config", str(cfg_path), "--update"]) == 0
+    cfg_path.write_text('{"check_for_updates": false}', encoding="utf-8")
+    assert cli.main(["--config", str(cfg_path)]) == 0
+    assert seen == ["daily", "now", "never"]
+    with pytest.raises(SystemExit):
+        cli.main(["--config", str(cfg_path), "--web", "--update", "--return-url", "http://127.0.0.1:5/"])
+
+
+def test_after_an_update_cdimport_starts_again(tmp_path, monkeypatch):
+    def restart(session):
+        raise app.Restart(["/home/u/.local/bin/cdimport", "-w", "x"])
+    monkeypatch.setattr(cli, "run_session", restart)
+    started = []
+    monkeypatch.setattr(cli.os, "execvp", lambda file, argv: started.append((file, argv)))
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text("{}", encoding="utf-8")
+    cli.main(["--config", str(cfg_path)])
+    assert started == [("/home/u/.local/bin/cdimport", ["/home/u/.local/bin/cdimport", "-w", "x"])]
 
 # --- drive offset ------------------------------------------------------------
 def offset_session(tmp_path, offset=None):
@@ -1280,6 +1519,26 @@ def test_unknown_disc_with_typed_tags(tmp_path, monkeypatch):
     assert previews[-1]["tags"] is tags
 
 
+
+def test_older_cyanrip_gets_no_release_for_an_unknown_disc(tmp_path, monkeypatch, capsys):
+    session, previews, ripped = unknown_disc_session(tmp_path, monkeypatch)
+    session.cyanrip_version = "0.9.3.1"  # Debian 13's
+    # "s" is not offered; Enter types the tags in.
+    answers = feed_input(monkeypatch, ["s", "", "Album", "X", "", "One", "Two", "", "Four", "Five", "Six", "r"])
+    assert app.preview_and_rip(session, "/dev/sr0") is not None and answers == []
+    assert ripped[0]["release"] == "" and ripped[0]["tags"].album == "Album"
+    out = capsys.readouterr().out
+    assert "Please type one of" in out and "type the tags in instead" in out
+
+
+def test_which_cyanrip_takes_a_release_for_an_unknown_disc():
+    assert not install.takes_release_for_unknown_disc("0.9.2")  # Ubuntu 24.04
+    assert not install.takes_release_for_unknown_disc("0.9.3.1-1+b1")
+    assert not install.takes_release_for_unknown_disc("0.9.4-rc2")
+    assert install.takes_release_for_unknown_disc("0.9.4-rc3")
+    assert install.takes_release_for_unknown_disc("0.9.4")
+    assert install.takes_release_for_unknown_disc(None)
+
 def test_release_by_link_and_bad_answers(tmp_path, monkeypatch, capsys):
     session, previews, ripped = unknown_disc_session(tmp_path, monkeypatch)
     link = "https://musicbrainz.org/release/5c580fb1-7c31-4785-afde-68098dc5caa2"
@@ -1513,14 +1772,22 @@ def test_version_order():
     assert keys == ["0.9.3", "0.9.3.1", "0.9.4-rc3", "0.9.4", "0.10.0"]
 
 
-def test_installed_version_parses_cyanrip_v(monkeypatch):
-    # Real output of master on 2026-10-11.
+def test_installed_version_parses_cyanrip_h(monkeypatch):
+    asked = []
+
+    def output(text):
+        def capture(cmd, timeout=10):
+            asked.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, text, "")
+        return capture
+    # Real first lines of -h: master on 2026-10-27, and Debian 13's package
+    # 0.9.3.1 (it has no -v, and says 0.9.3: meson.build was not bumped).
     monkeypatch.setattr(install.proc, "capture",
-                        lambda cmd, timeout=10: subprocess.CompletedProcess(cmd, 0, "cyanrip 0.9.4-rc3 (b40c1f0)\n", ""))
+                        output("cyanrip 0.9.4-rc3 (b40c1f0)\n    --help (-h):              Print this text\n"))
     assert install.installed_version("cyanrip") == install.Installed("0.9.4-rc3", "b40c1f0")
-    monkeypatch.setattr(install.proc, "capture",
-                        lambda cmd, timeout=10: subprocess.CompletedProcess(cmd, 0, "cyanrip 0.9.3.1\n", ""))
-    assert install.installed_version("cyanrip") == install.Installed("0.9.3.1", None)
+    monkeypatch.setattr(install.proc, "capture", output("cyanrip 0.9.3 (release) help:\n\n  Ripping options:\n"))
+    assert asked[0] == ["cyanrip", "-h"]
+    assert install.installed_version("cyanrip") == install.Installed("0.9.3", None)
 
 
 def test_remote_info_is_parsed_and_cached(monkeypatch):
@@ -1552,7 +1819,8 @@ REMOTE = install.Remote("v0.9.3.1", "b40c1f006a000a8bbd2d7ccc438a17006b9b71a0")
     ("master", install.Installed("0.9.3.1", None), False, ("is a release", True, False)),
     ("master", install.Installed("0.9.4-rc3", "b40c1f0"), True, None),           # on master
     ("master", install.Installed("0.9.4-rc3", "a1b2c3d"), True, ("new commits", True, True)),
-    ("release", install.Installed("0.9.3", None), False, ("0.9.3.1 is out", False, True)),  # package
+    ("release", install.Installed("0.9.0", None), False, ("0.9.3.1 is out", False, True)),  # Ubuntu 24.04
+    ("release", install.Installed("0.9.3", None), False, None),  # Debian 13's 0.9.3.1 says 0.9.3
     ("release", install.Installed("0.9.3", "11fe094"), True, ("0.9.3.1 is out", True, True)),
     ("release", install.Installed("0.9.3.1", None), False, None),
     ("release", install.Installed("0.9.4-rc3", "b40c1f0"), True, None),          # master is newer

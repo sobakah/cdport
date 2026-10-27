@@ -9,7 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import config, cover, covertool, disc, install, library, lyrics, musicbrainz, proc, rip, state, tags, tools, ui
+from . import (config, cover, covertool, disc, install, library, lyrics, musicbrainz, proc, rip, selfupdate,
+               state, tags, tools, ui)
 from .config import expand
 from .state import AlbumState
 
@@ -33,6 +34,9 @@ class Options:
     editor: str = ""
     install_cyanrip: bool = False
     rip_mode: str = ""  # "fast" or "secure"; empty: config cyanrip.mode
+    # A newer cdimport: "daily" (config check_for_updates), "now" (--update)
+    # or "never" (switched off, or started by another program's page).
+    self_update: str = "never"
 
 
 @dataclass
@@ -43,6 +47,7 @@ class Session:
     library_dir: Path | None
     config_path: Path
     cyanrip: str | None = None
+    cyanrip_version: str | None = None  # None when cyanrip -h says nothing readable
     lyrembed: str | None = None
     lyrembed_problem: str = ""  # found, but does not start
     lyrembed_romanize: bool = False  # lyrembed has --romanize for batch mode
@@ -153,11 +158,12 @@ def check_tools(session: Session) -> None:
     session.cyanrip = tools.find_cyanrip(cfg)
     session.lyrembed = tools.find_lyrembed(cfg)
 
-    if session.cyanrip and (problem := tools.start_problem([session.cyanrip, "-v"])):
+    if session.cyanrip and (problem := tools.start_problem([session.cyanrip, install.VERSION_OPTION])):
         ui.check("cyanrip", f"{ui.tilde(session.cyanrip)} does not start: {problem}", False)
         session.cyanrip = None
     if session.cyanrip:
         installed = install.installed_version(session.cyanrip)
+        session.cyanrip_version = installed.version if installed else None
         version = f" ({installed.version})" if installed else ""
         ui.check("cyanrip", f"{ui.tilde(session.cyanrip)}{version}", True)
         if installed and not session.options.install_cyanrip:
@@ -171,14 +177,14 @@ def check_tools(session: Session) -> None:
     if editor_key == "skip":
         ui.check("editor", "skipped (config)", None)
     else:
-        editor = tools.find_editor(cfg, editor_key)
-        if editor:
+        editor = tools.editor_or_fallback(cfg, editor_key)
+        name = cfg["editors"].get(editor_key, {}).get("name", editor_key)
+        if editor and editor.key == editor_key:
             ui.check("editor", editor.name, True)
+        elif editor:
+            ui.check("editor", f"{editor.name} ({name} not found)", True)
         else:
-            name = cfg["editors"].get(editor_key, {}).get("name", editor_key)
-            others = [e.name for e in tools.available_editors(cfg)]
-            ui.check("editor", f"{name} not found", False,
-                     f"available: {', '.join(others)}" if others else "")
+            ui.check("editor", f"{name} not found", False)
 
     if session.lyrembed and (problem := tools.start_problem([session.lyrembed, "--version"])):
         ui.check("lyrembed", f"{ui.tilde(session.lyrembed)} does not start: {problem}", False)
@@ -191,9 +197,64 @@ def check_tools(session: Session) -> None:
     else:
         ui.check("lyrembed", "not found: the lyrics step is disabled", False,
                  f"To install: {tools.LYREMBED_INSTALL_HINT}")
+    offer_self_update(session)
     ui.gap()
     ui.field("Working", ui.tilde(session.work_dir) if session.work_dir else "-")
     ui.field("Library", ui.tilde(session.library_dir) if session.library_dir else "-")
+
+
+class Restart(Exception):
+    """A newer cdimport is installed: start it in this process's place."""
+
+    def __init__(self, argv: list[str]) -> None:
+        super().__init__(argv)
+        self.argv = argv
+
+
+def self_update_state() -> Path:
+    return install.cache_dir() / "self-update.json"
+
+
+def offer_self_update(session: Session) -> None:
+    """A newer cdimport, as picktag does it: the release tags on GitHub, at
+    most once a day; in the terminal pipx updates it and cdimport starts
+    again. The page shows the command: a restart would cut it off."""
+    mode = session.options.self_update
+    if mode == "never" or (mode == "daily" and not selfupdate.due(self_update_state())):
+        return
+    try:
+        found = selfupdate.latest()
+    except selfupdate.UpdateError as exc:
+        if mode == "now":
+            ui.check("cdimport", f"{config.__version__}; could not look for a newer one: {exc}", False)
+        else:
+            ui.dim(f"{INDENT}Update check for cdimport skipped: {exc}")
+        return
+    if problem := selfupdate.mark_checked(self_update_state()):
+        ui.dim(f"{INDENT}Could not remember the update check ({problem}); it runs again next time.")
+    if not selfupdate.newer(found):
+        if mode == "now":
+            ui.check("cdimport", f"{config.__version__} is the newest version", True)
+        return
+    how = selfupdate.how_installed(found)
+    ui.check("cdimport", f"{found} is available (this is {config.__version__})", False,
+             f"What's new: {selfupdate.RELEASES}/tag/{found}")
+    if how.argv is None or not ui.in_terminal():
+        ui.dim(f"{INDENT}To update: {how.command}")
+        if how.argv is not None:
+            ui.dim(f"{INDENT}Run it in a terminal, then start cdimport again.")
+        return
+    if not ui.confirm(f"Update cdimport to {found} now?", default=True):
+        return
+    ui.tool_start("pipx", how.command)
+    code = proc.run(how.argv)
+    ui.tool_end("pipx", code)
+    if code != 0:
+        ui.error(f"The update did not work (exit code {code}); this run goes on with cdimport "
+                 f"{config.__version__}. To try again: {how.command}")
+        return
+    ui.success(f"cdimport {found} is installed; starting it again.")
+    raise Restart([arg for arg in selfupdate.restart_argv() if arg != "--update"])
 
 
 def offer_cyanrip_install(session: Session) -> None:
@@ -455,9 +516,17 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
         covers = {str(i): {"url": cover.release_thumbnail(mbid)} for i, (mbid, _) in enumerate(shown.releases, 1)}
         if not (shown.needs_tags or shown.releases):
             options.append(("r", "rip"))
+        by_release = not shown.disc_unknown or install.takes_release_for_unknown_disc(session.cyanrip_version)
+        if by_release:
+            options += [
+                ("s", "search MusicBrainz for the release (album and artist)"),
+                ("m", "pick a MusicBrainz release (list number, release ID or link)"),
+            ]
+        else:
+            ui.dim(f"cyanrip {session.cyanrip_version} takes a MusicBrainz release only for discs "
+                   f"MusicBrainz knows ({install.RELEASE_FOR_UNKNOWN_DISC} or newer: for any disc); "
+                   "type the tags in instead.")
         options += [
-            ("s", "search MusicBrainz for the release (album and artist)"),
-            ("m", "pick a MusicBrainz release (list number, release ID or link)"),
             ("t", "type in the tags (album, artist, year, track titles)"),
             ("n", "rip without MusicBrainz metadata"),
             ("p", "rip securely with paranoia instead (about twice as slow)" if mode == "fast"
@@ -465,7 +534,7 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
             ("b", "back to disc detection"),
             ("q", "quit"),
         ]
-        default = "1" if shown.releases else "s" if shown.needs_tags else "r"
+        default = "1" if shown.releases else ("s" if by_release else "t") if shown.needs_tags else "r"
         answer = ui.choose("Rip this disc", options, default=default, info={"images": covers})
         if answer == "p":
             mode = "secure" if mode == "fast" else "fast"
@@ -791,7 +860,7 @@ def tags_step(session: Session, album: AlbumState) -> bool:
     ui.step(3, "Tags")
     cfg = session.cfg
     key = session.options.editor or cfg["editor"]
-    editor = tools.find_editor(cfg, key) if key != "skip" else None
+    editor = tools.editor_or_fallback(cfg, key) if key != "skip" else None
     edited = False
     builtin = ui.supports("tag_editor")
     while True:

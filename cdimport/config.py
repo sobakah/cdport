@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-__version__ = "0.6.4"
+__version__ = "1.0.0"
 
 # File names cdimport owns inside the working folder and album folders.
 STATE_FILE_NAME = ".cdimport.json"
@@ -66,6 +66,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "cyanrip_source_dir": "",
     "cyanrip_build_dir": "",
     "color": "auto",
+    "check_for_updates": True,
 }
 
 # What each setting does: the single place for it, written next to each value
@@ -147,6 +148,10 @@ SETTING_HELP: dict[str, Any] = {
     ),
     "cyanrip_build_dir": "Meson build folder of that source build. Set by the installer.",
     "color": "\"auto\", \"always\" or \"never\". auto honours NO_COLOR and non-terminal output.",
+    "check_for_updates": (
+        "Look for a newer cdimport at the start, at most once a day (asks GitHub through git), "
+        "and offer to update it with pipx. cdimport --update looks right away."
+    ),
 }
 
 EXAMPLE_ABOUT = [

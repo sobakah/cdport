@@ -13,14 +13,15 @@ does not rip, tag or fetch lyrics itself.
 5. Finish   offer to move the album into the music library, summary
 ```
 
-Version 0.6.4 · Python 3.10+ · Linux (Windows later)
+Version 1.0.0 · Python 3.10+ · Linux (Windows later)
 
 ## Requirements
 
 - [cyanrip](https://github.com/cyanreg/cyanrip) for ripping. Without it,
   cdimport still continues albums ripped earlier.
 - A tag editor: [Ear Tag](https://flathub.org/apps/app.drey.EarTag) by
-  default, Kid3 or Picard as alternatives, or none.
+  default, Kid3 or Picard as alternatives, or none. Without Ear Tag (it
+  only comes as a Flatpak), cdimport offers an installed Kid3 or Picard.
 - [lyrembed](https://github.com/sobakah/lyrembed) for lyrics (optional).
 - `mutagen` for the tag check after editing (installed with cdimport).
 
@@ -29,8 +30,10 @@ command first and asks before running it. Where the distribution has a
 package, it uses the package manager (`sudo apt install cyanrip`, ...). On
 Fedora and other systems without one, it builds cyanrip from source:
 
-1. It checks the build dependencies with pkg-config and, on Fedora, offers
-   `sudo dnf install ...` for the missing ones.
+1. It checks the build dependencies with pkg-config and offers to install
+   the missing ones with the package manager: `dnf` (Fedora), `apt`
+   (Debian, Ubuntu, Mint), `pacman` (Arch, Manjaro) or `zypper`
+   (openSUSE). Elsewhere it lists them and waits until they are installed.
 2. It asks for the clone folder and the meson build folder. Both prompts
    are prefilled and editable (Tab completes paths): the folders remembered
    from the last build, else `~/.local/src/cyanrip` and its `build`
@@ -47,9 +50,9 @@ Which version is controlled by `cyanrip.channel` in the config:
 - `"master"`: the `master` branch, always built from source into
   `~/.local`, also where a package exists. Use it when the release does not
   build against your FFmpeg: v0.9.3.1 does not compile against FFmpeg 9
-  (Fedora 45).
+  (Fedora 45, Arch, openSUSE Tumbleweed).
 
-At start cdimport compares the installed cyanrip (`cyanrip -v`) with GitHub,
+At start cdimport compares the installed cyanrip (from `cyanrip -h`) with GitHub,
 which it asks at most once a day:
 
 - A release installed with `"master"` set: it offers to build master
@@ -71,7 +74,20 @@ cdimport ~/Temp/Album     # continue with an album ripped earlier
 cdimport --lyrics auto --editor skip
 cdimport --install-cyanrip    # update and rebuild cyanrip first
 cdimport --rip-mode secure      # paranoia for every track (default: fast)
+cdimport --update               # look for a newer cdimport now
 ```
+
+### Updates
+
+At the start cdimport looks for a newer release on GitHub, at most once a
+day (`git ls-remote`, with the same access as `pipx install`; it never asks
+for a password). When there is one, step 0 says so with a link to what is
+new. Installed with pipx, cdimport offers to update right away (`pipx
+upgrade cdimport`, or `pipx install --force ...@<new tag>` for an install
+pinned to a release, which stays pinned) and then starts again with the same
+arguments. On the page, and for other installs, it shows the command to run.
+`cdimport --update` looks right away; `"check_for_updates": false` in the
+config turns the daily check off.
 
 On first use cdimport asks for two folders and saves them in the config: the
 working folder, where rips land first (suggested: `~/Temp`), and the music
@@ -146,6 +162,10 @@ that ID, cyanrip will not rip without tags, and cdimport offers:
   its media and track counts (the disc's count is marked) and a link.
 - `m` a release ID or a pasted MusicBrainz release link. cyanrip takes the
   tags from that release even though the disc ID is not attached to it.
+
+  `s` and `m` need cyanrip 0.9.4-rc3 or newer for such a disc. The
+  distributions' packages (0.9.3.1 and older) take a release only for discs
+  MusicBrainz knows, so with them cdimport offers `t` instead.
 - `t` type in the tags: album, album artist, year, track titles (cyanrip's
   `-a`/`-t`). The tag step can refine them.
 - `n` rip without MusicBrainz metadata.
@@ -250,7 +270,8 @@ config as it is (the `_` keys are comments). The most common settings:
     "dir_scheme": "{album}{if #releasecomment# > #0# (|releasecomment|)}",
     "extra_args": []
   },
-  "lyrembed": { "path": "", "extra_args": [] }
+  "lyrembed": { "path": "", "extra_args": [] },
+  "check_for_updates": true
 }
 ```
 

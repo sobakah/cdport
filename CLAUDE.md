@@ -60,6 +60,13 @@ rip lock taken before the folder exists, the tag editor's folder followed
 at each save, case-only renames, the track range kept without MusicBrainz.
 0.6.4 (2026-10-27): lyrembed's page is recognised from `lyrembed --help`
 (`--no-browser`), not its version number; ready for lyrembed 1.0.0.
+1.0.0 (2026-10-27), the first stable release; the patch releases 0.4.1 to
+0.6.4 were folded into their line's first release (CHANGELOG, GitHub) and
+their tags removed. New in it: other Linux distributions, checked in containers:
+the packaged cyanrip is found (`-h`, not `-v`), build dependencies via
+apt/pacman/zypper, the editor falls back to an installed one, no release
+search for unknown discs with cyanrip before 0.9.4-rc3; and cdimport's own
+update check (`selfupdate.py`, taken from picktag's `core/selfupdate.py`).
 
 Layout: `cdimport/` package (`app.py` runs the steps, one module per step:
 `disc`, `rip`, `tags`, `lyrics`, `library`; `state`, `tools`, `proc`,
@@ -150,18 +157,52 @@ On 2026-10-11 the maintainer's PC lacked `meson ninja-build
 libmusicbrainz5-devel libcurl-devel` (all in the `fedora` repo, checked with
 dnf repoquery); FFmpeg 9 and libcdio-paranoia headers were installed.
 
+Other distributions (`install.dependency_command`, checked 2026-10-27 in
+podman containers by installing exactly cdimport's command, then checking
+every pkg-config requirement and building cyanrip): `apt` for
+debian/ubuntu (and ID_LIKE, e.g. Mint) with `-dev` names, `pacman -S
+--needed` for arch (its packages carry the headers; FFmpeg is one package),
+`zypper` for suse/opensuse with `pkgconfig(NAME) >= VERSION`: Tumbleweed
+offers FFmpeg 4 to 9 for each, and the version makes it pick 9. master
+(648b1dd) built on Debian 13, Ubuntu 24.04, Arch and Tumbleweed; v0.9.3.1
+built on Debian and Ubuntu (FFmpeg 7.1/6.1) but not against FFmpeg 9 (Arch,
+Tumbleweed), as on Fedora. Distros without a mapping (Gentoo, ...) get
+the list of pkg-config names, as before.
+
+### Updates of cdimport itself
+
+Asked for by the maintainer on 2026-10-27, after picktag got the same
+(`picktag/core/selfupdate.py`; copied, not imported, like everything shared
+between the tools). `selfupdate.latest` takes the highest plain `x.y.z` tag
+from `git ls-remote --tags` of the private repository: git has the access
+`pipx install` has (gh as credential helper) and never prompts
+(`GIT_TERMINAL_PROMPT=0`, no askpass). Step 0 asks at most once a day
+(`<cache>/self-update.json`, written when GitHub answered), or at once with
+`--update`; never when started with `--return-url` (lyrembed's Import a
+CD runs the show then). A pipx install (`pipx_metadata.json` in
+`sys.prefix`) is updated in the terminal after a yes: `pipx upgrade`, or
+`pipx install --force` with the new tag when the install is pinned to one.
+Then `app.Restart` reaches `cli.main`, which `exec`s the command cdimport
+was started with, without `--update`. The page only shows the command:
+restarting would cut it off, and pipx replaces the page's files under the
+running server. A checkout gets `git pull`, another install the pipx
+command. Checked 2026-10-27 against GitHub and the real pipx metadata, and
+in a pseudo-terminal with a faked release (question, run, exec).
+
 ### Update notification for cyanrip
 
 At most once a day, result cached (e.g. `~/.cache/cdimport/`):
 
-- **Self-built:** compare `cyanrip -v` (version and commit) with
+- **Self-built:** compare the version and commit (`cyanrip -h`'s first line) with
   `git ls-remote` of GitHub (newest `vX.Y.Z` tag, `master` commit); behind
   → offer to rebuild. Built that way instead of `git fetch` in the source
   folder, so it also works for a cyanrip built by hand.
 - **Channel mismatch** (a release installed, `channel: master`): offer the
   master build on every start, not once a day.
 - **Distro package:** the package manager handles updates. Only say when
-  GitHub has a newer release than the installed version.
+  GitHub has a newer release than the installed version, compared on the
+  first three numbers: v0.9.3.1's meson.build says 0.9.3, which is what
+  Debian's and openSUSE's package print (Ubuntu 24.04's 0.9.2 says 0.9.0).
 - **Windows exe:** compare with GitHub's latest release, offer the download.
 
 ## Facts checked on 2026-10-11
@@ -231,6 +272,16 @@ Behaviour depends on third-party tools; re-verify before relying on these.
   "found", else the rip is secure. Not yet run end to end on real
   hardware: the fast/re-rip file names are assumed to match because both
   passes use the same release, tags and naming scheme.
+- **Older releases** (checked 2026-10-27 in the v0.9.2/v0.9.3.1 sources
+  and with Debian 13's, Ubuntu 24.04's and Tumbleweed's packages): no `-v`
+  (`invalid option`, exit 1; cdimport reads `-h`, whose first line is
+  `cyanrip VERSION (TAG) help:` there and `cyanrip VERSION (COMMIT)` on
+  master). Every line cdimport parses (offset, unknown disc, several
+  releases, AccurateRip, "Track N ripped and encoded successfully!") is the
+  same; "with errors." exists only from 2025-10. `-R` for a disc
+  MusicBrainz does not know needs master bde6a1e (2026-10-10, first in
+  0.9.4-rc3, `install.RELEASE_FOR_UNKNOWN_DISC`); before, it only picks
+  among the disc ID's releases, so cdimport hides `s`/`m` for such a disc.
 - Relevant options: `-I` print disc info and MusicBrainz match without
   ripping; `-R` pick a MusicBrainz release (index or ID); `-D`/`-F` directory
   and file naming schemes (use `-D` to know the output folder instead of
@@ -288,7 +339,7 @@ installed with pipx)
 - 2026-10-11: Fedora moved `/usr/bin/python3` to 3.15 and removed 3.14, so
   every pipx venv built on 3.14 (lyrembed, keepbest, media-optimizer) fails
   with "bad interpreter". cdimport crashed on it; now step 0 runs
-  `lyrembed --version` / `cyanrip -v`, reports such a tool with the repair
+  `lyrembed --version` / `cyanrip -h`, reports such a tool with the repair
   command (`pipx reinstall NAME`), and any tool that cannot start returns
   127 instead of raising.
 - Exit codes: 0 done/quit, 1 batch failures, 2 unusable input, 130 Ctrl+C.

@@ -49,6 +49,25 @@ FEDORA_PACKAGES = {
     "libqrencode": "qrencode-devel", "libchromaprint": "libchromaprint-devel",
 }
 _FFMPEG_LIBS = {"libavcodec", "libavformat", "libswresample", "libavfilter", "libavutil"}
+# Debian/Ubuntu and Arch names, checked 2026-10-27 in the debian:trixie,
+# ubuntu:24.04 and archlinux images (Arch's packages carry their headers).
+DEBIAN_PACKAGES = {
+    "git": "git", "pkg-config": "pkgconf", "meson": "meson", "ninja": "ninja-build", "cc": "gcc",
+    **{name: f"{name}-dev" for name in _FFMPEG_LIBS},
+    "libcdio": "libcdio-dev", "libcdio_paranoia": "libcdio-paranoia-dev",
+    "libmusicbrainz5": "libmusicbrainz5-dev", "libcurl": "libcurl4-openssl-dev",
+    "libqrencode": "libqrencode-dev", "libchromaprint": "libchromaprint-dev",
+}
+ARCH_PACKAGES = {
+    "git": "git", "pkg-config": "pkgconf", "meson": "meson", "ninja": "ninja", "cc": "gcc",
+    **{name: "ffmpeg" for name in _FFMPEG_LIBS},
+    "libcdio": "libcdio", "libcdio_paranoia": "libcdio-paranoia", "libmusicbrainz5": "libmusicbrainz5",
+    "libcurl": "curl", "libqrencode": "qrencode", "libchromaprint": "chromaprint",
+}
+# zypper finds libraries by their pkg-config name; with the minimum version,
+# as Tumbleweed offers FFmpeg 4 to 9 for each (checked 2026-10-27).
+SUSE_TOOLS = {"git": "git", "pkg-config": "pkgconf-pkg-config", "meson": "meson", "ninja": "ninja", "cc": "gcc"}
+_MIN_VERSIONS = {name: version for name, version, *_ in REQUIRED_LIBS + OPTIONAL_LIBS}
 
 
 @dataclass
@@ -146,6 +165,30 @@ def fedora_packages(names: list[str]) -> list[str]:
     return packages
 
 
+def _mapped(table: dict[str, str], names: list[str]) -> list[str]:
+    return list(dict.fromkeys(table[name] for name in names))
+
+
+def _suse_packages(names: list[str]) -> list[str]:
+    return [SUSE_TOOLS[name] if name in SUSE_TOOLS else f"pkgconfig({name}) >= {_MIN_VERSIONS[name]}"
+            for name in names]
+
+
+def dependency_command(os_release: dict[str, str], names: list[str]) -> tuple[str, list[str]] | None:
+    """The package manager and the command that installs these build tools
+    and pkg-config libraries; None on a system cdimport has no names for."""
+    for distro_id in _distro_ids(os_release):
+        if distro_id in ("fedora", "rhel", "centos"):
+            return "dnf", _sudo(["dnf", "install"] + fedora_packages(names))
+        if distro_id in ("debian", "ubuntu"):
+            return "apt", _sudo(["apt", "install"] + _mapped(DEBIAN_PACKAGES, names))
+        if distro_id == "arch":
+            return "pacman", _sudo(["pacman", "-S", "--needed"] + _mapped(ARCH_PACKAGES, names))
+        if distro_id in ("suse", "opensuse") or distro_id.startswith("opensuse-"):
+            return "zypper", _sudo(["zypper", "install"] + _suse_packages(names))
+    return None
+
+
 def install_dependencies(os_release: dict[str, str]) -> bool:
     """Make sure everything the build needs is there; True when it is."""
     tools_missing = missing_tools()
@@ -155,7 +198,7 @@ def install_dependencies(os_release: dict[str, str]) -> bool:
     if not (tools_missing or libs_missing or optional_missing):
         return True
 
-    if "fedora" in _distro_ids(os_release):
+    if dependency_command(os_release, []):
         wanted = tools_missing + libs_missing
         if optional_missing:
             ui.info("Optional for cyanrip:")
@@ -163,11 +206,12 @@ def install_dependencies(os_release: dict[str, str]) -> bool:
                 ui.info(f"  {name}: {purpose}")
             if ui.confirm("Install the optional libraries too?", default=False):
                 wanted += [name for name, *_ in optional_missing]
-        if wanted:
-            cmd = _sudo(["dnf", "install"] + fedora_packages(wanted))
+        found = dependency_command(os_release, wanted) if wanted else None
+        if found:
+            manager, cmd = found
             ui.info("Build dependencies to install:")
             ui.info(f"  {proc.format_command(cmd)}")
-            ui.dim("dnf shows what it will install and asks again before changing anything.")
+            ui.dim(f"{manager} lists what it will install before it changes anything.")
             if not ui.confirm("Run this command?", default=True):
                 return False
             if proc.run(cmd) != 0:
@@ -418,9 +462,30 @@ def version_key(version: str) -> tuple:
     return (numbers, 1, ())
 
 
+VERSION_OPTION = "-h"
+
+# cyanrip takes -R for a disc MusicBrainz does not know from master bde6a1e
+# (2026-10-10), first in 0.9.4-rc3. Before, -R only picks among the releases
+# the disc ID leads to, so for such a disc it ends with "Unable to find
+# release info" (checked in the v0.9.2 and v0.9.3.1 sources, which Ubuntu
+# 24.04, Debian 13 and openSUSE Tumbleweed package).
+RELEASE_FOR_UNKNOWN_DISC = "0.9.4-rc3"
+
+
+def takes_release_for_unknown_disc(version: str | None) -> bool:
+    """Whether this cyanrip can rip a disc MusicBrainz does not know with a
+    release given by ID. An unknown version gets the benefit of the doubt."""
+    return version is None or version_key(version) >= version_key(RELEASE_FOR_UNKNOWN_DISC)
+
+
 def installed_version(cyanrip: str) -> Installed | None:
-    """Parse 'cyanrip 0.9.4-rc3 (b40c1f0)' from cyanrip -v."""
-    result = proc.capture([cyanrip, "-v"])
+    """Parse 'cyanrip 0.9.4-rc3 (b40c1f0)', the first line of cyanrip -h.
+
+    Not -v: releases up to 0.9.3.1 (Debian's, Ubuntu's, openSUSE's) do not
+    know it, while -h starts with that line in every version (checked
+    2026-10-27 in containers and in the sources).
+    """
+    result = proc.capture([cyanrip, VERSION_OPTION])
     if result is None:
         return None
     match = re.search(r"cyanrip\s+(\d[\w.\-]*)(?:\s+\(([0-9a-f]{7,40})\))?", result.stdout + result.stderr)
@@ -501,9 +566,19 @@ def update_offer(channel: str, installed: Installed, remote: Remote, self_built:
                                can_build=self_built, daily=True)
         return None
     if latest and version_key(installed.version) < version_key(latest):
+        # v0.9.3.1's meson.build still says 0.9.3, which Debian's and openSUSE's
+        # package print (checked 2026-10-27); a package is compared on the
+        # first three numbers, so it is not told about the release it is.
+        if not self_built and _three_numbers(installed.version) >= _three_numbers(latest):
+            return None
         return UpdateOffer(f"cyanrip {latest} is out; installed is {installed.version}.",
                            can_build=self_built, daily=True)
     return None
+
+
+def _three_numbers(version: str) -> tuple:
+    numbers, release, pre = version_key(version)
+    return (numbers[:3], release, pre)
 
 
 def should_show(offer: UpdateOffer) -> bool:

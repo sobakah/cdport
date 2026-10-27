@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -34,6 +35,8 @@ def build_parser() -> argparse.ArgumentParser:
                              "securely; secure: paranoia for every track (default: config cyanrip.mode)")
     parser.add_argument("--install-cyanrip", action="store_true",
                         help="install cyanrip, or update and rebuild a source build, before starting")
+    parser.add_argument("--update", action="store_true",
+                        help="look for a newer cdimport now (else once a day) and offer to install it")
     parser.add_argument("--color", choices=("auto", "always", "never"), help="override colour handling")
     page = parser.add_argument_group("browser (preview)")
     page.add_argument("--web", action="store_true",
@@ -81,6 +84,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--return-url must be a page on this computer, such as http://127.0.0.1:8000/")
     if args.web and args.install_cyanrip:
         parser.error("--install-cyanrip needs the terminal (it may ask for your password); run it without --web")
+    if args.update and args.return_url:
+        parser.error("--update does not apply with --return-url")
     if args.editor and args.editor != "skip" and args.editor not in cfg["editors"]:
         parser.error(f"unknown editor '{args.editor}' (known: {', '.join(cfg['editors'])}, skip)")
 
@@ -90,7 +95,10 @@ def main(argv: list[str] | None = None) -> int:
 
     options = app.Options(folder=args.folder, device=args.device or "",
                           lyrics=args.lyrics or "", editor=args.editor or "",
-                          install_cyanrip=args.install_cyanrip, rip_mode=args.rip_mode or "")
+                          install_cyanrip=args.install_cyanrip, rip_mode=args.rip_mode or "",
+                          # Started by another program's page: that one stays in charge.
+                          self_update="now" if args.update else "never" if args.return_url
+                          else "daily" if cfg["check_for_updates"] else "never")
     session = app.new_session(cfg, options, args.config)
     if args.web:
         from . import web  # not needed in the terminal
@@ -98,7 +106,13 @@ def main(argv: list[str] | None = None) -> int:
         return web.serve(session, open_browser=not args.no_browser,
                          back=(args.return_url, args.return_name) if args.return_url else None,
                          warnings=[f"Warning: {message}" for message in warnings])
-    return run_session(session)
+    try:
+        return run_session(session)
+    except app.Restart as restart:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.execvp(restart.argv[0], restart.argv)
+        return 0  # pragma: no cover - execvp does not return
 
 
 def run_session(session: app.Session) -> int:
