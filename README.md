@@ -9,11 +9,11 @@ does not rip, tag or fetch lyrics itself.
 1. Disc     wait for an audio CD, preview the MusicBrainz match (cyanrip -I)
 2. Rip      cyanrip → FLAC with tags, cover, AccurateRip log
 3. Tags     Ear Tag (or Kid3, Picard, ...) for manual revision, then a tag check
-4. Lyrics   lyrembed, automatic or interactive (lyrembed 2.0: a page in the browser)
+4. Lyrics   lyrembed, automatic or interactive (lyrembed 0.8.0 and newer: a page in the browser)
 5. Finish   offer to move the album into the music library, summary
 ```
 
-Version 0.6.3 · Python 3.10+ · Linux (Windows later)
+Version 0.6.4 · Python 3.10+ · Linux (Windows later)
 
 ## Requirements
 
@@ -106,7 +106,7 @@ a rip. On the page:
   a search and replace in all titles help. File names follow a changed
   title, and the folder a changed album, where cyanrip built them; the cue
   sheet follows, the rip log is never changed.
-- **The lyrics step hands the tab to lyrembed's page** (lyrembed 2.1.0 or
+- **The lyrics step hands the tab to lyrembed's page** (lyrembed 0.9.0 or
   newer): **Done – back to cdimport** there brings it back, and the run
   goes on.
 
@@ -189,7 +189,7 @@ disc or album); Enter ends it.
 In automatic lyrics mode cdimport asks whether to romanize the lyrics
 (Hangul, Kana, Hanzi to Latin letters). Enter keeps lyrembed's own setting
 (`settings.auto_romanize`); `y`/`n` pass `--romanize`/`--no-romanize`. This
-needs lyrembed 1.0.1 or newer; older versions are not asked. After an
+needs lyrembed 0.6.0 or newer; older versions are not asked. After an
 automatic run cdimport reads the tracks to see which ones still have no
 lyrics (lyrembed skips a track without a confident match). It lists them and
 offers lyrembed's interactive mode for them (Enter) or to continue without
@@ -198,7 +198,7 @@ got lyrics, `l` opens the album in lyrembed's interactive mode to check them,
 and Enter continues with the next step. lyrembed tags FLAC, MP3, Ogg, Opus
 and M4A; an album in other formats skips the lyrics step.
 
-From lyrembed 2.0.0 on, its interactive mode is a page in your browser
+From lyrembed 0.8.0 on, its interactive mode is a page in your browser
 instead of terminal menus; cdimport finds out from `lyrembed --version` and
 says so in its choices. lyrembed opens the page with the album and cdimport
 waits: quit lyrembed on the page, or close the tab, and cdimport continues

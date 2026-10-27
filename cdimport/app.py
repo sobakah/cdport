@@ -46,8 +46,8 @@ class Session:
     lyrembed: str | None = None
     lyrembed_problem: str = ""  # found, but does not start
     lyrembed_romanize: bool = False  # lyrembed has --romanize for batch mode
-    lyrembed_page: bool = False  # lyrembed 2.0+: the interactive mode is a page in the browser
-    lyrembed_return: bool = False  # lyrembed 2.1+: its page can lead back to cdimport's (--return-url)
+    lyrembed_page: bool = False  # lyrembed 0.8+: the interactive mode is a page in the browser
+    lyrembed_return: bool = False  # lyrembed 0.9+: its page can lead back to cdimport's (--return-url)
     page_url: str = ""  # cdimport's own page, when it runs on one (web.serve)
     album: AlbumState | None = None  # the album being worked on, for the Ctrl+C message
     # The newest album of any run; a later run without one keeps it, so the
@@ -994,7 +994,7 @@ def after_automatic_lyrics(session: Session, album: AlbumState, files: list[Path
 def offer_lyrics_check(session: Session, album: AlbumState) -> None:
     """After automatic mode, let the user look over what it embedded.
 
-    Interactive lyrembed (its page, from 2.0.0) shows every track, including
+    Interactive lyrembed (its page, from 0.8.0) shows every track, including
     those that now have lyrics, so it doubles as the review. The step is already marked done:
     the lyrics are embedded whatever happens in the check.
     """
@@ -1019,12 +1019,12 @@ def offer_lyrics_check(session: Session, album: AlbumState) -> None:
         ui.warn(f"lyrembed ended with exit code {code}; the lyrics embedded before stay.")
 
 
-NO_INTERACTIVE_LYRICS = ("Going through tracks interactively needs lyrembed 2.0 or newer on this page, "
+NO_INTERACTIVE_LYRICS = ("Going through tracks interactively needs lyrembed 0.8.0 or newer on this page, "
                          "or cdimport in a terminal.")
 
 
 def interactive_lyrics(session: Session) -> bool:
-    """Whether interactive lyrembed can be used: lyrembed before 2.0 asks in
+    """Whether interactive lyrembed can be used: lyrembed before 0.8.0 asks in
     terminal menus, which the page shows but cannot answer."""
     return ui.in_terminal() or session.lyrembed_page
 
@@ -1036,7 +1036,7 @@ def handoff_url(session: Session) -> str:
 
 
 def page_hint(session: Session) -> None:
-    """lyrembed 2.0 opens a page and waits; without this the terminal only
+    """lyrembed 0.8.0 and newer open a page and waits; without this the terminal only
     shows an address, and it is not obvious how to get back to cdimport."""
     if handoff_url(session):
         ui.dim("This tab now switches to lyrembed's page with the album. "

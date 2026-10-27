@@ -45,19 +45,21 @@ checked against the code first: lyrics left after `--auto`, one-time
 offset, config falls back per setting, link punctuation, re-rip leftovers,
 cover checks, `run_tail` without a terminal and after Ctrl+C, disc merge
 over all tracks with rollback, Flatpak option values.
-0.5.1 (2026-10-21): ready for lyrembed 2.0's browser page (version check,
+0.5.1 (2026-10-21): ready for lyrembed 0.8.0's browser page (version check,
 texts, how to get back to cdimport).
 0.6.0 (2026-10-21): the page (`--web`, preview) with pictures, the tag editor,
 the lyrics handoff to lyrembed, and `--return-url` for lyrembed's Import a CD.
 0.6.1 (2026-10-21): the tag editor shows every tag, disc/track numbers and the
 cover (with a way back to the cover step); the page scrolls like a terminal.
 0.6.2 (2026-10-25): fixes from a code review of the page: stopping (disc
-wait, Ctrl+C during a rip), no install or lyrembed 1.x menus on the page,
+wait, Ctrl+C during a rip), no install or lyrembed terminal menus on the page,
 lyrembed's address split over two reads, tag-editor renames put back.
 0.6.3 (2026-10-26): fixes from a second outside review (Gemini), each
 checked first: page closed before its first request, merge leftovers, the
 rip lock taken before the folder exists, the tag editor's folder followed
 at each save, case-only renames, the track range kept without MusicBrainz.
+0.6.4 (2026-10-27): lyrembed's page is recognised from `lyrembed --help`
+(`--no-browser`), not its version number; ready for lyrembed 1.0.0.
 
 Layout: `cdimport/` package (`app.py` runs the steps, one module per step:
 `disc`, `rip`, `tags`, `lyrics`, `library`; `state`, `tools`, `proc`,
@@ -113,7 +115,7 @@ regenerate it (see `config.write_example`); a test fails until then.
   -I` ran on the drive during the maintainer's rip (AccurateRip still
   matched 6/6). Versions before this fix do not take the lock.
 - **Lyrics mode** chosen by the user each run: automatic (`lyrembed DIR
-  --auto`) or interactive (`lyrembed DIR`). From lyrembed 2.0.0 the
+  --auto`) or interactive (`lyrembed DIR`). From lyrembed 0.8.0 the
   interactive mode is a page in the browser; cdimport still starts
   `lyrembed DIR` and waits for it to exit (Quit on the page, or closing the
   tab, ends it), so only the texts differ (`lyrics.probe`,
@@ -291,7 +293,7 @@ installed with pipx)
   127 instead of raising.
 - Exit codes: 0 done/quit, 1 batch failures, 2 unusable input, 130 Ctrl+C.
   **Batch mode exits 0 also when it embedded nothing** (checked 2026-10-15
-  in 1.1.0's `run_batch`): "no confident match", incomplete tags and
+  in 0.7.0's `run_batch`): "no confident match", incomplete tags and
   instrumentals count as skipped; 1 means only unreadable files or failed
   writes. There is no machine-readable summary. So cdimport reads the
   tracks after `--auto` (`lyrics.without_lyrics`: Vorbis `LYRICS`/
@@ -302,15 +304,15 @@ installed with pipx)
 - Batch mode (`--auto`) never prompts; `--dry-run`, `--overwrite`,
   `--color never` exist.
 - Planned in lyrembed, not built yet: "automatic, then prompt only for the
-  tracks it could not decide" (in 2.0: open the page with only those
+  tracks it could not decide" (on the page: open it with only those
   tracks), and a "Done – back to cdimport" button with a return address.
   When they exist, offer the first as a third lyrics mode.
-- **lyrembed 2.0.0** (2026-10-21) replaced its terminal menus with a page in
+- **lyrembed 0.8.0** (2026-10-21) replaced its terminal menus with a page in
   the browser. Its CLI flags, `--auto` and exit codes are unchanged; it
-  prints the page's address and waits. `lyrics.probe` tells 2.0 from
-  1.x by `lyrembed --version`.
+  prints the page's address and waits. `lyrics.probe` recognises the page
+  by `--no-browser` in `lyrembed --help`.
 - **Romanization in batch mode** was added to lyrembed on 2026-10-11 at the
-  maintainer's request (released as lyrembed 1.0.1): `settings.auto_romanize` (default false) and `--romanize` /
+  maintainer's request (released as lyrembed 0.6.0): `settings.auto_romanize` (default false) and `--romanize` /
   `--no-romanize` for `--auto`, reusing its bulk-action `auto_romanize`.
   cdimport asks in automatic mode; Enter passes no flag, so lyrembed's own
   setting decides. It only asks when `lyrembed --help` lists `--romanize`
@@ -382,7 +384,7 @@ A front end that wants live tool progress keeps the pseudo-terminal
   quits on that without finishing its log ("Force quitting",
   `on_quit_signal`, checked 2026-10-25).
 - Anything that may ask for a sudo password stays in the terminal: on the
-  page step 0 only names `cdimport --install-cyanrip`. lyrembed before 2.0
+  page step 0 only names `cdimport --install-cyanrip`. lyrembed before 0.8.0
   asks in terminal menus, so the page offers no interactive lyrics with it
   (`app.interactive_lyrics`).
 - Security as in lyrembed: 127.0.0.1, the token as an HttpOnly SameSite
@@ -421,7 +423,7 @@ A front end that wants live tool progress keeps the pseudo-terminal
   checked before anything is written, and renames go through temporary
   names, so two tracks that swap titles do not overwrite each other.
 - The lyrics step hands the tab to lyrembed's page, if lyrembed has
-  `--return-url` (`lyrics.probe`, from its `--help`; lyrembed 2.1.0):
+  `--return-url` (`lyrics.probe`, from its `--help`; lyrembed 0.9.0):
   - cdimport starts `lyrembed DIR --no-browser --return-url <its own page>
     --return-name cdimport` with `ui.tool_start(..., handoff=True)`;
   - `WebFront` reads lyrembed's address from its output line "lyrembed is

@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-__version__ = "0.6.3"
+__version__ = "0.6.4"
 
 # File names cdimport owns inside the working folder and album folders.
 STATE_FILE_NAME = ".cdimport.json"
@@ -88,7 +88,7 @@ SETTING_HELP: dict[str, Any] = {
     ),
     "lyrics_mode": (
         "\"ask\" (each run, automatic preselected), \"auto\" (lyrembed --auto: embed confident "
-        "matches without questions), \"interactive\" (choose for each track; lyrembed 2.0 and newer "
+        "matches without questions), \"interactive\" (choose for each track; lyrembed 0.8.0 and newer "
         "do that on a page in the browser) or \"skip\"."
     ),
     "editor": "Tag editor to offer by default: a key from \"editors\", or \"skip\".",

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -94,18 +93,18 @@ def run_lyrembed(lyrembed: str, cfg: dict[str, Any], folder: Path, mode: str,
 @dataclass
 class Features:
     """What the installed lyrembed can do."""
-    page: bool = False        # 2.0.0+: the interactive mode is a page in the browser, not terminal menus
-    romanize: bool = False    # --romanize for batch mode (added after 1.0.0; older versions reject it)
-    return_url: bool = False  # 2.1.0+: --return-url, its page can lead back to cdimport's
+    page: bool = False        # 0.8.0+: the interactive mode is a page in the browser, not terminal menus
+    romanize: bool = False    # 0.6.0+: --romanize for batch mode; older versions reject it
+    return_url: bool = False  # 0.9.0+: --return-url, its page can lead back to cdimport's
 
 
 def probe(lyrembed: str) -> Features:
-    """Read the features from one --version and one --help: each start of a
-    pipx tool costs a Python start. Either way cdimport starts `lyrembed DIR`
-    and waits for it to end; the page only changes what to tell the user."""
-    version = proc.capture([lyrembed, "--version"])
-    match = re.search(r"lyrembed (\d+)\.", version.stdout if version is not None else "")
-    page = match is not None and int(match.group(1)) >= 2
+    """Read the features from one --help: each start of a pipx tool costs a
+    Python start, and a flag shows exactly what is there, unlike a version
+    number. `--no-browser` came with the page. Either way
+    cdimport starts `lyrembed DIR` and waits for it to end; the page only
+    changes what to tell the user."""
     found = proc.capture([lyrembed, "--help"])
     usage = found.stdout if found is not None else ""
+    page = "--no-browser" in usage
     return Features(page, "--romanize" in usage, page and "--return-url" in usage)

@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.4] — 2026-10-27
+
+### Fixed
+
+* **lyrembed 1.0.0 is recognised.** cdimport told lyrembed's page from its
+  terminal menus by the version number, which took 1.0.0 for a version
+  without the page: no interactive lyrics on cdimport's page and no way
+  back to it. It now looks for `--no-browser` in `lyrembed --help`, which
+  also saves one start of lyrembed.
+
 ## [0.6.3] — 2026-10-26
 
 ### Fixed
@@ -57,7 +67,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 * **Installing or rebuilding cyanrip** is no longer offered on the page,
   where its password prompt cannot be answered; the page names
   `cdimport --install-cyanrip` for the terminal.
-* **lyrembed before 2.0 on the page:** its interactive mode asks in the
+* **lyrembed before 0.8.0 on the page:** its interactive mode asks in the
   terminal, so the page waited forever. The page now offers only automatic
   lyrics with such a lyrembed and says what interactive mode needs.
 * **lyrembed's address could get lost** when a line break arrived split
@@ -112,7 +122,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   replace in titles. File names follow titles and the folder the album
   where cyanrip built them; the cue sheet follows, the rip log stays
   untouched; nothing is written unless all of it can be.
-* **The lyrics step hands the tab to lyrembed's page** (lyrembed 2.1.0)
+* **The lyrics step hands the tab to lyrembed's page** (lyrembed 0.9.0)
   and gets it back with "Done – back to cdimport"; lyrembed's output,
   also in automatic mode, shows on the page.
 * **`--return-url URL --return-name NAME`** with `--web`: the finished
@@ -123,9 +133,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-* **Ready for lyrembed 2.0**, whose interactive mode is a page in the
+* **Ready for lyrembed 0.8.0**, whose interactive mode is a page in the
   browser instead of terminal menus. cdimport tells the versions apart by
-  `lyrembed --version`. With 2.0 its choices say that the album opens on
+  `lyrembed --version`. With 0.8.0 its choices say that the album opens on
   lyrembed's page, and before it opens cdimport says how to get back:
   quit lyrembed on the page, or close the tab, and cdimport continues with
   the next step. Older lyrembed versions work and read as before.
@@ -270,7 +280,7 @@ to finish; the individual steps were tried on real hardware.
   again, where an existing cover can be changed. Also a separate command,
   `cdimport-cover`.
 * **Rip logs stay out of the library:** they are kept in `<work_dir>/logs/`.
-* **Romanization question** in automatic lyrics mode (needs lyrembed 1.0.1).
+* **Romanization question** in automatic lyrics mode (needs lyrembed 0.6.0).
 * Working folder and music library are asked for on first use and saved in
   `~/.config/cdimport/config.json`; `config.example.json` explains every
   setting.

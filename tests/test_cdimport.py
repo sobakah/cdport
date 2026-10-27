@@ -2055,16 +2055,18 @@ def _answers(by_flag):
     return capture
 
 
-def test_probe_reads_lyrembeds_version_and_help(monkeypatch):
+def test_probe_reads_lyrembeds_help(monkeypatch):
     calls = []
-    for version, page in (("lyrembed 2.0.0\n", True), ("lyrembed 12.1.0", True), ("lyrembed 1.1.3\n", False),
-                          ("", False), (None, False)):   # None: does not start
-        fake = _answers({"--version": version, "--help": "  --auto ...\n  --romanize  in --auto mode ..."})
+    menus = "  --auto ...\n  --romanize  in --auto mode ..."
+    for usage, page in ((menus + "\n  --no-browser  print the page's address ...", True), (menus, False)):
+        # The version number is not asked.
+        fake = _answers({"--version": "lyrembed 1.0.0\n", "--help": usage})
         monkeypatch.setattr(lyrics.proc, "capture", lambda cmd, timeout=10: calls.append(cmd[-1]) or fake(cmd))
-        assert lyrics.probe("lyrembed") == lyrics.Features(page=page, romanize=True), version
-    assert calls.count("--help") == 5 and calls.count("--version") == 5   # one start each
-    monkeypatch.setattr(lyrics.proc, "capture", _answers({"--version": "lyrembed 1.0.0", "--help": "  --dry-run ..."}))
-    assert lyrics.probe("lyrembed") == lyrics.Features()
+        assert lyrics.probe("lyrembed") == lyrics.Features(page=page, romanize=True), usage
+    assert calls == ["--help", "--help"]   # one start each
+    for usage in ("  --dry-run ...", "", None):   # None: does not start
+        monkeypatch.setattr(lyrics.proc, "capture", _answers({"--help": usage}))
+        assert lyrics.probe("lyrembed") == lyrics.Features()
 
 
 @pytest.mark.parametrize("page", [True, False])
@@ -2641,10 +2643,10 @@ def test_lyrembed_is_told_where_its_page_leads_back(tmp_path, monkeypatch):
     assert cmd[2:] == ["--no-browser", "--return-url", "http://127.0.0.1:41877/", "--return-name", "cdimport"]
     assert lyrics.lyrembed_command("lyrembed", cfg, tmp_path, "auto", None, "http://127.0.0.1:1/")[2:] == ["--auto"]
 
-    help_2_1 = "  --no-browser\n  --return-url URL  a 'Done' button ..."
-    monkeypatch.setattr(lyrics.proc, "capture", _answers({"--version": "lyrembed 2.1.0", "--help": help_2_1}))
+    with_return = "  --no-browser\n  --return-url URL  a 'Done' button ..."
+    monkeypatch.setattr(lyrics.proc, "capture", _answers({"--help": with_return}))
     assert lyrics.probe("lyrembed").return_url
-    monkeypatch.setattr(lyrics.proc, "capture", _answers({"--version": "lyrembed 2.0.0", "--help": "  --no-browser"}))
+    monkeypatch.setattr(lyrics.proc, "capture", _answers({"--help": "  --no-browser"}))
     assert not lyrics.probe("lyrembed").return_url
 
 
@@ -2819,7 +2821,7 @@ def test_the_page_never_installs_or_builds_cyanrip(tmp_path, monkeypatch, front)
 
 def test_old_lyrembed_on_the_page_is_not_offered_interactively(tmp_path, monkeypatch, album_dir, front):
     session = app.new_session(default_cfg(), app.Options(lyrics="interactive"), tmp_path / "config.json")
-    session.lyrembed = "lyrembed"                         # 1.x: terminal menus the page cannot answer
+    session.lyrembed = "lyrembed"                         # before 0.8.0: terminal menus the page cannot answer
     modes = []
     monkeypatch.setattr(app.lyrics, "run_lyrembed",
                         lambda lyr, cfg, folder, mode, romanize=None, return_url='': modes.append(mode) or 0)
