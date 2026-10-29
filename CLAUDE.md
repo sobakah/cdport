@@ -67,6 +67,8 @@ the packaged cyanrip is found (`-h`, not `-v`), build dependencies via
 apt/pacman/zypper, the editor falls back to an installed one, no release
 search for unknown discs with cyanrip before 0.9.4-rc3; and cdimport's own
 update check (`selfupdate.py`, taken from picktag's `core/selfupdate.py`).
+1.0.1 (2026-10-29): the update check runs at every start, in the background
+(`app.UpdateCheck`), instead of once a day with step 0 waiting for it.
 
 Layout: `cdimport/` package (`app.py` runs the steps, one module per step:
 `disc`, `rip`, `tags`, `lyrics`, `library`; `state`, `tools`, `proc`,

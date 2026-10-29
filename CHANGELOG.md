@@ -11,6 +11,8 @@ next line's tag.
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-10-29
+
 ### Changed
 
 - **cdimport looks for a newer version at every start**, instead of once a
