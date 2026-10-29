@@ -69,12 +69,17 @@ search for unknown discs with cyanrip before 0.9.4-rc3; and cdimport's own
 update check (`selfupdate.py`, taken from picktag's `core/selfupdate.py`).
 1.0.1 (2026-10-29): the update check runs at every start, in the background
 (`app.UpdateCheck`), instead of once a day with step 0 waiting for it.
+1.1.0 (2026-10-29): cyanrip installed and updated on the page
+(`install.run_package_manager`, `proc.run_shown`), the app-menu entry
+(`desktop.py`, `--install-desktop-entry`, copied from lyrembed/keepbest)
+and a new icon in their style (`static/icon.svg`, also the page's favicon).
 
 Layout: `cdimport/` package (`app.py` runs the steps, one module per step:
 `disc`, `rip`, `tags`, `lyrics`, `library`; `state`, `tools`, `proc`,
 `config`, `ui`, `cli`, `install`, `cover` (Cover Art Archive/MusicBrainz,
 no UI), `musicbrainz` (release search for discs MusicBrainz does not know,
-no UI) and `covertool` (the cover step and the `cdimport-cover` command)),
+no UI), `covertool` (the cover step and the `cdimport-cover` command) and
+`desktop` (the app-menu entry)),
 `run.py` and `cover.py` launchers, `tests/test_cdimport.py`.
 `config.example.json` is generated from `DEFAULT_CONFIG` and `SETTING_HELP`
 in `config.py`. After adding or changing a setting, update both and
@@ -439,13 +444,24 @@ A front end that wants live tool progress keeps the pseudo-terminal
   `proc.terminal_interrupts_tools`), so it gets no second SIGINT: cyanrip
   quits on that without finishing its log ("Force quitting",
   `on_quit_signal`, checked 2026-10-25).
-- Anything that may ask for a sudo password stays in the terminal: on the
-  page step 0 only names `cdimport --install-cyanrip`. lyrembed before 0.8.0
-  asks in terminal menus, so the page offers no interactive lyrics with it
-  (`app.interactive_lyrics`).
+- Installing and updating cyanrip work on the page as in the terminal (the
+  maintainer's request, 2026-10-29; until then the page only named
+  `cdimport --install-cyanrip`, so the app menu could not update it). The
+  source build (git, meson into `~/.local`) needs no sudo and runs with
+  `proc.run_shown`, its output on the page. A package manager's command
+  asks for a sudo password and its own yes, which the page cannot pass on:
+  `install.run_package_manager` shows it for a terminal, asks "Has it
+  finished?", and the caller checks what is installed, as after a run in
+  the terminal. lyrembed before 0.8.0 asks in terminal menus, so the page
+  offers no interactive lyrics with it (`app.interactive_lyrics`).
+- **App menu** (`desktop.py`, as in lyrembed and keepbest): pipx cannot
+  install desktop files, so `--install-desktop-entry` writes
+  `~/.local/share/applications/cdimport.desktop` and the icon, starting the
+  cdimport that wrote it with `--web` (`Terminal=false`; from the menu
+  there is no terminal to answer in). Checked with `desktop-file-validate`.
 - Security as in lyrembed: 127.0.0.1, the token as an HttpOnly SameSite
-  cookie, `Host` and `Origin` checks, JSON only, a CSP. Installing cyanrip
-  stays in the terminal, because it may ask for a sudo password.
+  cookie, `Host` and `Origin` checks, JSON only, a CSP. A package manager's
+  command is left to a terminal, because it asks for a sudo password.
 - Pictures: `ui.choose(..., info={"images": {key: {"url"|"file": ...}}})`
   gives an option a picture; the terminal ignores `info`. `WebFront`
   registers each source under a random id, and `/api/image/<id>` serves only

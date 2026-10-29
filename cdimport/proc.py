@@ -91,6 +91,15 @@ def run(cmd: list[str], cwd: Path | None = None) -> int:
         _track(None)
 
 
+def run_shown(cmd: list[str], cwd: Path | None = None) -> int:
+    """run() in the terminal; on a front end such as the page, run_tail(),
+    so the output goes there instead of to a terminal nobody may look at."""
+    if ui.in_terminal():
+        return run(cmd, cwd)
+    code, _ = run_tail(cmd, cwd)
+    return code
+
+
 def _cannot_start(cmd: list[str], exc: OSError) -> None:
     """Report a tool that does not start (missing, or a launcher whose
     interpreter is gone) the way a shell would, so callers handle it like

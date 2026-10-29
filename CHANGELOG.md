@@ -11,6 +11,24 @@ next line's tag.
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-10-29
+
+### Added
+
+- cyanrip can be installed and updated on the page (`--web`, also with
+  `--install-cyanrip`). The page runs the source build and shows its output.
+  A package manager's command (build dependencies, the distribution's
+  cyanrip) asks for a password and a yes. The page names it for a terminal,
+  asks "Has it finished?", and then checks what it installed.
+- An app-menu entry: `--install-desktop-entry` adds cdimport to the menu of
+  GNOME, KDE and other freedesktop.org desktops, starting its page.
+  `--remove-desktop-entry` removes it.
+
+### Changed
+
+- A new icon, in the style of lyrembed's, keepbest's and picktag's: a CD
+  crumbling into pixels that become a music file. The page uses it too.
+
 ## [1.0.1] — 2026-10-29
 
 ### Changed

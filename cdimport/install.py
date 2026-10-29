@@ -189,6 +189,24 @@ def dependency_command(os_release: dict[str, str], names: list[str]) -> tuple[st
     return None
 
 
+def run_package_manager(cmd: list[str], what: str) -> bool:
+    """Run a package manager's command after a yes; True when it ran.
+
+    It asks for a sudo password and its own yes. The terminal passes both
+    on; a page cannot, so there the user runs the command in a terminal and
+    says when it has finished. The caller checks what it installed.
+    """
+    if ui.in_terminal():
+        if not ui.confirm("Run this command?", default=True):
+            return False
+        if proc.run(cmd) != 0:
+            ui.error(f"{what} failed.")
+            return False
+        return True
+    ui.info("Run it in a terminal: it asks for your password and a yes, which this page cannot pass on.")
+    return ui.confirm("Has it finished?", default=True)
+
+
 def install_dependencies(os_release: dict[str, str]) -> bool:
     """Make sure everything the build needs is there; True when it is."""
     tools_missing = missing_tools()
@@ -212,10 +230,7 @@ def install_dependencies(os_release: dict[str, str]) -> bool:
             ui.info("Build dependencies to install:")
             ui.info(f"  {proc.format_command(cmd)}")
             ui.dim(f"{manager} lists what it will install before it changes anything.")
-            if not ui.confirm("Run this command?", default=True):
-                return False
-            if proc.run(cmd) != 0:
-                ui.error("Installing the build dependencies failed.")
+            if not run_package_manager(cmd, "Installing the build dependencies"):
                 return False
     else:
         ui.warn("Install these with your package manager first:")
@@ -354,7 +369,7 @@ def build_from_source(cfg: dict[str, Any], config_path: Path, os_release: dict[s
         source.parent.mkdir(parents=True, exist_ok=True)
     for cmd, cwd in commands:
         ui.tool_start(Path(cmd[0]).name, proc.format_command(cmd))
-        code = proc.run(cmd, cwd=cwd)
+        code = proc.run_shown(cmd, cwd=cwd)
         ui.tool_end(Path(cmd[0]).name, code)
         if code != 0:
             ui.error(f"Failed (exit code {code}): {proc.format_command(cmd)}\n"
@@ -394,10 +409,7 @@ def install_package(cfg: dict[str, Any], route: Route) -> str | None:
     assert route.command
     ui.info(f"cyanrip is available as a {route.description}:")
     ui.info(f"  {proc.format_command(route.command)}")
-    if not ui.confirm("Run this command?", default=True):
-        return None
-    if proc.run(route.command) != 0:
-        ui.error("Installing cyanrip failed.")
+    if not run_package_manager(route.command, "Installing cyanrip"):
         return None
     return _found_after_install(cfg)
 

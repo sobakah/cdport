@@ -154,9 +154,6 @@ def ask_missing_folders(session: Session) -> None:
 # --- 0. Tools ----------------------------------------------------------------
 # Notes under a checklist line start where its text does.
 INDENT = " " * (4 + ui.LABEL_WIDTH)
-# Installing and building may ask for a sudo password, which only the
-# terminal can take: the page names the command instead.
-TERMINAL_INSTALL = "To do it, run cdimport --install-cyanrip in a terminal (it may ask for your password)."
 
 
 def check_tools(session: Session) -> None:
@@ -309,13 +306,12 @@ def late_self_update(session: Session) -> None:
 
 
 def offer_cyanrip_install(session: Session) -> None:
-    """Install cyanrip when it is missing, or (re)build it on request."""
+    """Install cyanrip when it is missing, or (re)build it on request. On the
+    page as in the terminal: a page leaves only the package manager's
+    commands, which ask for a password, to a terminal (install.run_package_manager)."""
     route = install.choose_route(channel=session.cfg["cyanrip"]["channel"])
     if not session.options.install_cyanrip:
         ui.dim(f"{INDENT}To install: {install.route_hint(route)}")
-        if route.kind != "download" and not ui.in_terminal():
-            ui.dim(f"{INDENT}{TERMINAL_INSTALL}")
-            return
         if route.kind == "download" or not ui.confirm("Install cyanrip now?", default=True):
             return
     ui.gap()
@@ -341,9 +337,6 @@ def offer_cyanrip_update(session: Session, installed: install.Installed) -> None
     ui.info(f"{INDENT}{ui.style(offer.message, 'yellow')}")
     if not offer.can_build:
         ui.dim(f"{INDENT}Your package manager updates it once the distribution packages the new version.")
-        return
-    if not ui.in_terminal():
-        ui.dim(f"{INDENT}{TERMINAL_INSTALL}")
         return
     if not ui.confirm("Build the new cyanrip now?", default=True):
         return

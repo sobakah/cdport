@@ -13,7 +13,7 @@ does not rip, tag or fetch lyrics itself.
 5. Finish   offer to move the album into the music library, summary
 ```
 
-Version 1.0.1 · Python 3.10+ · Linux (Windows later)
+Version 1.1.0 · Python 3.10+ · Linux (Windows later)
 
 ## Requirements
 
@@ -65,6 +65,13 @@ which it asks at most once a day:
 reinstalls the package). For a missing editor or lyrembed, cdimport only
 shows how to install it.
 
+On the page (`--web`) all of this works too: the page runs the source build
+and shows its output. A package manager's command (the build dependencies,
+or the distribution's cyanrip package) asks for your password and a yes,
+which a page cannot pass on. The page shows that command to run in a
+terminal, waits until you say it has finished, and then checks what it
+installed.
+
 ## Usage
 
 ```bash
@@ -75,6 +82,7 @@ cdimport --lyrics auto --editor skip
 cdimport --install-cyanrip    # update and rebuild cyanrip first
 cdimport --rip-mode secure      # paranoia for every track (default: fast)
 cdimport --update               # look for a newer cdimport now
+cdimport --install-desktop-entry  # add cdimport (its page) to the app menu
 ```
 
 ### Updates
@@ -129,8 +137,21 @@ a rip. On the page:
 
 lyrembed's **Import a CD** starts cdimport this way, with
 `--return-url`/`--return-name`: at the end, **Done – back to lyrembed**
-returns there with the imported album open. Installing cyanrip stays in
-the terminal (`--install-cyanrip` may ask for your password).
+returns there with the imported album open.
+
+### App menu
+
+```bash
+cdimport --install-desktop-entry
+```
+
+adds cdimport to the app menu of GNOME, KDE and other freedesktop.org
+desktops: `~/.local/share/applications/cdimport.desktop` and an icon under
+`~/.local/share/icons/`. Started from the menu, cdimport opens its page in
+your default browser (`--web`). The entry starts the cdimport that wrote it
+(a pipx installation, or the Python and `run.py` of a checkout), so run the
+command again after installing cdimport somewhere else.
+`--remove-desktop-entry` removes both files.
 
 ### Fast and secure rips
 

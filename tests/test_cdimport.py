@@ -2752,9 +2752,51 @@ def test_web_page_answers_the_flow(page):
 
 
 def test_web_flags(capsys):
-    for argv in (["--no-browser"], ["--web", "--install-cyanrip"]):
-        with pytest.raises(SystemExit):
-            cli.main(argv)
+    with pytest.raises(SystemExit):
+        cli.main(["--no-browser"])
+    assert cli.build_parser().parse_args(["--web", "--install-cyanrip"]).install_cyanrip  # the page builds too
+
+
+# --- app-menu entry (1.1.0) ------------------------------------------------------
+from cdimport import desktop  # noqa: E402
+
+
+def test_desktop_exec_arguments_are_quoted_and_escaped():
+    assert desktop.exec_argument("/usr/bin/cdimport") == "/usr/bin/cdimport"
+    assert desktop.exec_argument("/home/a b/run.py") == '"/home/a b/run.py"'
+    assert desktop.exec_argument("/m/100%") == "/m/100%%"
+    # A literal $ is escaped inside the quotes; the string escape then doubles the backslash.
+    assert desktop.exec_argument("/x/$y") == '"/x/\\\\$y"'
+
+
+def test_desktop_entry_starts_the_page_of_the_cdimport_that_wrote_it(tmp_path, monkeypatch, capsys):
+    import shutil
+
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    launcher = tmp_path / "check out" / "run.py"
+    launcher.parent.mkdir()
+    launcher.write_text("", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", [str(launcher)])
+    monkeypatch.setattr(desktop, "_refresh", lambda folder: None)
+    assert cli.main(["--install-desktop-entry"]) == 0
+    entry, icon = desktop.entry_path(), desktop.icon_path()
+    text = entry.read_text(encoding="utf-8")
+    assert f'Exec={sys.executable} "{launcher}" --web %f' in text and f"Icon={icon}" in text
+    assert "Terminal=false" in text and icon.read_bytes() == desktop.ICON_SOURCE.read_bytes()
+    assert "--web" in capsys.readouterr().out
+    if shutil.which("desktop-file-validate"):
+        checked = subprocess.run(["desktop-file-validate", str(entry)], capture_output=True, text=True)
+        assert checked.returncode == 0 and not checked.stdout.strip(), checked.stdout
+    assert cli.main(["--remove-desktop-entry"]) == 0
+    assert not entry.exists() and not icon.exists() and desktop.remove() == []
+
+
+def test_desktop_entry_for_an_installed_launcher(tmp_path, monkeypatch):
+    shim = tmp_path / "bin" / "cdimport"
+    shim.parent.mkdir()
+    shim.write_text("", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", [str(shim)])
+    assert desktop.launch_command() == [str(shim)]
 
 
 def test_a_running_tool_can_be_stopped_like_ctrl_c(front):
@@ -2958,8 +3000,8 @@ def test_the_page_follows_lyrembeds_address_once(monkeypatch):
 
 def test_on_the_page_lyrembeds_output_goes_to_the_page(tmp_path, monkeypatch, front):
     ran = []
-    monkeypatch.setattr(lyrics.proc, "run", lambda cmd: ran.append(("run", cmd)) or 0)
-    monkeypatch.setattr(lyrics.proc, "run_tail", lambda cmd: ran.append(("run_tail", cmd)) or (0, []))
+    monkeypatch.setattr(lyrics.proc, "run", lambda cmd, cwd=None: ran.append(("run", cmd)) or 0)
+    monkeypatch.setattr(lyrics.proc, "run_tail", lambda cmd, cwd=None: ran.append(("run_tail", cmd)) or (0, []))
     ui.use(None)
     lyrics.run_lyrembed("lyrembed", default_cfg(), tmp_path, "auto")
     front()
@@ -3090,20 +3132,65 @@ def test_the_editor_can_go_back_to_the_cover_step(tmp_path, monkeypatch, front):
 
 
 # --- fixes from the review of the page (0.6.2) ---------------------------------
-def test_the_page_never_installs_or_builds_cyanrip(tmp_path, monkeypatch, front):
+def test_the_page_offers_to_install_and_update_cyanrip(tmp_path, monkeypatch, front):
     monkeypatch.setattr(install, "choose_route", lambda *a, **k: install.Route("source", "build"))
-    monkeypatch.setattr(install, "install_cyanrip", lambda *a: pytest.fail("installed from the page"))
-    monkeypatch.setattr(install, "build_from_source", lambda *a: pytest.fail("built from the page"))
+    installed, built = [], []
+    monkeypatch.setattr(install, "install_cyanrip", lambda cfg, path: installed.append(path))
+    monkeypatch.setattr(install, "build_from_source",
+                        lambda cfg, path, rel: built.append(path) or "/home/u/.local/bin/cyanrip")
     monkeypatch.setattr(install, "remote_info", lambda: REMOTE)
     cfg = default_cfg()
     cfg["cyanrip"]["channel"] = "master"
     session = app.new_session(cfg, app.Options(), tmp_path / "config.json")
-    recorder = front([])                                  # any question fails
+    recorder = front([True, True])
     app.offer_cyanrip_install(session)
     session.cyanrip = "/usr/bin/cyanrip"
     app.offer_cyanrip_update(session, install.Installed("0.9.3.1", None))
-    assert recorder.questions == []
-    assert sum("--install-cyanrip in a terminal" in text for _, text, _ in recorder.messages) == 2
+    assert [prompt for _, prompt, _ in recorder.questions] == ["Install cyanrip now?", "Build the new cyanrip now?"]
+    assert installed == built == [tmp_path / "config.json"] and session.cyanrip == "/home/u/.local/bin/cyanrip"
+
+
+def test_a_source_build_on_the_page_shows_its_output_there(tmp_path, monkeypatch, front):
+    monkeypatch.setattr(install, "install_dependencies", lambda os_release: True)
+    monkeypatch.setattr(install, "remote_info", lambda max_age=0: REMOTE)
+    monkeypatch.setattr(install.proc, "capture", lambda cmd, timeout=10: None)
+    monkeypatch.setattr(install.proc, "run", lambda *a, **k: pytest.fail("the build wrote to the terminal"))
+    ran = []
+
+    def run_tail(cmd, cwd=None):
+        ran.append(cmd[:2])
+        if cmd[:2] == ["git", "clone"]:
+            Path(cmd[-1]).mkdir(parents=True)
+        return 0, []
+    monkeypatch.setattr(install.proc, "run_tail", run_tail)
+    monkeypatch.setattr(install.tools, "find_cyanrip", lambda cfg: "/home/u/.local/bin/cyanrip")
+    source = tmp_path / "cyanrip"
+    recorder = front([str(source), str(source / "build"), True])     # folders, run them: yes
+    found = install.build_from_source(default_cfg(), tmp_path / "config.json", {"ID": "fedora"})
+    assert found == "/home/u/.local/bin/cyanrip"
+    assert ran == [["git", "clone"], ["git", "-C"], ["meson", "setup"], ["meson", "compile"], ["meson", "install"]]
+    assert sum(kind == "tool_start" for kind, _, _ in recorder.messages) == len(ran)
+
+
+def test_the_page_leaves_the_package_manager_to_a_terminal(monkeypatch, front):
+    state = {"installed": False}
+    monkeypatch.setattr(install.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(install, "missing_tools", lambda which=None: [] if state["installed"] else ["meson"])
+    monkeypatch.setattr(install, "missing_libs", lambda libs: [])
+    for name in ("run", "run_tail"):
+        monkeypatch.setattr(install.proc, name, lambda *a, **k: pytest.fail("the page ran a package manager"))
+    recorder = front([True])                              # "Has it finished?": yes, but it has not
+    assert not install.install_dependencies({"ID": "fedora"})
+    assert [prompt for _, prompt, _ in recorder.questions] == ["Has it finished?"]
+    assert any(text == "  sudo dnf install meson" for _, text, _ in recorder.messages)
+    assert ("error", "Still missing: meson", {}) in recorder.messages
+    recorder = front([True])
+    recorder.confirm = lambda prompt, default=True: state.update(installed=True) or True   # run in a terminal
+    assert install.install_dependencies({"ID": "fedora"})
+    front([False])                                        # not run: nothing to look for
+    route = install.Route("package", "Debian package", ["sudo", "apt", "install", "cyanrip"])
+    monkeypatch.setattr(install.tools, "find_cyanrip", lambda cfg: pytest.fail("looked for cyanrip"))
+    assert install.install_package(default_cfg(), route) is None
 
 
 def test_old_lyrembed_on_the_page_is_not_offered_interactively(tmp_path, monkeypatch, album_dir, front):

@@ -46,6 +46,10 @@ def build_parser() -> argparse.ArgumentParser:
                       help="with --web: when done, a button leads back to this local address (lyrembed's page)")
     page.add_argument("--return-name", metavar="NAME", default="",
                       help="with --return-url, the name on that button (default: 'the previous page')")
+    entry = page.add_mutually_exclusive_group()
+    entry.add_argument("--install-desktop-entry", action="store_true",
+                       help="add cdimport to the app menu (Linux/BSD), starting this cdimport's page, then exit")
+    entry.add_argument("--remove-desktop-entry", action="store_true", help="remove cdimport from the app menu, then exit")
     return parser
 
 
@@ -62,6 +66,8 @@ def local_page(url: str) -> bool:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.install_desktop_entry or args.remove_desktop_entry:
+        return _desktop_entry(install=args.install_desktop_entry)
 
     try:
         cfg, warnings = config.load_config(args.config)
@@ -82,8 +88,6 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--return-name only applies together with --return-url")
     if args.return_url and not local_page(args.return_url):
         parser.error("--return-url must be a page on this computer, such as http://127.0.0.1:8000/")
-    if args.web and args.install_cyanrip:
-        parser.error("--install-cyanrip needs the terminal (it may ask for your password); run it without --web")
     if args.update and args.return_url:
         parser.error("--update does not apply with --return-url")
     if args.editor and args.editor != "skip" and args.editor not in cfg["editors"]:
@@ -113,6 +117,24 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.flush()
         os.execvp(restart.argv[0], restart.argv)
         return 0  # pragma: no cover - execvp does not return
+
+
+def _desktop_entry(install: bool) -> int:
+    from . import desktop
+
+    try:
+        if install:
+            entry, icon, command = desktop.install()
+            ui.success(f"Added cdimport to the app menu: {entry}")
+            ui.info(f"It starts: {' '.join(command + desktop.PAGE_ARGUMENTS)}")
+            ui.info("Run this again after installing cdimport elsewhere (pipx, another checkout).")
+        else:
+            removed = desktop.remove()
+            ui.success("Removed: " + ", ".join(str(p) for p in removed) if removed else "There was no app-menu entry.")
+    except desktop.DesktopError as exc:
+        ui.error(str(exc))
+        return 2
+    return 0
 
 
 def run_session(session: app.Session) -> int:

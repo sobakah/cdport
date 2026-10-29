@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import proc, ui
+from . import proc
 from .tags import TagReadError
 
 # lyrembed's exit codes. In batch mode (--auto) a track without a confident
@@ -83,11 +83,7 @@ def run_lyrembed(lyrembed: str, cfg: dict[str, Any], folder: Path, mode: str,
                  romanize: bool | None = None, return_url: str = "") -> int:
     """In the terminal lyrembed gets the terminal; on cdimport's page its
     output goes to the page, which also reads lyrembed's address from it."""
-    cmd = lyrembed_command(lyrembed, cfg, folder, mode, romanize, return_url)
-    if ui.in_terminal():
-        return proc.run(cmd)
-    code, _ = proc.run_tail(cmd)
-    return code
+    return proc.run_shown(lyrembed_command(lyrembed, cfg, folder, mode, romanize, return_url))
 
 
 @dataclass
