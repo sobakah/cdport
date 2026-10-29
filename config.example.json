@@ -73,6 +73,6 @@
   "cyanrip_build_dir": "",
   "_color": "\"auto\", \"always\" or \"never\". auto honours NO_COLOR and non-terminal output.",
   "color": "auto",
-  "_check_for_updates": "Look for a newer cdimport at the start, at most once a day (asks GitHub through git), and offer to update it with pipx. cdimport --update looks right away.",
+  "_check_for_updates": "Look for a newer cdimport at every start, in the background (asks GitHub through git), and offer to update it with pipx at the next start. cdimport --update looks right away.",
   "check_for_updates": true
 }

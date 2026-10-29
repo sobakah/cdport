@@ -149,8 +149,8 @@ SETTING_HELP: dict[str, Any] = {
     "cyanrip_build_dir": "Meson build folder of that source build. Set by the installer.",
     "color": "\"auto\", \"always\" or \"never\". auto honours NO_COLOR and non-terminal output.",
     "check_for_updates": (
-        "Look for a newer cdimport at the start, at most once a day (asks GitHub through git), "
-        "and offer to update it with pipx. cdimport --update looks right away."
+        "Look for a newer cdimport at every start, in the background (asks GitHub through git), "
+        "and offer to update it with pipx at the next start. cdimport --update looks right away."
     ),
 }
 

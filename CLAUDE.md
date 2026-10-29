@@ -176,9 +176,12 @@ Asked for by the maintainer on 2026-10-27, after picktag got the same
 between the tools). `selfupdate.latest` takes the highest plain `x.y.z` tag
 from `git ls-remote --tags` of the private repository: git has the access
 `pipx install` has (gh as credential helper) and never prompts
-(`GIT_TERMINAL_PROMPT=0`, no askpass). Step 0 asks at most once a day
-(`<cache>/self-update.json`, written when GitHub answered), or at once with
-`--update`; never when started with `--return-url` (lyrembed's Import a
+(`GIT_TERMINAL_PROMPT=0`, no askpass). GitHub is asked at every start in a
+thread (`app.UpdateCheck`, from the start of `run`; the maintainer's request
+2026-10-29, it was once a day): step 0 offers what an earlier check found
+(`selfupdate.known`, `<cache>/self-update.json`, written whole by `remember`)
+without waiting, `late_self_update` names a newer answer at the end of the
+run; `--update` waits for the answer; never when started with `--return-url` (lyrembed's Import a
 CD runs the show then). A pipx install (`pipx_metadata.json` in
 `sys.prefix`) is updated in the terminal after a yes: `pipx upgrade`, or
 `pipx install --force` with the new tag when the install is pinned to one.

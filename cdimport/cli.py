@@ -36,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--install-cyanrip", action="store_true",
                         help="install cyanrip, or update and rebuild a source build, before starting")
     parser.add_argument("--update", action="store_true",
-                        help="look for a newer cdimport now (else once a day) and offer to install it")
+                        help="look for a newer cdimport now and wait for the answer (else in the background) and offer to install it")
     parser.add_argument("--color", choices=("auto", "always", "never"), help="override colour handling")
     page = parser.add_argument_group("browser (preview)")
     page.add_argument("--web", action="store_true",
@@ -98,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
                           install_cyanrip=args.install_cyanrip, rip_mode=args.rip_mode or "",
                           # Started by another program's page: that one stays in charge.
                           self_update="now" if args.update else "never" if args.return_url
-                          else "daily" if cfg["check_for_updates"] else "never")
+                          else "start" if cfg["check_for_updates"] else "never")
     session = app.new_session(cfg, options, args.config)
     if args.web:
         from . import web  # not needed in the terminal

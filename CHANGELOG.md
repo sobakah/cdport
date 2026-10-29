@@ -11,6 +11,14 @@ next line's tag.
 
 ## [Unreleased]
 
+### Changed
+
+- **cdimport looks for a newer version at every start**, instead of once a
+  day, and the start no longer waits for GitHub: the check runs in the
+  background, step 0 offers what an earlier start found, and a newer version
+  found while cdimport runs is named at the end of the run. `--update` still
+  waits for the answer.
+
 ## [1.0.0] — 2026-10-27
 
 The first stable release: cdimport 0.6.0 with its patches up to 0.6.4,

@@ -1138,15 +1138,15 @@ def test_a_checkout_or_another_install_gets_a_command(tmp_path):
     assert how.kind == "other" and how.argv is None and how.command.endswith("cdimport.git@1.1.0")
 
 
-def test_the_check_runs_once_a_day(tmp_path):
+def test_the_answer_is_remembered_for_the_next_start(tmp_path):
     state_file = tmp_path / "self-update.json"
-    assert selfupdate.due(state_file)
+    assert selfupdate.known(state_file) is None
     state_file.write_text("not json", encoding="utf-8")
-    assert selfupdate.due(state_file)
-    assert selfupdate.mark_checked(state_file, now=1000.0) is None
-    assert not selfupdate.due(state_file, now=1000.0 + 3600)
-    assert selfupdate.due(state_file, now=1000.0 + 25 * 3600)
-    assert selfupdate.due(state_file, now=500.0)  # clock set back
+    assert selfupdate.known(state_file) is None
+    assert selfupdate.remember(state_file, "9.0.0") is None
+    assert selfupdate.known(state_file) == "9.0.0"
+    assert selfupdate.remember(state_file, config.__version__) is None
+    assert selfupdate.known(state_file) is None  # not newer than this cdimport
 
 
 def test_restart_command(monkeypatch, tmp_path):
@@ -1184,26 +1184,45 @@ def test_a_newer_cdimport_is_installed_and_started_again(tmp_path, monkeypatch, 
 
 
 def test_a_failed_update_goes_on_with_this_version(tmp_path, monkeypatch, capsys):
-    session = update_session(tmp_path, monkeypatch, "daily")
+    session = update_session(tmp_path, monkeypatch, "start")
+    selfupdate.remember(app.self_update_state(), "9.0.0")  # found by an earlier start
     monkeypatch.setattr(app.proc, "run", lambda cmd, cwd=None: 1)
     feed_input(monkeypatch, [""])
     app.offer_self_update(session)
     out = capsys.readouterr()
     assert "did not work (exit code 1)" in out.out + out.err
-    assert not selfupdate.due(app.self_update_state())  # asked today: not again until tomorrow
 
 
-def test_the_daily_check_and_its_switch(tmp_path, monkeypatch, capsys):
-    session = update_session(tmp_path, monkeypatch, "daily", found=config.__version__)
+def test_every_start_asks_without_waiting(tmp_path, monkeypatch, capsys):
+    """Not once a day, and the start never waits for GitHub: step 0 offers what
+    an earlier check found; a newer answer comes at the end of the run, and the
+    next start offers it."""
+    answer = threading.Event()
+
+    def slow(timeout=30):
+        answer.wait(10)
+        return "9.0.0"
+    session = update_session(tmp_path, monkeypatch, "start")
+    monkeypatch.setattr(selfupdate, "latest", slow)
     feed_input(monkeypatch, [])
-    app.offer_self_update(session)
-    assert capsys.readouterr().out == ""  # up to date: nothing to say
-    monkeypatch.setattr(selfupdate, "latest", lambda timeout=30: pytest.fail("asked twice a day"))
-    app.offer_self_update(session)
-    app.offer_self_update(update_session(tmp_path, monkeypatch, "never"))
+    started = time.monotonic()
+    app.offer_self_update(session)  # nothing known yet, and GitHub hasn't answered: nothing
+    assert time.monotonic() - started < 1 and capsys.readouterr().out == ""
+    answer.set()
+    app.late_self_update(session)
+    assert "cdimport 9.0.0 is available" in capsys.readouterr().out   # at the end of the run
+    asked = []
+    session = update_session(tmp_path, monkeypatch, "start", found=config.__version__)
+    monkeypatch.setattr(selfupdate, "latest", lambda timeout=30: asked.append(1) or config.__version__)
+    feed_input(monkeypatch, ["n"])  # update now? no
+    app.offer_self_update(session)  # the next start: what the last one found
+    assert "9.0.0 is available" in capsys.readouterr().out
+    assert session.update_check.answered(5) and asked == [1]  # and GitHub asked again
+    never = update_session(tmp_path, monkeypatch, "never")
     monkeypatch.setattr(selfupdate, "latest", lambda timeout=30: pytest.fail("asked although never"))
-    session.options.self_update = "never"
-    app.offer_self_update(session)
+    app.offer_self_update(never)
+    app.late_self_update(never)
+    assert never.update_check is None
 
 
 def test_the_page_and_other_installs_get_the_command(tmp_path, monkeypatch, front):
@@ -1228,7 +1247,7 @@ def test_update_options_on_the_command_line(tmp_path, monkeypatch):
     assert cli.main(["--config", str(cfg_path), "--update"]) == 0
     cfg_path.write_text('{"check_for_updates": false}', encoding="utf-8")
     assert cli.main(["--config", str(cfg_path)]) == 0
-    assert seen == ["daily", "now", "never"]
+    assert seen == ["start", "now", "never"]
     with pytest.raises(SystemExit):
         cli.main(["--config", str(cfg_path), "--web", "--update", "--return-url", "http://127.0.0.1:5/"])
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import shutil
 import tempfile
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -34,8 +35,9 @@ class Options:
     editor: str = ""
     install_cyanrip: bool = False
     rip_mode: str = ""  # "fast" or "secure"; empty: config cyanrip.mode
-    # A newer cdimport: "daily" (config check_for_updates), "now" (--update)
-    # or "never" (switched off, or started by another program's page).
+    # A newer cdimport: "start" (config check_for_updates: at every start,
+    # without waiting), "now" (--update: waits for GitHub's answer) or "never"
+    # (switched off, or started by another program's page).
     self_update: str = "never"
 
 
@@ -58,6 +60,8 @@ class Session:
     # The newest album of any run; a later run without one keeps it, so the
     # page's "cdimport finished" line still names it.
     last_album: AlbumState | None = None
+    update_check: UpdateCheck | None = None  # GitHub asked in the background since the start
+    update_offered: str | None = None  # the newer cdimport offered in step 0
     failed: bool = False
     logs: list[Path] = field(default_factory=list)  # rip logs moved out of the library
     one_time_offset: bool = False  # cfg's offset is "0 for this rip only", not saved
@@ -78,6 +82,8 @@ def new_session(cfg: dict[str, Any], options: Options, config_path: Path | None 
 
 def run(session: Session) -> int:
     """The whole program after argument parsing; returns the exit code."""
+    if session.options.self_update != "never":
+        session.update_check = UpdateCheck()
     ask_missing_folders(session)
     check_tools(session)
 
@@ -100,6 +106,7 @@ def run(session: Session) -> int:
         ui.gap()
         if not ui.confirm("Start another run (next disc or album)?", default=False):
             break
+    late_self_update(session)
     return 1 if session.failed else 0
 
 
@@ -215,27 +222,59 @@ def self_update_state() -> Path:
     return install.cache_dir() / "self-update.json"
 
 
+# How long --update waits for GitHub in step 0, and a run at its end for a
+# check that hasn't answered yet; a normal start never waits.
+UPDATE_TIMEOUT_S = 30
+LATE_UPDATE_WAIT_S = 3
+
+
+class UpdateCheck:
+    """GitHub asked for the newest cdimport in a thread, from the start on, so
+    nothing waits for it; the answer is remembered for the next start."""
+
+    def __init__(self) -> None:
+        self.found: str | None = None
+        self.error: str | None = None
+        self.thread = threading.Thread(target=self._ask, name="cdimport-update-check", daemon=True)
+        self.thread.start()
+
+    def _ask(self) -> None:
+        try:
+            self.found = selfupdate.latest()
+        except selfupdate.UpdateError as exc:
+            self.error = str(exc)
+            return
+        selfupdate.remember(self_update_state(), self.found)  # a failure: only next time's offer is missing
+
+    def answered(self, timeout: float = 0) -> bool:
+        self.thread.join(timeout)
+        return not self.thread.is_alive()
+
+
 def offer_self_update(session: Session) -> None:
-    """A newer cdimport, as picktag does it: the release tags on GitHub, at
-    most once a day; in the terminal pipx updates it and cdimport starts
-    again. The page shows the command: a restart would cut it off."""
+    """A newer cdimport, as picktag does it: the release tags on GitHub, asked
+    at every start in the background; step 0 offers what an earlier check found
+    (or this one, if it has answered already) and doesn't wait. --update waits
+    for the answer. In the terminal pipx updates it and cdimport starts again;
+    the page shows the command: a restart would cut it off."""
     mode = session.options.self_update
-    if mode == "never" or (mode == "daily" and not selfupdate.due(self_update_state())):
+    if mode == "never":
         return
-    try:
-        found = selfupdate.latest()
-    except selfupdate.UpdateError as exc:
-        if mode == "now":
-            ui.check("cdimport", f"{config.__version__}; could not look for a newer one: {exc}", False)
-        else:
-            ui.dim(f"{INDENT}Update check for cdimport skipped: {exc}")
-        return
-    if problem := selfupdate.mark_checked(self_update_state()):
-        ui.dim(f"{INDENT}Could not remember the update check ({problem}); it runs again next time.")
-    if not selfupdate.newer(found):
+    check = session.update_check = session.update_check or UpdateCheck()
+    if mode == "now":
+        if not check.answered(UPDATE_TIMEOUT_S):
+            check.error = "GitHub didn't answer"
+        if check.error is not None:
+            ui.check("cdimport", f"{config.__version__}; could not look for a newer one: {check.error}", False)
+            return
+        found = check.found
+    else:
+        found = check.found if check.answered() and check.found else selfupdate.known(self_update_state())
+    if found is None or not selfupdate.newer(found):
         if mode == "now":
             ui.check("cdimport", f"{config.__version__} is the newest version", True)
         return
+    session.update_offered = found
     how = selfupdate.how_installed(found)
     ui.check("cdimport", f"{found} is available (this is {config.__version__})", False,
              f"What's new: {selfupdate.RELEASES}/tag/{found}")
@@ -255,6 +294,18 @@ def offer_self_update(session: Session) -> None:
         return
     ui.success(f"cdimport {found} is installed; starting it again.")
     raise Restart([arg for arg in selfupdate.restart_argv() if arg != "--update"])
+
+
+def late_self_update(session: Session) -> None:
+    """A newer cdimport the background check found after step 0: said at the end
+    of the run, with the command (the next start offers it)."""
+    check = session.update_check
+    if session.options.self_update != "start" or check is None or not check.answered(LATE_UPDATE_WAIT_S):
+        return
+    if check.found and selfupdate.newer(check.found) and check.found != session.update_offered:
+        ui.gap()
+        ui.info(f"cdimport {check.found} is available (this is {config.__version__}). "
+                f"To update: {selfupdate.how_installed(check.found).command}")
 
 
 def offer_cyanrip_install(session: Session) -> None:

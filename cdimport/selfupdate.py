@@ -27,7 +27,6 @@ from .config import __version__
 NAME = "cdimport"
 REPO = "https://github.com/sobakah/cdimport.git"
 RELEASES = "https://github.com/sobakah/cdimport/releases"
-CHECK_EVERY_SECONDS = 24 * 3600
 _TAG = re.compile(r"refs/tags/(\d+)\.(\d+)\.(\d+)$")
 
 
@@ -113,25 +112,27 @@ def how_installed(version: str, prefix: str | Path | None = None,
     return Install("other", f"pipx install --force git+{REPO}@{version}")
 
 
-def due(state_file: Path, now: float | None = None) -> bool:
-    """At most one check a day: state_file holds when the last one answered."""
-    try:
-        last = json.loads(state_file.read_text(encoding="utf-8")).get("checked")
-    except (OSError, ValueError, AttributeError):
-        last = None
-    now = time.time() if now is None else now
-    return not isinstance(last, (int, float)) or not 0 <= now - last < CHECK_EVERY_SECONDS
-
-
-def mark_checked(state_file: Path, now: float | None = None) -> str | None:
-    """Remember the check; the reason when that fails (it is asked again then)."""
+def remember(state_file: Path, found: str) -> str | None:
+    """Keep the release GitHub named, for a start that can't wait for the
+    answer (known); the reason when that fails."""
     try:
         state_file.parent.mkdir(parents=True, exist_ok=True)
-        state_file.write_text(json.dumps({"checked": time.time() if now is None else now}) + "\n",
-                              encoding="utf-8")
+        # whole or not at all: step 0 may read it while the background check writes it
+        part = state_file.with_name(f"{state_file.name}.{os.getpid()}.part")
+        part.write_text(json.dumps({"checked": time.time(), "latest": found}) + "\n", encoding="utf-8")
+        os.replace(part, state_file)
     except OSError as exc:
         return str(exc)
     return None
+
+
+def known(state_file: Path) -> str | None:
+    """The newer release an earlier check found, without asking GitHub."""
+    try:
+        found = json.loads(state_file.read_text(encoding="utf-8")).get("latest")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return found if isinstance(found, str) and newer(found) else None
 
 
 def restart_argv() -> list[str]:
