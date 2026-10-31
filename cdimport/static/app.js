@@ -2,6 +2,7 @@
 // Everything comes from /api/state (cdimport/web.py); answers go back to
 // /api/answer. The flow itself is the terminal's, step for step.
 import { html, render, useState, useEffect, useRef } from '/static/vendor/preact-htm.js';
+import { Icon } from '/static/icons.js';
 
 async function api(path, body) {
   const options = {};
@@ -21,7 +22,8 @@ async function api(path, body) {
   return data;
 }
 
-const STEPS = [[0, 'Tools'], [1, 'Disc'], [2, 'Rip'], [3, 'Tags'], [4, 'Lyrics'], [5, 'Finish']];
+const STEPS = [[0, 'Tools', 'tools'], [1, 'Disc', 'disc'], [2, 'Rip', 'down'], [3, 'Tags', 'tag'], [4, 'Lyrics', 'lyrics'], [5, 'Finish', 'folder']];
+const STEP_ICONS = Object.fromEntries(STEPS.map(([n, , icon]) => [n, icon]));
 // The same links ui.py underlines: never ending in sentence punctuation.
 const URL_PATTERN = /(?:https?):\/\/[^\s)\]]*[^\s)\].,;:!?'"]/g;
 
@@ -57,7 +59,7 @@ function Item({ event }) {
     case 'check': {
       const [mark, cls] = CHECK_MARKS[String(event.ok)];
       return html`<div class="check"><span class=${'mark ' + cls}>${mark}</span><span class="name">${event.label}</span>
-        <span><${Linked} text=${event.text} /></span>${event.note && html`<span class="note"><${Linked} text=${event.note} /></span>`}</div>`;
+        <span><${Linked} text=${event.text} /></span>${event.note && html`<span class="check-note"><${Linked} text=${event.note} /></span>`}</div>`;
     }
     case 'tool_start':
       return html`<${Tool} event=${event} />`;
@@ -86,13 +88,13 @@ function Tool({ event }) {
     await api('/stop-tool', {}).catch(() => {});
   };
   const status = event.running
-    ? html`<span class="row"><span class="spinner" aria-hidden="true"></span> running</span>`
+    ? html`<span class="row-wrap"><span class="spinner" aria-hidden="true"></span> running</span>`
     : event.code === 0 ? html`<span class="status-ok">done</span>`
       : html`<span class="status-bad">${event.code === null ? 'failed' : `exit code ${event.code}`}</span>`;
   return html`<div class="tool">
     <div class="tool-head">
       <b>${event.name}</b><span class="cmd mono">${event.text}</span>${status}
-      ${event.running && html`<button class="btn btn-small" disabled=${stopping} onClick=${stop}>${stopping ? 'Stopping…' : `Stop ${event.name}`}</button>`}
+      ${event.running && html`<button class="btn btn-small" disabled=${stopping} onClick=${stop}><${Icon} name="stop" size=${14} /> ${stopping ? 'Stopping…' : `Stop ${event.name}`}</button>`}
     </div>
     ${(event.lines.length > 0 || event.partial) && html`<div class="tool-body mono" ref=${body} onScroll=${scrolled}>${event.lines.join('\n')}${event.partial
       ? html`${event.lines.length ? '\n' : ''}<span class="partial">${event.partial}</span>` : ''}</div>`}
@@ -144,7 +146,7 @@ function Chips({ names, onChange, label, id }) {
   return html`<div class="chips">
     ${names.map((name, i) => html`<span class="chip" key=${name}>${name}
       <button type="button" aria-label=${'Remove ' + name} onClick=${() => onChange(names.filter((_, j) => j !== i))}>×</button></span>`)}
-    <label class="sr-only" for=${id}>${label}</label>
+    <label class="sr" for=${id}>${label}</label>
     <input id=${id} type="text" class="chip-input" placeholder="Add a name, then Enter" onKeyDown=${add} />
   </div>`;
 }
@@ -235,14 +237,14 @@ function TagEditor({ question, onAnswer }) {
   const coverCount = loaded.tracks.filter((t) => t.cover).length;
 
   return html`<div class="editor stack">
-    <div class="row cover-row">
+    <div class="row-wrap cover-row">
       ${loaded.cover
         ? html`<img class="album-cover" src=${coverOf(loaded.tracks[0].file, loaded.cover)} alt="The album's cover" />`
         : html`<span class="album-cover no-picture">${coverCount ? 'different covers per track' : 'no cover embedded'}</span>`}
       <div class="stack-tight">
         <span class="muted small">${loaded.cover ? 'The cover embedded in every track.'
           : coverCount ? `${coverCount} of ${loaded.tracks.length} tracks have a cover; each shows below.` : 'No track has a cover.'}</span>
-        <div><button class="btn btn-small" type="button" disabled=${busy} onClick=${changeCover}>Change the cover…</button></div>
+        <div><button class="btn btn-small" type="button" disabled=${busy} onClick=${changeCover}><${Icon} name="image" size=${14} /> Change the cover…</button></div>
         <span class="muted small">Goes back to the cover step${dirty ? ', after saving these changes' : ''}, then returns here.</span>
       </div>
     </div>
@@ -254,7 +256,7 @@ function TagEditor({ question, onAnswer }) {
     </div>
     <div class="stack-tight">
       <span class="small"><b>Album artists</b> <span class="muted">(single names, ALBUMARTISTS; optional)</span></span>
-      <div class="row">
+      <div class="row-wrap">
         <${Chips} id="album-artists" label="Add an album artist" names=${edit.albumArtists} onChange=${(names) => set({ albumArtists: names })} />
         ${!edit.albumArtists.length && edit.albumArtist && html`<button class="btn btn-small" type="button"
           onClick=${() => set({ albumArtists: split(edit.albumArtist) })}>Split from the credit</button>`}
@@ -265,12 +267,12 @@ function TagEditor({ question, onAnswer }) {
     ${edit.differing.length > 0 && html`<p class="line k-warn"><span class="mark">!</span>The tracks differ in ${edit.differing.join(', ')}; saving gives every track the values above.</p>`}
     ${plan && plan.folderName && html`<p class="line k-dim">The folder will be renamed to <b class="mono">${plan.folderName}</b>.</p>`}
 
-    <div class="row">
+    <div class="row-wrap">
       <span class="label">All tracks</span>
       <button class="btn btn-small" type="button" disabled=${!featCount} onClick=${moveFeat}>Move “feat.” from titles to artists${featCount ? ` (${featCount})` : ''}</button>
-      <label class="sr-only" for="find">Find in titles</label>
+      <label class="sr" for="find">Find in titles</label>
       <input id="find" type="text" class="short" placeholder="Find in titles" value=${find} onInput=${(e) => setFind(e.target.value)} />
-      <label class="sr-only" for="repl">Replace with</label>
+      <label class="sr" for="repl">Replace with</label>
       <input id="repl" type="text" class="short" placeholder="Replace with" value=${replace} onInput=${(e) => setReplace(e.target.value)} />
       <button class="btn btn-small" type="button" disabled=${!findCount} onClick=${replaceAll}>Replace${findCount ? ` in ${findCount}` : ''}</button>
     </div>
@@ -285,17 +287,17 @@ function TagEditor({ question, onAnswer }) {
             ${!loaded.cover && t.cover && html`<img class="track-cover" src=${coverOf(t.file, t.cover)} alt="" />`}
           </div>
           <div class="stack-tight">
-            <div class="row numbers">
+            <div class="row-wrap numbers">
               <label>Disc <input type="text" class="number" value=${t.disc} onInput=${(e) => setTrack(i, { disc: e.target.value })} /></label>
               <label>Track <input type="text" class="number" value=${t.track} onInput=${(e) => setTrack(i, { track: e.target.value })} /></label>
               ${old.hasLyrics && html`<span class="muted small">has lyrics (lyrembed edits them)</span>`}
             </div>
-            <label class="sr-only" for=${'title' + i}>Title of track ${i + 1}</label>
+            <label class="sr" for=${'title' + i}>Title of track ${i + 1}</label>
             <input id=${'title' + i} type="text" class=${t.title.trim() ? '' : 'missing'} value=${t.title} onInput=${(e) => setTrack(i, { title: e.target.value })} />
-            <label class="sr-only" for=${'artist' + i}>Artist of track ${i + 1}</label>
+            <label class="sr" for=${'artist' + i}>Artist of track ${i + 1}</label>
             <input id=${'artist' + i} type="text" class=${t.artist.trim() ? '' : 'missing'} value=${t.artist} placeholder="Artist (credit)"
               onInput=${(e) => setTrack(i, { artist: e.target.value })} />
-            <div class="row">
+            <div class="row-wrap">
               <${Chips} id=${'artists' + i} label=${'Add an artist to track ' + (i + 1)} names=${t.artists} onChange=${(names) => setTrack(i, { artists: names })} />
               ${!t.artists.length && split(t.artist).length > 1 && html`<button class="btn btn-small" type="button"
                 onClick=${() => setTrack(i, { artists: split(t.artist) })}>Split: ${split(t.artist).join(' · ')}</button>`}
@@ -312,11 +314,11 @@ function TagEditor({ question, onAnswer }) {
     ${plan && plan.problem && html`<p class="line k-warn"><span class="mark">!</span>${plan.problem}</p>`}
     ${error && html`<p class="line k-error"><span class="mark">✗</span>${error}</p>`}
     ${note && !dirty && html`<p class="line k-success"><span class="mark">✓</span>${note}</p>`}
-    <div class="row">
-      <button class="btn" type="button" disabled=${!dirty || busy} onClick=${() => setEdit(JSON.parse(JSON.stringify(loaded)))}>Undo changes</button>
-      <button class="btn" type="button" disabled=${!dirty || busy || (plan && plan.problem)} onClick=${save}>Save</button>
+    <div class="row-wrap">
+      <button class="btn" type="button" disabled=${!dirty || busy} onClick=${() => setEdit(JSON.parse(JSON.stringify(loaded)))}><${Icon} name="undo" /> Undo changes</button>
+      <button class="btn" type="button" disabled=${!dirty || busy || (plan && plan.problem)} onClick=${save}><${Icon} name="save" /> Save</button>
       <button class="btn btn-primary" type="button" disabled=${busy || (dirty && plan && plan.problem)} onClick=${done}>
-        ${dirty ? 'Save and continue' : 'Continue'}</button>
+        <${Icon} name=${dirty ? 'save' : 'right'} /> ${dirty ? 'Save and continue' : 'Continue'}</button>
     </div>
   </div>`;
 }
@@ -383,18 +385,18 @@ function Question({ question, onAnswer }) {
       </button>`;
     })}</div>`;
   } else if (question.kind === 'confirm') {
-    body = html`<div class="row">
-      <button class=${'btn' + (question.default ? ' btn-primary' : '')} disabled=${sending} onClick=${() => answer(true)}>Yes</button>
-      <button class=${'btn' + (!question.default ? ' btn-primary' : '')} disabled=${sending} onClick=${() => answer(false)}>No</button>
+    body = html`<div class="row-wrap">
+      <button class=${'btn' + (question.default ? ' btn-primary' : '')} disabled=${sending} onClick=${() => answer(true)}><${Icon} name="check" /> Yes</button>
+      <button class=${'btn' + (!question.default ? ' btn-primary' : '')} disabled=${sending} onClick=${() => answer(false)}><${Icon} name="x" /> No</button>
     </div>`;
   } else if (question.kind === 'wait') {
-    body = html`<div class="row"><button class="btn btn-primary" disabled=${sending} onClick=${() => answer(null)}>Done</button></div>`;
+    body = html`<div class="row-wrap"><button class="btn btn-primary" disabled=${sending} onClick=${() => answer(null)}><${Icon} name="check" /> Done</button></div>`;
   } else {
-    body = html`<form class="row" onSubmit=${(e) => { e.preventDefault(); answer(text); }}>
-      <label class="sr" for="answer" style=${{ position: 'absolute', left: '-9999px' }}>${question.prompt}</label>
+    body = html`<form class="row-wrap" onSubmit=${(e) => { e.preventDefault(); answer(text); }}>
+      <label class="sr" for="answer">${question.prompt}</label>
       <input id="answer" type="text" class=${question.kind === 'ask_path' ? 'mono' : ''} value=${text} autofocus
         placeholder=${question.default || ''} onInput=${(e) => setText(e.target.value)} />
-      <button class="btn btn-primary" type="submit" disabled=${sending}>OK</button>
+      <button class="btn btn-primary" type="submit" disabled=${sending}><${Icon} name="check" /> OK</button>
     </form>
     ${question.kind === 'ask' && question.default && html`<span class="muted small">Empty: ${question.default}</span>`}`;
   }
@@ -519,33 +521,41 @@ function App() {
 
   return html`
     <header class="topbar">
-      <span class="brand"><img src="/static/icon.svg" alt="" width="26" height="26" /> cdimport</span>
-      <ol class="steps" aria-label="Steps">
-        ${STEPS.map(([n, name]) => {
+      <div><span class="brand"><img src="/static/logo.svg" alt="" width="28" height="28" /><span class="brand-name">cdimport</span></span></div>
+      <ol class="steps" aria-label="Workflow">
+        ${STEPS.map(([n, name, icon]) => {
           // The summary has no number: once it shows, every step reached is done.
           const state = n === current && finished === null ? 'now' : seen.has(n) ? 'done' : '';
-          return html`<li class=${'step ' + state}><span class="dot">${state === 'done' ? '✓' : n}</span>${name}</li>`;
+          return html`<li class=${'step ' + state} key=${n}><span class="step-go" aria-current=${state === 'now' ? 'step' : null}>
+            <span class="dot"><${Icon} name=${state === 'done' ? 'check' : icon} size=${14} /></span>
+            <span class="step-name">${name}</span></span></li>`;
         })}
       </ol>
-      ${finished === null && html`<button class="btn btn-small" disabled=${toolRunning} title=${toolRunning ? 'A tool is running: stop it first' : ''}
-        onClick=${quit}>Stop cdimport</button>`}
+      <div class="topbar-end">
+        ${finished === null && html`<button class="btn btn-flat" disabled=${toolRunning} title=${toolRunning ? 'A tool is running: stop it first' : 'Stop cdimport'}
+          onClick=${quit}><${Icon} name="stop" /><span class="btn-text">Stop cdimport</span></button>`}
+      </div>
     </header>
     <main>
       ${sections.map((s, i) => html`<section class=${'section' + (i < sections.length - 1 ? ' old' : '')} key=${i}>
-        ${s.step && html`<h2>${s.step.number !== null && s.step.number !== undefined ? `${s.step.number}. ` : ''}${s.step.text}</h2>`}
+        ${s.step && html`<h2><span class="dot"><${Icon} name=${STEP_ICONS[s.step.number] || 'flag'} size=${14} /></span>${s.step.text}</h2>`}
         ${s.items.map((e) => html`<${Item} key=${e.id} event=${e} />`)}
       </section>`)}
       ${question && html`<${Question} key=${question.id} question=${question} onAnswer=${answer} />`}
-      ${finished !== null && !question && html`<section class="section finished">
-        <h2>${finished === 0 ? 'cdimport has finished' : finished === 130 ? 'cdimport was stopped' : `cdimport ended with exit code ${finished}`}</h2>
+      ${finished !== null && !question && html`<section class="section finished status">
+        <img class="status-icon" src="/static/icon.svg" alt="" />
+        <h1>${finished === 0 ? 'cdimport has finished' : finished === 130 ? 'cdimport was stopped' : `cdimport ended with exit code ${finished}`}</h1>
         <p class="muted">${finished === 0 ? 'Everything above is done.' : 'Finished steps are saved; start cdimport again to continue.'}</p>
-        <div class="row"><button class="btn btn-primary" onClick=${close}>${back ? `Done – back to ${back.name}` : 'Close'}</button></div>
+        <div class="row-wrap"><button class="btn btn-primary" onClick=${close}><${Icon} name="check" /> ${back ? `Done – back to ${back.name}` : 'Close'}</button></div>
       </section>`}
       <div ref=${end}></div>
     </main>
-    ${error && html`<div class="toast" role="alert">${error}</div>`}
-    ${closed && html`<div class="overlay"><div class="section"><h2>cdimport has ended</h2>
-      <p class="muted">You can close this tab.</p></div></div>`}
+    ${error && html`<div class="toasts"><div class="toast toast-error" role="alert"><span>${error}</span></div></div>`}
+    ${closed && html`<div class="overlay"><div class="card status">
+      <img class="status-icon" src="/static/icon.svg" alt="" />
+      <h1>cdimport has ended</h1>
+      <p class="muted">You can close this tab.</p>
+    </div></div>`}
   `;
 }
 

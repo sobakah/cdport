@@ -11,6 +11,12 @@ next line's tag.
 
 ## [Unreleased]
 
+### Changed
+
+- **The page has a new look, shared with lyrembed**, in libadwaita's design language: a centred workflow in the header with an icon for each step instead of a number, softer buttons and floating messages. The two programs differ by colour and logo.
+- A small logo for the header and the browser tab, where the full icon can't be read. The full icon stays in the app menu and appears when a run has finished.
+- Icons on the action buttons.
+
 ## [1.1.0] — 2026-10-29
 
 ### Added

@@ -522,6 +522,15 @@ A front end that wants live tool progress keeps the pseudo-terminal
   (a cover that loads late), and the page's own `scrollTo` is flagged
   (`ownScroll`): its scroll event can arrive after the page grew again and
   would otherwise count as the reader leaving the end.
+- lyrembed and cdimport share one look, libadwaita's (the maintainer's
+  request, 2026-10-31; the details are in lyrembed's CLAUDE.md):
+  `static/base.css` and `static/icons.js` are the same file in both repos,
+  copies like `vendor/`, so change both; only the teal accent and what only
+  this page has live in `style.css`. The header bar is program, workflow
+  steps in the middle (icons: the page shows no step numbers, the terminal
+  does), actions. `icon.svg` is unreadable below about 64 px: the header and
+  the browser tab use `logo.svg`, the full icon appears only at 112 px on
+  status pages.
 - `static/vendor/preact-htm.js` is the file lyrembed vendors (htm 3.1.1's
   Preact bundle, checksum and licenses in `LICENSES.txt`).
 
