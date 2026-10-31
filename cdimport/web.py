@@ -15,6 +15,7 @@ import copy
 import hmac
 import json
 import logging
+import os
 import re
 import secrets
 import sys
@@ -313,6 +314,9 @@ class WebFront(ui.Front):
         with self._cond:
             self._image_cache[image_id] = (data, mime)
         return data, mime
+
+    def ask_edit(self, prompt: str, prefill: str = "") -> str:
+        return self._ask("ask_path", prompt, prefill=prefill, plain=True)
 
     def ask_path(self, prompt: str, prefill: str = "") -> str:
         return self._ask("ask_path", prompt, prefill=prefill)
@@ -667,8 +671,12 @@ class _Handler(BaseHTTPRequestHandler):
 
 def _say(message: str) -> None:
     """A line for the terminal cdimport was started in, which the page's
-    front end does not reach."""
-    print(message, flush=True)
+    front end does not reach. lyrembed reads it when it started cdimport;
+    gone by now, it is no reason to fail after a finished run."""
+    try:
+        print(message, flush=True)
+    except BrokenPipeError:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
 
 
 # The last line serve prints when the run ends, read by lyrembed's "Import a

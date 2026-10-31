@@ -148,7 +148,7 @@ def read_album(folder: Path) -> dict:
     # A tag every track has with the same value is the album's (shown once);
     # the rest stay with their tracks.
     shared = {}
-    if tracks:
+    if len(tracks) > 1:  # with one track, nothing says a tag is the album's
         for key, values in tracks[0]["other"].items():
             if all(t["other"].get(key) == values for t in tracks):
                 shared[key] = values
@@ -327,12 +327,12 @@ def _set(audio, key: str, values: list[str]) -> None:
 
 
 def save(folder: Path, edit: dict) -> dict:
-    """Write the changed tags, then rename what follows them.
+    """Rename what follows the tags, then write the tags.
 
-    Every rename is checked before anything is written, so an edit is saved
-    whole or not at all. The exceptions: a file that cannot be written (the
-    error names it), and a rename the system refuses anyway, which is put
-    back, so the tags are saved and the names stay as they were."""
+    Every rename and file is checked before anything changes, so an edit is
+    saved whole or not at all. A rename or write that fails anyway puts the
+    names back; only a write that fails partway leaves earlier tracks written
+    (the error names the file)."""
     current, clean = _checked(folder, edit)
     files, folder_name = _renames(folder, current, clean)
     targets = [f["newFile"] for f in files if f["newFile"] and f["newFile"] != f["file"]]
@@ -352,83 +352,87 @@ def save(folder: Path, edit: dict) -> dict:
     sidecars = _sidecars(folder, current["album"], clean["album"]) if new_folder != folder else []
     _too_long(_new_names(files, folder_name) + [target.name for _, target in sidecars])
 
-    album_changed = {k: clean[k] != current[k] or k in current["differing"] for k in _ALBUM_FIELDS}
-    changed = 0
-    for path, old, new in zip(_flac(folder), current["tracks"], clean["tracks"]):
-        audio = _open(path)
-        touched = False
-        if new["title"] != old["title"]:
-            _set(audio, "title", [new["title"]])
-            touched = True
-        if new["artist"] != old["artist"] or new["artists"] != old["artists"]:
-            _set(audio, "artist", [new["artist"]])
-            _set(audio, "artists", new["artists"])
-            touched = True
-        if album_changed["album"]:
-            _set(audio, "album", [clean["album"]])
-            touched = True
-        if album_changed["albumArtist"] or album_changed["albumArtists"]:
-            for key in ALBUM_ARTIST_KEYS[1:]:  # one spelling, so no stale second one stays
-                if key in audio:
-                    del audio[key]
-            _set(audio, "albumartist", [clean["albumArtist"]] if clean["albumArtist"] else [])
-            _set(audio, "albumartists", clean["albumArtists"])
-            touched = True
-        for field, key in (("date", "date"), ("genre", "genre")):
-            if album_changed[field]:
-                _set(audio, key, [clean[field]] if clean[field] else [])
-                touched = True
-        for field, key in (("track", "tracknumber"), ("disc", "discnumber")):
-            if new[field] != old[field]:
-                _set(audio, key, [new[field]] if new[field] else [])
-                touched = True
-        # The album's shared tags go to every track, a track's own to it alone.
-        for key, values in clean["other"].items():
-            if values != current["other"].get(key):
-                _set(audio, key.lower(), values)
-                touched = True
-        for key, values in new["other"].items():
-            if values != old["other"].get(key):
-                _set(audio, key.lower(), values)
-                touched = True
-        if touched:
-            try:
-                audio.save()
-            except Exception as exc:
-                raise TagEditError(f"Could not write {path.name}: {exc}") from exc
-            changed += 1
+    for path in _flac(folder):
+        if not os.access(path, os.W_OK):
+            raise TagEditError(f"{path.name} cannot be written.")
 
-    # Through temporary names first: two tracks that swap titles would
-    # otherwise overwrite each other's file. A rename that fails anyway
-    # (permissions) puts the names back: tags written, names as before.
+    # The names first: a rename that follows the tags cannot be tried again,
+    # as the next save finds the title unchanged. Through temporary names:
+    # two tracks that swap titles would otherwise overwrite each other's file.
     moving = [e for e in files if e["newFile"] and e["newFile"] != e["file"]]
     done: list[tuple[Path, Path]] = []
+    renamed: list[list[str]] = []
+    folder_renamed: list[list[str]] = []
     try:
         for i, entry in enumerate(moving):
             _move(folder / entry["file"], folder / f".cdimport-rename-{i}{Path(entry['file']).suffix}", done)
         for i, entry in enumerate(moving):
             _move(folder / f".cdimport-rename-{i}{Path(entry['file']).suffix}", folder / entry["newFile"], done)
     except OSError as exc:
-        stuck = _undo(done)
-        raise TagEditError(f"The tags are saved, but renaming the files failed ({exc}); "
-                           f"they keep their names.{stuck}") from exc
+        raise TagEditError(f"Renaming the files failed ({exc}); nothing was saved.{_undo(done)}") from exc
     renamed = [[entry["file"], entry["newFile"]] for entry in moving]
-    if renamed:
-        _follow_in_cue_sheets(folder, dict(renamed))
-    folder_renamed = []
-    if new_folder != folder:
-        done = []
-        try:
-            for side, target in sidecars:
-                if target.exists() and not _same(target, side):
-                    continue  # never over another file
-                _rename(side, target, done)
-                folder_renamed.append([side.name, target.name])
-            _rename(folder, new_folder, done)
-        except OSError as exc:
-            stuck = _undo(done)
-            raise TagEditError(f"The tags are saved{' and the tracks renamed' if renamed else ''}, "
-                               f"but renaming the folder failed ({exc}); it keeps its name.{stuck}") from exc
+    try:
+        if renamed:
+            _follow_in_cue_sheets(folder, dict(renamed))
+        if new_folder != folder:
+            try:
+                for side, target in sidecars:
+                    if target.exists() and not _same(target, side):
+                        continue  # never over another file
+                    _rename(side, target, done)
+                    folder_renamed.append([side.name, target.name])
+                _rename(folder, new_folder, done)
+            except OSError as exc:
+                raise TagEditError(f"Renaming the folder failed ({exc}); nothing was saved.") from exc
+        album_changed = {k: clean[k] != current[k] or k in current["differing"] for k in _ALBUM_FIELDS}
+        changed = 0
+        for entry, old, new in zip(files, current["tracks"], clean["tracks"]):
+            audio = _open(new_folder / (entry["newFile"] or entry["file"]))
+            touched = False
+            if new["title"] != old["title"]:
+                _set(audio, "title", [new["title"]])
+                touched = True
+            if new["artist"] != old["artist"] or new["artists"] != old["artists"]:
+                _set(audio, "artist", [new["artist"]])
+                _set(audio, "artists", new["artists"])
+                touched = True
+            if album_changed["album"]:
+                _set(audio, "album", [clean["album"]])
+                touched = True
+            if album_changed["albumArtist"] or album_changed["albumArtists"]:
+                for key in ALBUM_ARTIST_KEYS[1:]:  # one spelling, so no stale second one stays
+                    if key in audio:
+                        del audio[key]
+                _set(audio, "albumartist", [clean["albumArtist"]] if clean["albumArtist"] else [])
+                _set(audio, "albumartists", clean["albumArtists"])
+                touched = True
+            for field, key in (("date", "date"), ("genre", "genre")):
+                if album_changed[field]:
+                    _set(audio, key, [clean[field]] if clean[field] else [])
+                    touched = True
+            for field, key in (("track", "tracknumber"), ("disc", "discnumber")):
+                if new[field] != old[field]:
+                    _set(audio, key, [new[field]] if new[field] else [])
+                    touched = True
+            # The album's shared tags go to every track, a track's own to it alone.
+            for key, values in clean["other"].items():
+                if values != current["other"].get(key):
+                    _set(audio, key.lower(), values)
+                    touched = True
+            for key, values in new["other"].items():
+                if values != old["other"].get(key):
+                    _set(audio, key.lower(), values)
+                    touched = True
+            if touched:
+                try:
+                    audio.save()
+                except Exception as exc:
+                    raise TagEditError(f"Could not write {entry['file']}: {exc}") from exc
+                changed += 1
+
+    except TagEditError as exc:
+        # A write can fail partway; tracks already written keep their tags.
+        raise TagEditError(f"{exc}{_put_back(folder, done, renamed)}") from exc
     return {
         "folder": str(new_folder),
         "changed": changed,
@@ -446,9 +450,9 @@ def _move(source: Path, target: Path, done: list[tuple[Path, Path]]) -> None:
 def _rename(source: Path, target: Path, done: list[tuple[Path, Path]]) -> None:
     """A rename that also works when only the case changes: some
     case-insensitive file systems ignore that, so it goes through a
-    temporary name."""
+    temporary name, short so that a name near the limit still fits."""
     if _same(source, target):
-        temporary = source.with_name(f".cdimport-rename-{source.name}")
+        temporary = source.with_name(f".cdimport-rename-{len(done)}")
         _move(source, temporary, done)
         source = temporary
     _move(source, target, done)
@@ -464,6 +468,19 @@ def _undo(done: list[tuple[Path, Path]]) -> str:
         except OSError:
             stuck.append(target.name)
     return f" These could not be renamed back: {', '.join(stuck)}." if stuck else ""
+
+
+def _put_back(folder: Path, done: list[tuple[Path, Path]], renamed: list[list[str]]) -> str:
+    """Undo a save's renames and what the cue sheets say about them; what
+    could not be undone, for the error message, or "". """
+    stuck = _undo(done)
+    if not renamed:
+        return stuck
+    try:
+        _follow_in_cue_sheets(folder, {new: old for old, new in renamed})
+    except TagEditError as exc:
+        return f"{stuck} {exc}"
+    return stuck
 
 
 def _follow_in_cue_sheets(folder: Path, renamed: dict[str, str]) -> None:
@@ -483,5 +500,4 @@ def _follow_in_cue_sheets(folder: Path, renamed: dict[str, str]) -> None:
         try:
             sheet.write_text("".join(lines), encoding="utf-8")
         except OSError as exc:
-            raise TagEditError(f"The tags are saved and the tracks renamed, but {sheet.name} could not be "
-                               f"updated ({exc}); its FILE lines still name the old files.") from exc
+            raise TagEditError(f"{sheet.name} could not be updated ({exc}); nothing was saved.") from exc

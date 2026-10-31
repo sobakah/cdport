@@ -39,6 +39,12 @@ class TagReadError(Exception):
     """Tags cannot be read (mutagen missing, or a broken file)."""
 
 
+# WAV and AIFF have no "easy" mode in mutagen: their tags arrive as ID3 frames.
+_ID3_NAMES = {"TIT2": "title", "TPE1": "artist", "TPE2": "albumartist", "TALB": "album", "TRCK": "tracknumber",
+              "TPOS": "discnumber", "TDRC": "date", "TCON": "genre",
+              "TXXX:MusicBrainz Album Id": "musicbrainz_albumid"}
+
+
 def read_tags(path: Path) -> dict[str, str]:
     """The file's tags with lower-case keys, first value only."""
     try:
@@ -55,7 +61,7 @@ def read_tags(path: Path) -> dict[str, str]:
     for key, value in audio.tags.items():
         if isinstance(value, list):
             value = value[0] if value else ""
-        tags[key.lower()] = str(value).strip()
+        tags[_ID3_NAMES.get(key, key.lower())] = str(value).strip()
     return tags
 
 

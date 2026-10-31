@@ -70,6 +70,9 @@ class Front:
         """*info* carries what only a page can show, such as a picture per option."""
         raise NotImplementedError
 
+    def ask_edit(self, prompt: str, prefill: str = "") -> str:
+        raise NotImplementedError
+
     def ask_path(self, prompt: str, prefill: str = "") -> str:
         raise NotImplementedError
 
@@ -401,6 +404,30 @@ def _complete_path(text: str, state: int) -> str | None:
     matches = sorted(glob.glob(glob.escape(os.path.expanduser(text)) + "*"))
     results = [m + os.sep if os.path.isdir(m) else m for m in matches]
     return results[state] if state < len(results) else None
+
+
+def ask_edit(prompt: str, prefill: str = "") -> str:
+    """Ask for text with the answer prefilled and editable, where an empty
+    answer means something: ask() would return its default instead."""
+    if _front is not None:
+        return _front.ask_edit(prompt, prefill)
+    hook = getattr(_readline, "set_startup_hook", None)
+    insert = getattr(_readline, "insert_text", None)
+    if not (hook and insert):
+        if prefill:
+            info(f"Before: {prefill}")
+        return ask(prompt)
+    try:
+        hook(lambda: insert(prefill))
+        try:
+            answer = input(_prompt(prompt)).strip()
+            _answered()
+            return answer
+        except EOFError:
+            print()
+            raise KeyboardInterrupt from None
+    finally:
+        hook(None)
 
 
 def ask_path(prompt: str, prefill: str = "") -> str:

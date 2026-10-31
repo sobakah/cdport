@@ -125,6 +125,7 @@ function OtherTags({ id, title, note, tags, onChange }) {
 }
 
 const FEAT = /\s*[(\[](?:feat\.?|ft\.?|featuring)\s+([^)\]]+)[)\]]/i;
+const HAS_FEAT = /\s(?:feat\.?|ft\.?|featuring)\s/i;
 const JOINS = /\s+(?:feat\.?|ft\.?|featuring|&|and|x|×|with)\s+|\s*,\s*/i;
 
 // "A", "A & B", "A, B & C": the credit for names without join phrases.
@@ -197,7 +198,11 @@ function TagEditor({ question, onAnswer }) {
       const guests = m[1].split(/\s*(?:,|&| and )\s*/).map((g) => g.trim()).filter(Boolean);
       const names = (t.artists.length ? t.artists : [t.artist]).filter(Boolean);
       for (const g of guests) if (!names.includes(g)) names.push(g);
-      return { ...t, title: t.title.replace(m[0], '').trim(), artist: `${t.artist} feat. ${creditFrom(guests)}`, artists: names };
+      // Only guests the credit does not name yet.
+      const credit = t.artist.toLowerCase();
+      const added = creditFrom(guests.filter((g) => !credit.includes(g.toLowerCase())));
+      const join = HAS_FEAT.test(t.artist) ? '&' : 'feat.';
+      return { ...t, title: t.title.replace(m[0], '').trim(), artist: added ? `${t.artist} ${join} ${added}` : t.artist, artists: names };
     }),
   });
   const replaceAll = () => {
@@ -219,6 +224,9 @@ function TagEditor({ question, onAnswer }) {
       return true;
     } catch (err) {
       setError(err.message);
+      // The edit stays for another try; a write that failed partway may have
+      // changed what is in the files.
+      api('/tags').then(setLoaded).catch(() => {});
       return false;
     } finally {
       setBusy(false);
@@ -337,15 +345,17 @@ function Question({ question, onAnswer }) {
   keys.current = (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey || question.kind === 'tag_editor') return;
     const typing = ['INPUT', 'TEXTAREA'].includes(e.target.tagName);
+    // Enter on a focused button or link is that control's own.
+    const control = ['BUTTON', 'A', 'SUMMARY'].includes(e.target.tagName);
     if (question.kind === 'choose' && !typing) {
       const hit = question.options.find(([key]) => key === e.key.toLowerCase());
       if (hit) { e.preventDefault(); answer(hit[0]); return; }
-      if (e.key === 'Enter' && question.default) { e.preventDefault(); answer(question.default); }
+      if (e.key === 'Enter' && question.default && !control) { e.preventDefault(); answer(question.default); }
     } else if (question.kind === 'confirm' && !typing) {
       if (e.key === 'y') answer(true);
       else if (e.key === 'n') answer(false);
-      else if (e.key === 'Enter') { e.preventDefault(); answer(question.default); }
-    } else if (question.kind === 'wait' && e.key === 'Enter' && !typing) {
+      else if (e.key === 'Enter' && !control) { e.preventDefault(); answer(question.default); }
+    } else if (question.kind === 'wait' && e.key === 'Enter' && !typing && !control) {
       e.preventDefault();
       answer(null);
     }
@@ -394,7 +404,7 @@ function Question({ question, onAnswer }) {
   } else {
     body = html`<form class="row-wrap" onSubmit=${(e) => { e.preventDefault(); answer(text); }}>
       <label class="sr" for="answer">${question.prompt}</label>
-      <input id="answer" type="text" class=${question.kind === 'ask_path' ? 'mono' : ''} value=${text} autofocus
+      <input id="answer" type="text" class=${question.kind === 'ask_path' && !question.plain ? 'mono' : ''} value=${text} autofocus
         placeholder=${question.default || ''} onInput=${(e) => setText(e.target.value)} />
       <button class="btn btn-primary" type="submit" disabled=${sending}><${Icon} name="check" /> OK</button>
     </form>

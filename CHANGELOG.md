@@ -11,11 +11,27 @@ next line's tag.
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-10-31
+
 ### Changed
 
 - **The page has a new look, shared with lyrembed**, in libadwaita's design language: a centred workflow in the header with an icon for each step instead of a number, softer buttons and floating messages. The two programs differ by colour and logo.
 - A small logo for the header and the browser tab, where the full icon can't be read. The full icon stays in the app menu and appears when a run has finished.
 - Icons on the action buttons.
+
+### Fixed
+
+- **Enter acts on the focused button.** On the page it always gave the default answer, so Enter on **No** answered Yes.
+- **A stopped run no longer counts as finished.** lyrembed's **Import a CD** opened the working folder and announced it as imported.
+- **A failed rename in the tag editor can be tried again.** The editor renames first and writes the tags last, so a failure saves nothing; before, the tags were saved and the file could never be renamed from there. It also checks that the files can be written before it starts.
+- **A secure re-rip keeps the album's loudness.** Re-ripped tracks got an album gain measured over those tracks alone, so one album's tracks disagreed.
+- "Album title (empty to go back)" and "Album (empty: no tags of your own)" really go back when left empty; the answer before is now in the field, to change or clear.
+- Discs tagged by hand can join one library folder: the second disc's cue sheet and log get names of their own (`<album> CD2`). Tracks of the same name still stop the merge.
+- **Move "feat." from titles to artists** no longer repeats a guest the artist credit already names.
+- Tags of WAV and AIFF files are read; those files counted as untagged.
+- An album with one track no longer shows that track's tags as the album's.
+- Nothing goes wrong at the end of a run when lyrembed, which started cdimport, has already ended.
+- Looking at a drive no longer takes its lock, which could make another cdimport starting at that moment report it as busy.
 
 ## [1.1.0] — 2026-10-29
 

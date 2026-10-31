@@ -69,6 +69,10 @@ search for unknown discs with cyanrip before 0.9.4-rc3; and cdimport's own
 update check (`selfupdate.py`, taken from picktag's `core/selfupdate.py`).
 1.0.1 (2026-10-29): the update check runs at every start, in the background
 (`app.UpdateCheck`), instead of once a day with step 0 waiting for it.
+1.2.0 (2026-10-31): the page's look shared with lyrembed (libadwaita),
+and fixes from an outside code review: Enter on a focused button, stopped
+runs, the tag editor's order, album gain after a re-rip.
+
 1.1.0 (2026-10-29): cyanrip installed and updated on the page
 (`install.run_package_manager`, `proc.run_shown`), the app-menu entry
 (`desktop.py`, `--install-desktop-entry`, copied from lyrembed/keepbest)
@@ -306,6 +310,9 @@ Behaviour depends on third-party tools; re-verify before relying on these.
     `cyanrip.deemphasis: true`); players ignore the flag, so bit-exact
     rips of such discs sound too bright. `false` passes `-W`.
   - ReplayGain tags are written by default (tags only). Make it configurable.
+    A partial rip (`-l`) measures only its own tracks as "the album"
+    (`crip_replaygain_meta_album`), so a secure re-rip's tracks keep the fast
+    rip's album gain tags (`rip._keep_album_gain`).
   - Output is 16-bit for normal CDs (more only with HDCD `-H` or deemphasis).
 - Not packaged for Fedora, RPM Fusion, Terra or Flathub. The repo has a
   Flatpak manifest (`com.github.cyanreg.cyanrip.yaml`), but the maintainer
@@ -480,7 +487,10 @@ A front end that wants live tool progress keeps the pseudo-terminal
   every tag in the files: the fields it edits (with disc and track number),
   and the rest under "More tags" (MusicBrainz IDs and the like), album-wide
   when equal in every track, else per track. It can change or empty those
-  but never add new keys; lyrics tags are lyrembed's and only noted. The
+  but never add new keys; lyrics tags are lyrembed's and only noted. Saving
+  renames first and writes the tags last, putting the names back on failure:
+  once the tags are in, the next save finds the title unchanged and can no
+  longer rename the file. The
   embedded front cover (picture type 3, else the first) is shown once when
   every track has the same, else per track, via `/api/tags/cover` (JPEG and
   PNG only). A save that renames the folder calls `edit_tags`'s `moved`
@@ -513,7 +523,11 @@ A front end that wants live tool progress keeps the pseudo-terminal
   lyrembed`, with `--web` only, local addresses only, `cli.local_page`),
   the finished run's button leads back there. `serve` ends by printing
   "cdimport finished: <album folder>" (`FINISHED_LINE`), which lyrembed
-  reads to open the album: keep that wording. The token cookie's name
+  reads to open the album: keep that wording. It names the newest album
+  that got through its steps (`last_album`); a stopped one is not finished,
+  and lyrembed would announce its working folder as imported. lyrembed may
+  be gone by then: `_say` survives the closed pipe, and lyrembed must not
+  end cdimport, which would cut a rip off. The token cookie's name
   carries the port (`web.cookie_name`), as in lyrembed: cookies belong to
   a host, not a port, and two pages on 127.0.0.1 overwrote each other's.
 - The page scrolls like a terminal: it follows new content only while the

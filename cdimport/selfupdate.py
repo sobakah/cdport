@@ -138,8 +138,10 @@ def known(state_file: Path) -> str | None:
 def restart_argv() -> list[str]:
     """The command cdimport was started with, to start it again after an update."""
     first = Path(sys.argv[0])
-    if first.name == NAME and os.access(first, os.X_OK):
-        return [str(first), *sys.argv[1:]]
+    # shutil.which: on Windows the launcher sets sys.argv[0] without its .exe.
+    launcher = shutil.which(str(first)) if first.name == NAME else None
+    if launcher:
+        return [launcher, *sys.argv[1:]]
     if first.name == "__main__.py":  # python -m cdimport
         return [sys.executable, "-m", NAME, *sys.argv[1:]]
     return [sys.executable, *sys.argv]

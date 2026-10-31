@@ -57,8 +57,9 @@ class Session:
     lyrembed_return: bool = False  # lyrembed 0.9+: its page can lead back to cdimport's (--return-url)
     page_url: str = ""  # cdimport's own page, when it runs on one (web.serve)
     album: AlbumState | None = None  # the album being worked on, for the Ctrl+C message
-    # The newest album of any run; a later run without one keeps it, so the
-    # page's "cdimport finished" line still names it.
+    # The newest album of any run that got through its steps, so the page's
+    # "cdimport finished" line names it: a stopped one is not finished, and
+    # lyrembed would announce its working folder as imported.
     last_album: AlbumState | None = None
     update_check: UpdateCheck | None = None  # GitHub asked in the background since the start
     update_offered: str | None = None  # the newer cdimport offered in step 0
@@ -100,8 +101,10 @@ def run(session: Session) -> int:
             album = offer_resume(session) or disc_and_rip(session)
         if album is None:
             break
-        session.album = session.last_album = album
+        session.album = album
         continue_album(session, album)
+        if album.next_step() is None:
+            session.last_album = album
         summary(session, album)
         ui.gap()
         if not ui.confirm("Start another run (next disc or album)?", default=False):
@@ -724,7 +727,7 @@ def explain_submission(url: str) -> None:
 
 def search_release(typed: rip.ManualTags | None, tracks: tuple[int, int] | None) -> str:
     """A release ID from a MusicBrainz search, or "" when none was picked."""
-    album = ui.ask("Album title (empty to go back)", typed.album if typed else "")
+    album = ui.ask_edit("Album title (empty to go back)", typed.album if typed else "")
     if not album:
         return ""
     artist = ui.ask("Artist (optional)", typed.artist if typed else "")
@@ -754,7 +757,7 @@ def ask_tags(previous: rip.ManualTags | None, tracks: tuple[int, int] | None) ->
     add the rest (per-track artists, genre) afterwards.
     """
     prev = previous or rip.ManualTags()
-    album = ui.ask("Album (empty: no tags of your own)", prev.album)
+    album = ui.ask_edit("Album (empty: no tags of your own)", prev.album)
     if not album:
         return None
     artist = ui.ask("Album artist", prev.artist)

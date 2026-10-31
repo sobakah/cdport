@@ -5,7 +5,7 @@ from __future__ import annotations
 import filecmp
 import re
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import tags
@@ -53,6 +53,7 @@ class DiscMerge:
     discs_here: list[str]
     files: list[Path]       # moved into the library folder
     duplicates: list[Path]  # byte-identical to a file there (cover.jpg); dropped
+    renamed: dict[Path, str] = field(default_factory=dict)  # a cue sheet or log that needs a name of its own
 
 
 def plan_disc_merge(source: Path, target: Path) -> DiscMerge | None:
@@ -77,7 +78,7 @@ def plan_disc_merge(source: Path, target: Path) -> DiscMerge | None:
     discs_there = {_disc(t) for t in tags_there}
     if "" in discs_here or "" in discs_there or discs_here & discs_there:
         return None
-    files, duplicates = [], []
+    files, duplicates, renamed = [], [], {}
     for f in sorted(source.iterdir()):
         if f.name == STATE_FILE_NAME:
             continue
@@ -86,10 +87,21 @@ def plan_disc_merge(source: Path, target: Path) -> DiscMerge | None:
             files.append(f)
         elif f.is_file() and existing.is_file() and filecmp.cmp(f, existing, shallow=False):
             duplicates.append(f)
+        elif (name := _disc_sidecar(f, discs_here)) and not (target / name).exists():
+            files.append(f)
+            renamed[f] = name
         else:
             raise MoveError(f"{existing} already exists with other content - not merging")
     return DiscMerge(sorted(discs_there, key=_disc_order), sorted(discs_here, key=_disc_order),
-                     files, duplicates)
+                     files, duplicates, renamed)
+
+
+def _disc_sidecar(path: Path, discs: set[str]) -> str | None:
+    """The name cyanrip gives a disc's cue sheet or log, "<album> CD<disc>".
+    Discs tagged by hand have no number at the rip, so both are "<album>"."""
+    if path.suffix.lower() not in (".cue", ".log") or len(discs) != 1:
+        return None
+    return f"{path.stem} CD{next(iter(discs))}{path.suffix}"
 
 
 def merge_disc(plan: DiscMerge, target: Path) -> None:
@@ -101,7 +113,7 @@ def merge_disc(plan: DiscMerge, target: Path) -> None:
     moved: list[tuple[Path, Path]] = []
     try:
         for f in plan.files:
-            destination = target / f.name
+            destination = target / plan.renamed.get(f, f.name)
             if destination.exists():  # appeared since the plan was made
                 raise MoveError(f"{destination} already exists - not overwriting it")
             shutil.move(str(f), str(destination))

@@ -109,12 +109,25 @@ def hold(device: str) -> Iterator[None]:
 
 
 def busy(device: str) -> str | None:
-    """Why the drive is in use by another cdimport, or None when it is free."""
+    """Why the drive is in use by another cdimport, or None when it is free.
+
+    Only looks: taking the lock in hold()'s way, each poll could make another
+    cdimport starting at that moment report this one as using the drive.
+    """
     try:
-        with hold(device):
-            return None
-    except DriveBusy as exc:
-        return str(exc)
+        import fcntl
+    except ImportError:  # pragma: no cover - Windows: no lock, as in hold()
+        return None
+    try:
+        handle = open(lock_path(device), encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    with handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return _busy_message(device, handle.read())
+    return None
 
 
 def _busy_message(device: str, content: str) -> str:

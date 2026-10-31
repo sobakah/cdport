@@ -1173,7 +1173,7 @@ def test_a_newer_cdimport_is_installed_and_started_again(tmp_path, monkeypatch, 
     ran = []
     monkeypatch.setattr(app.proc, "run", lambda cmd, cwd=None: ran.append(cmd) or 0)
     monkeypatch.setattr(sys, "argv", ["/home/u/.local/bin/cdimport", "--update", "-w", "x"])
-    monkeypatch.setattr(selfupdate.os, "access", lambda path, mode: True)
+    monkeypatch.setattr(selfupdate.shutil, "which", lambda name: name)
     feed_input(monkeypatch, [""])  # update now? yes
     with pytest.raises(app.Restart) as restart:
         app.offer_self_update(session)
@@ -3221,11 +3221,16 @@ def test_tag_editor_puts_names_back_when_a_rename_fails(tmp_path, monkeypatch):
             raise PermissionError(13, "Permission denied")
         return real_rename(self, target)
     monkeypatch.setattr(Path, "rename", rename)
-    with pytest.raises(tageditor.TagEditError, match="tags are saved.*keep their names"):
+    with pytest.raises(tageditor.TagEditError, match="nothing was saved"):
         tageditor.save(folder, album)
     assert sorted(p.name for p in folder.glob("*.flac")) == ["01 - A.flac", "02 - B.flac"]
     assert not list(folder.glob(".cdimport-rename-*"))
-    assert mutagen.flac.FLAC(folder / "01 - A.flac")["title"] == ["A2"]
+    assert mutagen.flac.FLAC(folder / "01 - A.flac")["title"] == ["A"]
+    # So the same save can be tried again, and renames this time.
+    monkeypatch.setattr(Path, "rename", real_rename)
+    assert len(tageditor.save(folder, album)["renamed"]) == 2
+    assert sorted(p.name for p in folder.glob("*.flac")) == ["01 - A2.flac", "02 - B2.flac"]
+    assert mutagen.flac.FLAC(folder / "01 - A2.flac")["title"] == ["A2"]
 
 
 def test_tag_editor_refuses_a_name_too_long_before_writing(tmp_path):
@@ -3246,7 +3251,12 @@ def test_a_later_run_without_an_album_keeps_the_finished_one(tmp_path, monkeypat
     for name in ("ask_missing_folders", "check_tools", "offer_staging_cleanup", "offer_resume"):
         monkeypatch.setattr(app, name, lambda session: None)
     monkeypatch.setattr(app, "disc_and_rip", lambda session: found.pop(0))
-    monkeypatch.setattr(app, "continue_album", lambda session, album: None)
+
+    def finish(session, album):
+        while (step := album.next_step()) is not None:
+            album.mark(step)
+
+    monkeypatch.setattr(app, "continue_album", finish)
     monkeypatch.setattr(app, "summary", lambda session, album: None)
     monkeypatch.setattr(app.ui, "confirm", lambda prompt, default=True: True)   # start another run
     session = app.new_session(default_cfg(), app.Options(), tmp_path / "config.json")
@@ -3434,3 +3444,203 @@ def test_musicbrainz_requests_keep_their_distance_across_threads(monkeypatch):
     for t in threads:
         t.join(2)
     assert slept == pytest.approx([cover.MB_INTERVAL_SECONDS] * 2)   # one after another
+
+
+# --- review of 2026-10-31 --------------------------------------------------------
+def test_a_stopped_album_is_not_reported_as_finished(tmp_path, monkeypatch, album_dir):
+    album = state.load(album_dir)
+    for name in ("ask_missing_folders", "check_tools", "offer_staging_cleanup", "offer_resume"):
+        monkeypatch.setattr(app, name, lambda session: None)
+    monkeypatch.setattr(app, "disc_and_rip", lambda session: album)
+    monkeypatch.setattr(app, "continue_album", lambda session, album: None)      # stopped at a step
+    monkeypatch.setattr(app, "summary", lambda session, album: None)
+    monkeypatch.setattr(app.ui, "confirm", lambda prompt, default=True: False)
+    session = app.new_session(default_cfg(), app.Options(), tmp_path / "config.json")
+    app.run(session)
+    assert album.next_step() is not None and session.last_album is None
+
+
+def test_tag_editor_puts_names_back_when_a_write_fails(tmp_path, monkeypatch):
+    import mutagen.flac
+
+    folder = _ripped_album(tmp_path, titles=("A", "B"))
+    (folder / "Album.cue").write_text('FILE "01 - A.flac" WAVE\n', encoding="utf-8")
+    album = tageditor.read_album(folder)
+    album["tracks"][0]["title"] = "A2"
+
+    def refuse(self, *args, **kwargs):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(mutagen.flac.FLAC, "save", refuse)
+    with pytest.raises(tageditor.TagEditError, match="Could not write 01 - A.flac"):
+        tageditor.save(folder, album)
+    assert sorted(p.name for p in folder.glob("*.flac")) == ["01 - A.flac", "02 - B.flac"]
+    assert '"01 - A.flac"' in (folder / "Album.cue").read_text(encoding="utf-8")
+
+
+def test_tag_editor_refuses_a_file_it_cannot_write_before_renaming(tmp_path, monkeypatch):
+    folder = _ripped_album(tmp_path, titles=("A", "B"))
+    album = tageditor.read_album(folder)
+    album["tracks"][0]["title"] = "A2"
+    monkeypatch.setattr(tageditor.os, "access", lambda path, mode: False)
+    with pytest.raises(tageditor.TagEditError, match="cannot be written"):
+        tageditor.save(folder, album)
+    assert (folder / "01 - A.flac").exists()
+
+
+def test_a_folder_rename_that_fails_can_be_tried_again(tmp_path, monkeypatch):
+    import mutagen.flac
+
+    folder = _ripped_album(tmp_path, titles=("A", "B"))
+    album = tageditor.read_album(folder)
+    album["album"] = album["album"] + " II"
+    real_rename = Path.rename
+
+    def rename(self, target):
+        if self == folder:
+            raise PermissionError(13, "Permission denied")
+        return real_rename(self, target)
+    monkeypatch.setattr(Path, "rename", rename)
+    with pytest.raises(tageditor.TagEditError, match="nothing was saved"):
+        tageditor.save(folder, album)
+    assert mutagen.flac.FLAC(folder / "01 - A.flac")["album"] != [album["album"]]
+    monkeypatch.setattr(Path, "rename", real_rename)
+    assert tageditor.save(folder, album)["folderRenamed"]
+
+
+def test_tags_of_a_wav_file_read_like_all_others(tmp_path):
+    import wave
+
+    from mutagen.id3 import TALB, TIT2, TPE1
+    from mutagen.wave import WAVE
+
+    path = tmp_path / "a.wav"
+    with wave.open(str(path), "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(8000)
+        out.writeframes(b"\0\0" * 80)
+    audio = WAVE(path)
+    audio.add_tags()
+    audio.tags.add(TIT2(encoding=3, text="Song"))
+    audio.tags.add(TPE1(encoding=3, text="Band"))
+    audio.tags.add(TALB(encoding=3, text="LP"))
+    audio.save()
+    read = tags.read_tags(path)
+    assert (read["title"], read["artist"], read["album"]) == ("Song", "Band", "LP")
+
+
+def test_one_track_has_no_album_wide_tags(tmp_path):
+    folder = tmp_path / "Single"
+    folder.mkdir()
+    make_flac(folder / "01 - A.flac", title="A", artist="B", album="C", musicbrainz_trackid="abc")
+    album = tageditor.read_album(folder)
+    assert album["other"] == {} and "MUSICBRAINZ_TRACKID" in album["tracks"][0]["other"]
+
+
+def test_the_temporary_name_of_a_rename_fits_beside_a_long_name(tmp_path):
+    folder = tmp_path / ("x" * 250)
+    folder.mkdir()
+    tageditor._rename(folder, folder, [])                                        # same file: a change of case
+    assert folder.is_dir()
+
+
+def test_empty_goes_back_although_an_album_was_typed_before(monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda prompt="": "")
+    assert app.search_release(rip.ManualTags(album="Typed"), None) == ""
+    assert app.ask_tags(rip.ManualTags(album="Typed"), None) is None
+
+
+def test_discs_tagged_by_hand_join_with_cue_sheets_of_their_own(tmp_path):
+    first, second = tmp_path / "lib" / "LP", tmp_path / "work" / "LP"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    make_flac(first / "01 - A.flac", title="A", artist="B", album="LP", albumartist="B", discnumber="1")
+    make_flac(second / "01 - X.flac", title="X", artist="B", album="LP", albumartist="B", discnumber="2")
+    for folder, text in ((first, "disc one"), (second, "disc two")):
+        (folder / "LP.cue").write_text(text)
+        (folder / "LP.log").write_text(text)
+    merge = library.plan_disc_merge(second, first)
+    library.merge_disc(merge, first)
+    assert (first / "LP.cue").read_text() == "disc one" and (first / "LP CD2.cue").read_text() == "disc two"
+    assert (first / "LP.log").read_text() == "disc one" and (first / "LP CD2.log").read_text() == "disc two"
+    assert (first / "01 - X.flac").exists()
+
+
+def test_a_track_of_that_name_still_refuses_a_merge(tmp_path):
+    first, second = tmp_path / "lib" / "LP", tmp_path / "work" / "LP"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    make_flac(first / "01 - A.flac", title="A", artist="B", album="LP", albumartist="B", discnumber="1")
+    make_flac(second / "01 - A.flac", title="A", artist="C", album="LP", albumartist="B", discnumber="2")
+    with pytest.raises(library.MoveError):
+        library.plan_disc_merge(second, first)
+
+
+def test_a_look_at_a_free_drive_leaves_its_lock_file_alone(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    with disc.hold("/dev/sr0"):
+        pass
+    lock = disc.lock_path("/dev/sr0")
+    lock.write_text("123\n", encoding="utf-8")
+    assert disc.busy("/dev/sr0") is None
+    assert lock.read_text(encoding="utf-8") == "123\n"
+
+
+def test_a_closed_pipe_does_not_fail_a_finished_run(tmp_path):
+    # lyrembed started cdimport and has ended: nobody reads the last line.
+    read_end, write_end = os.pipe()
+    os.close(read_end)
+    root = Path(__file__).resolve().parent.parent
+    code = f"import sys; sys.path.insert(0, {str(root)!r})\nfrom cdimport import web\nweb._say('cdimport finished: /album')"
+    done = subprocess.run([sys.executable, "-c", code], stdout=write_end, stderr=subprocess.PIPE, text=True, timeout=20)
+    os.close(write_end)
+    assert done.returncode == 0 and done.stderr == ""
+
+
+def test_a_secure_rerip_keeps_the_album_loudness_of_the_whole_disc(tmp_path, monkeypatch):
+    import mutagen.flac
+
+    work = tmp_path / "work"
+    album = work / "Album"
+    album.mkdir(parents=True)
+    whole = {"replaygain_album_gain": "-8.00 dB", "replaygain_album_peak": "0.900000"}
+    make_flac(album / "1 - A.flac", title="A", replaygain_track_gain="-7.00 dB", **whole)
+    make_flac(album / "2 - B.flac", title="B", replaygain_track_gain="-9.00 dB", **whole)
+
+    def cyanrip(cmd, cwd=None, lines=3, keep_bytes=8192):
+        out = Path(cwd) / "Album"
+        out.mkdir()
+        make_flac(out / "2 - B.flac", title="B", replaygain_track_gain="-9.50 dB",
+                  replaygain_album_gain="-9.50 dB", replaygain_album_peak="0.700000", r128_album_gain="-2000")
+        return 0, []
+    monkeypatch.setattr(rip.proc, "run_tail", cyanrip)
+    rip.rerip("cyanrip", default_cfg(), album, work, [2])
+    track = mutagen.flac.FLAC(album / "2 - B.flac")
+    assert track["replaygain_album_gain"] == ["-8.00 dB"] and track["replaygain_album_peak"] == ["0.900000"]
+    assert "r128_album_gain" not in track                                       # the fast rip had none
+    assert track["replaygain_track_gain"] == ["-9.50 dB"]                       # the secure rip's own
+
+
+def test_restart_finds_the_launcher_as_windows_starts_it(monkeypatch):
+    # The launcher's sys.argv[0] has lost its .exe, so only which() finds the file.
+    from pathlib import PureWindowsPath
+
+    monkeypatch.setattr(sys, "argv", [r"C:\pipx\venvs\cdimport\Scripts\cdimport", "--flag"])
+    monkeypatch.setattr(selfupdate.shutil, "which", lambda name: name + ".exe")
+    monkeypatch.setattr(selfupdate, "Path", PureWindowsPath)
+    assert selfupdate.restart_argv() == [r"C:\pipx\venvs\cdimport\Scripts\cdimport.exe", "--flag"]
+
+
+def test_on_the_page_an_empty_prefilled_answer_stays_empty():
+    front = web.WebFront()
+    answers = []
+    asking = threading.Thread(target=lambda: answers.append(front.ask_edit("Album", "Typed")), daemon=True)
+    asking.start()
+    deadline = time.monotonic() + 5
+    while front.question is None:
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    assert front.question["prefill"] == "Typed" and front.question["plain"]
+    front.answer(front.question["id"], "")
+    asking.join(5)
+    assert answers == [""]

@@ -13,9 +13,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import proc
+from . import proc, ui
 from .config import STAGING_PREFIX
 from .tags import AUDIO_EXTENSIONS
+
+
+# What cyanrip measures over all tracks of a run (crip_replaygain_meta_album).
+ALBUM_GAIN_TAGS = ("REPLAYGAIN_ALBUM_GAIN", "REPLAYGAIN_ALBUM_RANGE", "REPLAYGAIN_ALBUM_PEAK", "R128_ALBUM_GAIN")
 
 
 class RipError(Exception):
@@ -360,6 +364,7 @@ def rerip(cyanrip: str, cfg: dict[str, Any], album: Path, work_dir: Path, tracks
         for f in sorted(new.iterdir()):
             target = album / f.name
             if f.suffix.lower() in AUDIO_EXTENSIONS and target.exists():
+                _keep_album_gain(target, f)
                 os.replace(f, target)
                 replaced.append(target)
             elif f.suffix.lower() == ".log":
@@ -371,6 +376,27 @@ def rerip(cyanrip: str, cfg: dict[str, Any], album: Path, work_dir: Path, tracks
                 f.unlink()
         leftover = None if remove_empty_dirs(staging) else staging
     return replaced, log, leftover
+
+
+def _keep_album_gain(fast: Path, secure: Path) -> None:
+    """Give a re-ripped track the album values of the fast rip's: a partial
+    rip measures only its own tracks as "the album", and the tracks of one
+    album would disagree. Its track values are the secure rip's own."""
+    from mutagen import MutagenError
+    from mutagen.flac import FLAC
+
+    if secure.suffix.lower() != ".flac":
+        return
+    try:
+        old, new = FLAC(fast), FLAC(secure)
+        for key in ALBUM_GAIN_TAGS:
+            if key in old:
+                new[key] = old[key]
+            elif key in new:
+                del new[key]
+        new.save()
+    except (MutagenError, OSError) as exc:
+        ui.warn(f"{secure.name} keeps the album loudness of its own rip: {exc}")
 
 
 def _numbered(path: Path) -> Path:
