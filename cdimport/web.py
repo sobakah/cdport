@@ -103,6 +103,7 @@ class WebFront(ui.Front):
         self._pending = ""  # output after the last line break: a line still being written
         self._redrawn = ""  # the newest state of a line a progress display redraws with \r
         self.finished: int | None = None
+        self.restarting = False
         self._handoff_end: float | None = None
         # Set by stop(): every question from then on, and a pause, ends the
         # flow, so it stops after a tool it let finish instead of asking on.
@@ -249,6 +250,13 @@ class WebFront(ui.Front):
             self._rev += 1
             self._cond.notify_all()
 
+    def restart(self) -> None:
+        """The run ends for the updated cdimport, which takes over the page."""
+        with self._cond:
+            self.restarting = True
+            self._rev += 1
+            self._cond.notify_all()
+
     def ask(self, prompt: str, default: str = "") -> str:
         return self._ask("ask", prompt, default=default)
 
@@ -325,7 +333,7 @@ class WebFront(ui.Front):
         self._ask("wait", prompt)
 
     def supports(self, feature: str) -> bool:
-        return feature == "tag_editor"
+        return feature in ("tag_editor", "self_update")
 
     def edit_tags(self, folder: Path, moved: Callable[[Path], None] | None = None) -> tuple[Path, str]:
         """The page's tag editor; the question holds the folder, which a save
@@ -380,6 +388,7 @@ class WebFront(ui.Front):
                 "question": self.question,
                 "toolRunning": self.tool_running,
                 "finished": self.finished,
+                "restarting": self.restarting,
             })
 
     def wait_for_change(self, since: int, timeout: float) -> None:
@@ -422,6 +431,10 @@ class Run:
         self.thread = threading.Thread(target=self._run, name="cdimport-flow", daemon=True)
         self._started = threading.Lock()
         self._prevented = False
+        # Set when an update needs this process replaced. The page tells the
+        # new process from this one by *instance*, and reloads.
+        self.restart: app.Restart | None = None
+        self.instance = secrets.token_hex(8)
 
     def start(self) -> None:
         """Start the flow, once. The page does this on its first visit, so
@@ -451,11 +464,15 @@ class Run:
             ui.warn(message)
         try:
             code = run_session(self.session)
+        except app.Restart as restart:
+            self.restart = restart
+            self.front.restart()
         except Exception as exc:  # shown on the page, not lost in the thread
             log.exception("the run failed")
             self.front.message("error", f"cdimport stopped on an error: {exc}")
         finally:
-            self.front.finish(code)
+            if self.restart is None:
+                self.front.finish(code)
 
     def stop(self, interrupt_tool: bool = True) -> None:
         """End the run: at an open question at once, a running tool first
@@ -629,7 +646,7 @@ class _Handler(BaseHTTPRequestHandler):
             # Long poll: wait briefly for something new, so progress shows
             # without the page asking ten times a second.
             front.wait_for_change(since_rev, timeout=5.0 if since_rev else 0)
-            return {**front.snapshot(since_rev), "returnUrl": run.back_url,
+            return {**front.snapshot(since_rev), "instance": run.instance, "returnUrl": run.back_url,
                     "returnName": run.back_name or "the previous page"}
         if method == "POST" and path == "/api/answer":
             qid = body.get("id")
@@ -685,11 +702,27 @@ FINISHED_LINE = "cdimport finished: {folder}"
 
 
 def serve(session: app.Session, open_browser: bool = True, port: int = 0,
-          back: tuple[str, str] | None = None, warnings: list[str] | None = None) -> int:
-    """Run the flow with the page as its front end; returns its exit code."""
-    token = secrets.token_urlsafe(24)
+          back: tuple[str, str] | None = None, warnings: list[str] | None = None, token: str = "") -> int:
+    """Run the flow with the page as its front end; returns its exit code.
+
+    port and token come from the cdimport this one replaced after an update
+    (cli.RESTART_ENV): the same address and cookie, so its open tab only
+    needs to reload. When the port is taken meanwhile, a new one is printed.
+    Raises app.Restart when an update on the page needs a new process.
+    """
+    restarted = bool(token)
+    open_browser = open_browser and not restarted
+    token = token or secrets.token_urlsafe(24)
     run = Run(session, back, warnings)
-    server = _Server(run, token, port)
+    try:
+        server = _Server(run, token, port)
+    except OSError as exc:
+        if not restarted:
+            raise
+        _say(f"The page's port {port} is no longer free ({exc.strerror or exc}); it has a new address.")
+        token = secrets.token_urlsafe(24)
+        server = _Server(run, token, 0)
+        open_browser = True
     url = f"http://127.0.0.1:{server.port}/?token={token}"
     # Where lyrembed's page sends the tab back; the cookie is already set.
     session.page_url = f"http://127.0.0.1:{server.port}/"
@@ -700,12 +733,21 @@ def serve(session: app.Session, open_browser: bool = True, port: int = 0,
     if back:
         _say(f"When the run is done, its page leads back to {back[1] or 'the previous page'}.")
     else:
-        if not opened:
+        if restarted and not open_browser:
+            _say("The page that was open reloads by itself.")
+        elif not opened:
             _say("Open that address in your browser.")
         _say("Close the page when done, or press Ctrl+C here.")
     sys.stdout.flush()
+    page_gone = False
     try:
         while not server.stop.wait(1.0):
+            if run.restart is not None:
+                # With the tab closed, nobody would ever reach the new one,
+                # and nothing would end it.
+                page_gone = server.page_gone()
+                server.stop.wait(0.5)  # the page's long poll takes the news
+                break
             if server.page_gone() and not run.front.away:
                 # Closed before its first request started the flow: nothing
                 # runs that could finish.
@@ -726,6 +768,8 @@ def serve(session: app.Session, open_browser: bool = True, port: int = 0,
         ui.use(None)
     if run.started:
         run.thread.join(timeout=120)
+    if run.restart is not None and not page_gone:
+        raise app.Restart(run.restart.argv, f"{server.port}:{token}")
     album = session.last_album
     if album is not None and album.folder.is_dir():
         _say(FINISHED_LINE.format(folder=album.folder))

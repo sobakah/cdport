@@ -424,6 +424,12 @@ function App() {
   const [error, setError] = useState('');
   const [closed, setClosed] = useState(false);
   const [back, setBack] = useState(null);
+  // An update on the page: the new cdimport takes over this address, and the
+  // tab reloads once it answers (its instance differs).
+  const [restarting, setRestarting] = useState(false);
+  const [restartLost, setRestartLost] = useState(false);
+  const instance = useRef(null);
+  const waiting = useRef(false);
   const end = useRef(null);
   const stick = useRef(true);
   const lastHeight = useRef(0);
@@ -435,7 +441,9 @@ function App() {
     (async () => {
       while (alive) {
         try {
-          const state = await api(`/state?since=${rev}`);
+          const state = await api(`/state?since=${waiting.current ? 0 : rev}`);
+          if (instance.current && state.instance !== instance.current) { location.reload(); return; }
+          instance.current = state.instance;
           rev = state.rev;
           // Another program's page takes the tab (lyrembed): go there once;
           // coming back, the same event is not followed again.
@@ -457,11 +465,13 @@ function App() {
           setToolRunning(state.toolRunning);
           setFinished(state.finished);
           if (state.returnUrl) setBack({ url: state.returnUrl, name: state.returnName });
+          waiting.current = state.restarting;
+          setRestarting(state.restarting);
           setError('');
           if (state.finished !== null && !state.question) await new Promise((r) => setTimeout(r, 2000));
         } catch (err) {
-          setError(err.message);
-          await new Promise((r) => setTimeout(r, 2000));
+          if (!waiting.current) setError(err.message);
+          await new Promise((r) => setTimeout(r, waiting.current ? 500 : 2000));
         }
       }
     })();
@@ -470,6 +480,12 @@ function App() {
     addEventListener('pagehide', closing);
     return () => { alive = false; clearInterval(ping); removeEventListener('pagehide', closing); };
   }, []);
+
+  useEffect(() => {
+    if (!restarting) return undefined;
+    const timer = setTimeout(() => setRestartLost(true), 60000);
+    return () => clearTimeout(timer);
+  }, [restarting]);
 
   // Like a terminal: new content scrolls the page only for a reader who was
   // at its end; one who scrolled up to read stays where they are.
@@ -552,6 +568,10 @@ function App() {
         ${s.items.map((e) => html`<${Item} key=${e.id} event=${e} />`)}
       </section>`)}
       ${question && html`<${Question} key=${question.id} question=${question} onAnswer=${answer} />`}
+      ${restarting && !restartLost && html`<p class="note note-info row-wrap"><span class="spinner" aria-hidden="true"></span>
+        Starting the new cdimport… this page reloads once it answers.</p>`}
+      ${restartLost && html`<p class="note note-error">The new cdimport did not answer on this address. Start cdimport
+        again (in a terminal or from the app menu); it opens a new page.</p>`}
       ${finished !== null && !question && html`<section class="section finished status">
         <img class="status-icon" src="/static/icon.svg" alt="" />
         <h1>${finished === 0 ? 'cdimport has finished' : finished === 130 ? 'cdimport was stopped' : `cdimport ended with exit code ${finished}`}</h1>

@@ -1209,6 +1209,7 @@ def test_every_start_asks_without_waiting(tmp_path, monkeypatch, capsys):
     app.offer_self_update(session)  # nothing known yet, and GitHub hasn't answered: nothing
     assert time.monotonic() - started < 1 and capsys.readouterr().out == ""
     answer.set()
+    feed_input(monkeypatch, ["n"])  # update now? no
     app.late_self_update(session)
     assert "cdimport 9.0.0 is available" in capsys.readouterr().out   # at the end of the run
     asked = []
@@ -1225,9 +1226,9 @@ def test_every_start_asks_without_waiting(tmp_path, monkeypatch, capsys):
     assert never.update_check is None
 
 
-def test_the_page_and_other_installs_get_the_command(tmp_path, monkeypatch, front):
+def test_other_front_ends_and_installs_get_the_command(tmp_path, monkeypatch, front):
     session = update_session(tmp_path, monkeypatch, "now")
-    monkeypatch.setattr(app.proc, "run", lambda cmd, cwd=None: pytest.fail("updated on the page"))
+    monkeypatch.setattr(app.proc, "run", lambda cmd, cwd=None: pytest.fail("updated without a way to restart"))
     recorder = front()
     app.offer_self_update(session)
     assert any("To update: pipx upgrade cdimport" in text for _, text, _ in recorder.messages)
@@ -3644,3 +3645,149 @@ def test_on_the_page_an_empty_prefilled_answer_stays_empty():
     front.answer(front.question["id"], "")
     asking.join(5)
     assert answers == [""]
+
+
+# --- updating on the page ---------------------------------------------------------
+def test_the_page_installs_an_update_at_step_0_and_starts_again(tmp_path, monkeypatch, front):
+    session = update_session(tmp_path, monkeypatch, "now")
+    monkeypatch.setattr(sys, "argv", ["/home/u/.local/bin/cdimport", "--web", "--update"])
+    monkeypatch.setattr(selfupdate.shutil, "which", lambda name: name)
+    shown = []
+    monkeypatch.setattr(app.proc, "run_tail", lambda cmd, cwd=None: shown.append(cmd) or (0, []))
+    recorder = front([True])
+    monkeypatch.setattr(recorder, "supports", lambda feature: feature == "self_update")
+    with pytest.raises(app.Restart) as restart:
+        app.offer_self_update(session)
+    assert recorder.questions[0][1] == "Update cdimport to 9.0.0 now?"
+    assert shown == [["/usr/bin/pipx", "upgrade", "cdimport"]]               # its output goes to the page
+    assert restart.value.argv == ["/home/u/.local/bin/cdimport", "--web"]    # without --update
+
+
+def test_no_on_the_page_goes_on_without_updating(tmp_path, monkeypatch, front):
+    session = update_session(tmp_path, monkeypatch, "now")
+    monkeypatch.setattr(app.proc, "run_tail", lambda cmd, cwd=None: pytest.fail("updated after a no"))
+    recorder = front([False])
+    monkeypatch.setattr(recorder, "supports", lambda feature: feature == "self_update")
+    app.offer_self_update(session)
+    assert recorder.questions
+
+
+def test_an_update_found_late_is_offered_at_the_end_without_a_restart(tmp_path, monkeypatch, capsys):
+    session = update_session(tmp_path, monkeypatch, "start")
+    session.update_check = app.UpdateCheck()
+    assert session.update_check.answered(5)
+    ran = []
+    monkeypatch.setattr(app.proc, "run", lambda cmd, cwd=None: ran.append(cmd) or 0)
+    feed_input(monkeypatch, [""])                                               # update now? yes
+    app.late_self_update(session)                                               # raises no Restart
+    assert ran == [["/usr/bin/pipx", "upgrade", "cdimport"]]
+    assert "the next start uses it" in capsys.readouterr().out
+
+
+def _serving(monkeypatch, flow):
+    """web.serve with *flow* as the run; what it printed and its server."""
+    from cdimport import cli
+
+    monkeypatch.setattr(cli, "run_session", flow)
+    said, made = [], []
+
+    class Recorded(web.Run):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            made.append(self)
+
+    monkeypatch.setattr(web, "Run", Recorded)
+    monkeypatch.setattr(web, "_say", said.append)
+
+    def visit():
+        deadline = time.monotonic() + 5
+        while not said and time.monotonic() < deadline:
+            time.sleep(0.01)
+        made[0].start()
+
+    threading.Thread(target=visit, daemon=True).start()
+    return said, made
+
+
+def _restarting_flow(session):
+    raise app.Restart(["cdimport", "--web"])
+
+
+def test_an_update_on_the_page_hands_its_address_to_the_new_process(tmp_path, monkeypatch):
+    session = app.new_session(default_cfg(), app.Options(), tmp_path / "config.json")
+    said, made = _serving(monkeypatch, _restarting_flow)
+    with pytest.raises(app.Restart) as restart:
+        web.serve(session, open_browser=False)
+    ui.use(None)
+    url = said[0].split()[-1]
+    port, token = url.removeprefix("http://127.0.0.1:").split("/?token=")
+    assert restart.value.argv == ["cdimport", "--web"] and restart.value.address == f"{port}:{token}"
+    assert made[0].front.restarting and made[0].front.finished is None
+    assert made[0].front.snapshot(0)["restarting"]
+
+
+def test_no_restart_for_a_tab_that_was_closed_meanwhile(tmp_path, monkeypatch):
+    # Nobody would reach the new process, and nothing would ever end it.
+    session = app.new_session(default_cfg(), app.Options(), tmp_path / "config.json")
+    said, made = _serving(monkeypatch, _restarting_flow)
+    monkeypatch.setattr(web._Server, "page_gone", lambda self: bool(made) and made[0].restart is not None)
+    web.serve(session, open_browser=False)
+    ui.use(None)
+
+
+def test_the_new_process_takes_over_the_address_and_opens_no_second_tab(tmp_path, monkeypatch):
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    session = app.new_session(default_cfg(), app.Options(), tmp_path / "config.json")
+    opened = []
+    monkeypatch.setattr(web.webbrowser, "open", opened.append)
+    monkeypatch.setattr(web, "_say", lambda message: None)
+    servers = []
+
+    class Stopped(web._Server):
+        def __init__(self, *args):
+            super().__init__(*args)
+            servers.append(self)
+            self.stop.set()
+
+    monkeypatch.setattr(web, "_Server", Stopped)
+    web.serve(session, port=port, token="kept")
+    assert servers[0].port == port and servers[0].token == "kept" and not opened
+    # The port taken meanwhile: a new address, and so a tab of its own.
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", port))
+        taken.listen()
+        web.serve(session, port=port, token="kept")
+    assert servers[-1].port != port and servers[-1].token != "kept" and len(opened) == 1
+
+
+def test_the_page_can_tell_a_new_process_from_the_one_it_knew(tmp_path):
+    session = app.new_session(default_cfg(), app.Options(), tmp_path / "config.json")
+    assert web.Run(session).instance != web.Run(session).instance
+
+
+def test_the_restart_address_stays_away_from_tools(monkeypatch):
+    monkeypatch.setenv(cli.RESTART_ENV, "8123:abc")
+    assert cli._take_restart() == (8123, "abc")
+    assert cli.RESTART_ENV not in os.environ
+    assert cli._take_restart() == (0, "")
+
+
+def test_a_restart_passes_the_address_on(monkeypatch):
+    started = []
+    monkeypatch.setattr(cli.os, "execvp", lambda file, argv: started.append((argv, os.environ[cli.RESTART_ENV])))
+    cli._restart(app.Restart(["/home/u/.local/bin/cdimport", "--web"], "8123:abc"))
+    assert started == [(["/home/u/.local/bin/cdimport", "--web"], "8123:abc")]
+    monkeypatch.delenv(cli.RESTART_ENV)
+
+
+def test_a_new_cdimport_that_cannot_start_is_reported(monkeypatch, capsys):
+    def refuse(file, argv):
+        raise OSError(2, "No such file")
+    monkeypatch.setattr(cli.os, "execvp", refuse)
+    assert cli._restart(app.Restart(["/gone/cdimport"], "8123:abc")) == 1
+    assert "start it again yourself" in "".join(capsys.readouterr())
+    assert cli.RESTART_ENV not in os.environ

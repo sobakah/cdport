@@ -13,6 +13,10 @@ next line's tag.
 
 ## [1.2.0] — 2026-10-31
 
+### Added
+
+- **Update cdimport directly on the page**, as in the terminal: it asks in step 0 and at the end of a run, and shows pipx's output. From step 0 it starts again and the tab reloads by itself on the same address; at the end of a run the next start uses the new version. It never updates during a rip, as pipx replaces files a running rip still uses.
+
 ### Changed
 
 - **The page has a new look, shared with lyrembed**, in libadwaita's design language: a centred workflow in the header with an icon for each step instead of a number, softer buttons and floating messages. The two programs differ by colour and logo.

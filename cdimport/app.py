@@ -211,11 +211,13 @@ def check_tools(session: Session) -> None:
 
 
 class Restart(Exception):
-    """A newer cdimport is installed: start it in this process's place."""
+    """A newer cdimport is installed: start it in this process's place.
+    *address*: "PORT:TOKEN" of the page it takes over (cli.RESTART_ENV)."""
 
-    def __init__(self, argv: list[str]) -> None:
+    def __init__(self, argv: list[str], address: str = "") -> None:
         super().__init__(argv)
         self.argv = argv
+        self.address = address
 
 
 def self_update_state() -> Path:
@@ -255,8 +257,9 @@ def offer_self_update(session: Session) -> None:
     """A newer cdimport, as picktag does it: the release tags on GitHub, asked
     at every start in the background; step 0 offers what an earlier check found
     (or this one, if it has answered already) and doesn't wait. --update waits
-    for the answer. In the terminal pipx updates it and cdimport starts again;
-    the page shows the command: a restart would cut it off."""
+    for the answer. pipx updates it and cdimport starts again, on the page at
+    the same address. Only here and at the end of a run, where nothing runs
+    yet: pipx replaces files a running rip still imports from."""
     mode = session.options.self_update
     if mode == "never":
         return
@@ -278,34 +281,44 @@ def offer_self_update(session: Session) -> None:
     how = selfupdate.how_installed(found)
     ui.check("cdimport", f"{found} is available (this is {config.__version__})", False,
              f"What's new: {selfupdate.RELEASES}/tag/{found}")
-    if how.argv is None or not ui.in_terminal():
+    if _update_now(found, how):
+        ui.success(f"cdimport {found} is installed; starting it again.")
+        raise Restart([arg for arg in selfupdate.restart_argv() if arg != "--update"])
+
+
+def _update_now(found: str, how: selfupdate.Install) -> bool:
+    """Offer the update and run it, where it can run; True once installed.
+    Otherwise says what to do instead."""
+    if how.argv is None or not (ui.in_terminal() or ui.supports("self_update")):
         ui.dim(f"{INDENT}To update: {how.command}")
         if how.argv is not None:
             ui.dim(f"{INDENT}Run it in a terminal, then start cdimport again.")
-        return
+        return False
     if not ui.confirm(f"Update cdimport to {found} now?", default=True):
-        return
+        return False
     ui.tool_start("pipx", how.command)
-    code = proc.run(how.argv)
+    code = proc.run_shown(how.argv)
     ui.tool_end("pipx", code)
     if code != 0:
-        ui.error(f"The update did not work (exit code {code}); this run goes on with cdimport "
-                 f"{config.__version__}. To try again: {how.command}")
-        return
-    ui.success(f"cdimport {found} is installed; starting it again.")
-    raise Restart([arg for arg in selfupdate.restart_argv() if arg != "--update"])
+        ui.error(f"The update did not work (exit code {code}); cdimport stays at {config.__version__}. "
+                 f"To try again: {how.command}")
+        return False
+    return True
 
 
 def late_self_update(session: Session) -> None:
-    """A newer cdimport the background check found after step 0: said at the end
-    of the run, with the command (the next start offers it)."""
+    """A newer cdimport the background check found after step 0: offered at
+    the end of the run. No restart: the same arguments would begin a run
+    nobody asked for, so the next start uses it."""
     check = session.update_check
     if session.options.self_update != "start" or check is None or not check.answered(LATE_UPDATE_WAIT_S):
         return
     if check.found and selfupdate.newer(check.found) and check.found != session.update_offered:
         ui.gap()
         ui.info(f"cdimport {check.found} is available (this is {config.__version__}). "
-                f"To update: {selfupdate.how_installed(check.found).command}")
+                f"What's new: {selfupdate.RELEASES}/tag/{check.found}")
+        if _update_now(check.found, selfupdate.how_installed(check.found)):
+            ui.success(f"cdimport {check.found} is installed; the next start uses it.")
 
 
 def offer_cyanrip_install(session: Session) -> None:

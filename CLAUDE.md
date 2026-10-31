@@ -71,7 +71,8 @@ update check (`selfupdate.py`, taken from picktag's `core/selfupdate.py`).
 (`app.UpdateCheck`), instead of once a day with step 0 waiting for it.
 1.2.0 (2026-10-31): the page's look shared with lyrembed (libadwaita),
 and fixes from an outside code review: Enter on a focused button, stopped
-runs, the tag editor's order, album gain after a re-rip.
+runs, the tag editor's order, album gain after a re-rip; updates installed on
+the page.
 
 1.1.0 (2026-10-29): cyanrip installed and updated on the page
 (`install.run_package_manager`, `proc.run_shown`), the app-menu entry
@@ -194,14 +195,24 @@ thread (`app.UpdateCheck`, from the start of `run`; the maintainer's request
 without waiting, `late_self_update` names a newer answer at the end of the
 run; `--update` waits for the answer; never when started with `--return-url` (lyrembed's Import a
 CD runs the show then). A pipx install (`pipx_metadata.json` in
-`sys.prefix`) is updated in the terminal after a yes: `pipx upgrade`, or
-`pipx install --force` with the new tag when the install is pinned to one.
-Then `app.Restart` reaches `cli.main`, which `exec`s the command cdimport
-was started with, without `--update`. The page only shows the command:
-restarting would cut it off, and pipx replaces the page's files under the
-running server. A checkout gets `git pull`, another install the pipx
-command. Checked 2026-10-27 against GitHub and the real pipx metadata, and
-in a pseudo-terminal with a faked release (question, run, exec).
+`sys.prefix`) is updated after a yes, in the terminal and on the page (the
+maintainer's request, 2026-10-31): `pipx upgrade`, or `pipx install --force`
+with the new tag when the install is pinned to one. Only in step 0 and at the
+end of a run, not whenever the page likes as lyrembed does: pipx replaces
+files a running rip still imports from (mutagen and our own lazy imports).
+From step 0, `app.Restart` reaches `cli.main`, which `exec`s the command
+cdimport was started with, without `--update`. On the page the flow thread
+hands it to `Run.restart`, `serve` ends the server and raises it again with
+"PORT:TOKEN" for `cli.RESTART_ENV`: the new process takes the same address
+and cookie and removes the variable at once. The page reloads when
+`/api/state` answers with another `instance`, which also works if it missed
+`restarting`. A tab closed meanwhile gets no restart: nobody would reach the
+new process, and nothing would end it. At the end of a run nothing restarts,
+as the same arguments would begin a run nobody asked for. A checkout gets
+`git pull`, another install the pipx command. Checked 2026-10-27 against
+GitHub and the real pipx metadata, and in a pseudo-terminal with a faked
+release (question, run, exec); 2026-10-31 on the page in headless Chrome with
+a faked release and pipx (question, output, exec, reload on the same address).
 
 ### Update notification for cyanrip
 

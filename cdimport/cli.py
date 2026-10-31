@@ -63,7 +63,34 @@ def local_page(url: str) -> bool:
         return False
 
 
+# After an update on the page: the new cdimport takes over the page's address
+# and token, so its open tab still fits. Taken out of the environment at once,
+# as tools started from the page must not see the token.
+RESTART_ENV = "CDIMPORT_RESTART"
+
+
+def _take_restart() -> tuple[int, str]:
+    port, _, token = os.environ.pop(RESTART_ENV, "").partition(":")
+    return (int(port), token) if port.isdigit() and token else (0, "")
+
+
+def _restart(restart: app.Restart) -> int:
+    """Start the cdimport just installed in this process's place."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    if restart.address:
+        os.environ[RESTART_ENV] = restart.address
+    try:
+        os.execvp(restart.argv[0], restart.argv)
+    except OSError as exc:
+        os.environ.pop(RESTART_ENV, None)
+        ui.error(f"Could not start the new cdimport ({exc}); start it again yourself.")
+        return 1
+    return 0  # pragma: no cover - execvp does not return
+
+
 def main(argv: list[str] | None = None) -> int:
+    port, token = _take_restart()
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.install_desktop_entry or args.remove_desktop_entry:
@@ -104,19 +131,16 @@ def main(argv: list[str] | None = None) -> int:
                           self_update="now" if args.update else "never" if args.return_url
                           else "start" if cfg["check_for_updates"] else "never")
     session = app.new_session(cfg, options, args.config)
-    if args.web:
-        from . import web  # not needed in the terminal
-
-        return web.serve(session, open_browser=not args.no_browser,
-                         back=(args.return_url, args.return_name) if args.return_url else None,
-                         warnings=[f"Warning: {message}" for message in warnings])
     try:
+        if args.web:
+            from . import web  # not needed in the terminal
+
+            return web.serve(session, open_browser=not args.no_browser, port=port, token=token,
+                             back=(args.return_url, args.return_name) if args.return_url else None,
+                             warnings=[f"Warning: {message}" for message in warnings])
         return run_session(session)
     except app.Restart as restart:
-        sys.stdout.flush()
-        sys.stderr.flush()
-        os.execvp(restart.argv[0], restart.argv)
-        return 0  # pragma: no cover - execvp does not return
+        return _restart(restart)
 
 
 def _desktop_entry(install: bool) -> int:

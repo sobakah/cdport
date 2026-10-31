@@ -91,10 +91,13 @@ At every start cdimport looks for a newer release on GitHub, in the
 background, so the start doesn't wait (`git ls-remote`, with the same access
 as `pipx install`; it never asks for a password). When an earlier start found
 one, step 0 says so with a link to what is new; one found while cdimport
-runs is named at the end of the run. Installed with pipx, cdimport offers to update right away (`pipx
-upgrade cdimport`, or `pipx install --force ...@<new tag>` for an install
-pinned to a release, which stays pinned) and then starts again with the same
-arguments. On the page, and for other installs, it shows the command to run.
+runs is named at the end of the run. Installed with pipx, cdimport offers to
+update right away, in the terminal and on the page (`pipx upgrade cdimport`,
+or `pipx install --force ...@<new tag>` for an install pinned to a release,
+which stays pinned). From step 0 it then starts again with the same
+arguments, and the page reloads by itself; at the end of a run the next start
+uses the new version. It never updates during a rip. Other installs get the
+command to run.
 `cdimport --update` looks right away and waits for the answer;
 `"check_for_updates": false` in the config turns the check off.
 
