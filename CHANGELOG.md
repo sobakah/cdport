@@ -11,6 +11,10 @@ next line's tag.
 
 ## [Unreleased]
 
+### Changed
+
+- The look shared with lyrembed sets the colours of dropdown lists, for dark mode. cdimport's page has no dropdowns yet, so nothing changes on it.
+
 ## [1.2.0] — 2026-10-31
 
 ### Added
