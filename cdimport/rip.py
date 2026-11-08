@@ -19,7 +19,11 @@ from .tags import AUDIO_EXTENSIONS
 
 
 # What cyanrip measures over all tracks of a run (crip_replaygain_meta_album).
-ALBUM_GAIN_TAGS = ("REPLAYGAIN_ALBUM_GAIN", "REPLAYGAIN_ALBUM_RANGE", "REPLAYGAIN_ALBUM_PEAK", "R128_ALBUM_GAIN")
+ALBUM_GAIN_TAGS = ("REPLAYGAIN_ALBUM_GAIN", "REPLAYGAIN_ALBUM_RANGE", "REPLAYGAIN_ALBUM_PEAK")
+# cyanrip (v0.9.2 to at least 0.9.4-rc3, src/cyanrip_main.c) writes these
+# 10 dB too high: relative to -13 LUFS instead of R128's -23. Players that
+# prefer them (GStreamer's rgvolume) play the album 10 dB too loud.
+R128_GAIN_TAGS = ("R128_TRACK_GAIN", "R128_ALBUM_GAIN")
 
 
 class RipError(Exception):
@@ -294,6 +298,7 @@ def rip(cyanrip: str, cfg: dict[str, Any], work_dir: Path, *, device: str = "",
     with staging_dir(work_dir) as staging:
         _run_into(cmd, staging)
         album = find_album_dir(staging)
+        drop_r128_gain(sorted(album.iterdir()))
         target = unique_path(work_dir / album.name)
         shutil.move(str(album), str(target))
         leftover = None if remove_empty_dirs(staging) else staging
@@ -361,6 +366,7 @@ def rerip(cyanrip: str, cfg: dict[str, Any], album: Path, work_dir: Path, tracks
     with staging_dir(work_dir) as staging:
         _run_into(cmd, staging)
         new = find_album_dir(staging)
+        drop_r128_gain(sorted(new.iterdir()))
         for f in sorted(new.iterdir()):
             target = album / f.name
             if f.suffix.lower() in AUDIO_EXTENSIONS and target.exists():
@@ -397,6 +403,37 @@ def _keep_album_gain(fast: Path, secure: Path) -> None:
         new.save()
     except (MutagenError, OSError) as exc:
         ui.warn(f"{secure.name} keeps the album loudness of its own rip: {exc}")
+
+
+def drop_r128_gain(files: list[Path]) -> list[Path]:
+    """Delete cyanrip's R128 gain tags from FLAC files that have ReplayGain
+    tags; returns the files changed.
+
+    They are 10 dB off (R128_GAIN_TAGS), and they say the same as the
+    ReplayGain tags, which are FLAC's convention, so deleting them stays
+    right after cyanrip is fixed. A file without ReplayGain tags keeps them:
+    they are all it has.
+    """
+    from mutagen import MutagenError
+    from mutagen.flac import FLAC
+
+    changed = []
+    for path in files:
+        if path.suffix.lower() != ".flac":
+            continue
+        try:
+            audio = FLAC(path)
+            keys = [k for k in R128_GAIN_TAGS if k in audio]
+            if not keys or "REPLAYGAIN_TRACK_GAIN" not in audio:
+                continue
+            for key in keys:
+                del audio[key]
+            audio.save()
+        except (MutagenError, OSError) as exc:
+            ui.warn(f"{path.name} keeps cyanrip's R128 gain tags, which are 10 dB too loud: {exc}")
+            continue
+        changed.append(path)
+    return changed
 
 
 def _numbered(path: Path) -> Path:

@@ -3622,6 +3622,62 @@ def test_a_secure_rerip_keeps_the_album_loudness_of_the_whole_disc(tmp_path, mon
     assert track["replaygain_track_gain"] == ["-9.50 dB"]                       # the secure rip's own
 
 
+def cyanrip_gain(track_gain="-11.79 dB", album_gain="-10.00 dB"):
+    """Gain tags as cyanrip 0.9.4-rc3 writes them: R128 = ReplayGain + 5 dB
+    (Q7.8), where R128's reference makes it ReplayGain - 5 dB."""
+    def r128(gain):
+        return str(round((float(gain.split()[0]) + 5) * 256))
+    return {"replaygain_track_gain": track_gain, "replaygain_album_gain": album_gain,
+            "r128_track_gain": r128(track_gain), "r128_album_gain": r128(album_gain)}
+
+
+def test_a_rip_loses_cyanrips_r128_gain_tags_that_are_10_db_off(tmp_path, monkeypatch):
+    import mutagen.flac
+
+    def cyanrip(cmd, cwd=None, lines=3, keep_bytes=8192):
+        out = Path(cwd) / "Album"
+        out.mkdir()
+        make_flac(out / "1 - A.flac", title="A", **cyanrip_gain())
+        make_flac(out / "2 - B.flac", title="B", r128_track_gain="-1739")  # no ReplayGain: all it has
+        (out / "Album.cue").write_text("cue")
+        return 0, []
+    monkeypatch.setattr(rip.proc, "run_tail", cyanrip)
+    folder, _ = rip.rip("cyanrip", default_cfg(), tmp_path)
+    track = mutagen.flac.FLAC(folder / "1 - A.flac")
+    assert "r128_track_gain" not in track and "r128_album_gain" not in track
+    assert track["replaygain_track_gain"] == ["-11.79 dB"] and track["replaygain_album_gain"] == ["-10.00 dB"]
+    assert track["title"] == ["A"]
+    assert mutagen.flac.FLAC(folder / "2 - B.flac")["r128_track_gain"] == ["-1739"]
+
+
+def test_a_secure_rerip_loses_cyanrips_r128_gain_tags_too(tmp_path, monkeypatch):
+    import mutagen.flac
+
+    work = tmp_path / "work"
+    album = work / "Album"
+    album.mkdir(parents=True)
+    make_flac(album / "1 - A.flac", title="A", **cyanrip_gain())  # ripped before the fix
+
+    def cyanrip(cmd, cwd=None, lines=3, keep_bytes=8192):
+        out = Path(cwd) / "Album"
+        out.mkdir()
+        make_flac(out / "1 - A.flac", title="A", **cyanrip_gain("-12.00 dB", "-12.00 dB"))
+        return 0, []
+    monkeypatch.setattr(rip.proc, "run_tail", cyanrip)
+    rip.rerip("cyanrip", default_cfg(), album, work, [1])
+    track = mutagen.flac.FLAC(album / "1 - A.flac")
+    assert "r128_track_gain" not in track and "r128_album_gain" not in track
+    assert track["replaygain_track_gain"] == ["-12.00 dB"]
+    assert track["replaygain_album_gain"] == ["-10.00 dB"]  # the whole disc's, as before
+
+
+def test_dropping_r128_gain_reports_a_file_it_cannot_read(tmp_path, capsys):
+    broken = tmp_path / "1 - A.flac"
+    broken.write_text("not a flac file")
+    assert rip.drop_r128_gain([broken, tmp_path / "Album.cue"]) == []
+    assert "1 - A.flac keeps cyanrip's R128 gain tags" in capsys.readouterr().out
+
+
 def test_restart_finds_the_launcher_as_windows_starts_it(monkeypatch):
     # The launcher's sys.argv[0] has lost its .exe, so only which() finds the file.
     from pathlib import PureWindowsPath

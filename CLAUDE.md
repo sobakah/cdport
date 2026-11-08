@@ -73,6 +73,8 @@ update check (`selfupdate.py`, taken from picktag's `core/selfupdate.py`).
 and fixes from an outside code review: Enter on a focused button, stopped
 runs, the tag editor's order, album gain after a re-rip; updates installed on
 the page.
+1.2.1 (2026-11-08): cyanrip's R128 gain tags, 10 dB off, deleted after each
+rip (`rip.drop_r128_gain`, see "Known issues").
 
 1.1.0 (2026-10-29): cyanrip installed and updated on the page
 (`install.run_package_manager`, `proc.run_shown`), the app-menu entry
@@ -324,6 +326,7 @@ Behaviour depends on third-party tools; re-verify before relying on these.
     A partial rip (`-l`) measures only its own tracks as "the album"
     (`crip_replaygain_meta_album`), so a secure re-rip's tracks keep the fast
     rip's album gain tags (`rip._keep_album_gain`).
+    **Its R128 gain tags are 10 dB off**: see "Known issues" below.
   - Output is 16-bit for normal CDs (more only with HDCD `-H` or deemphasis).
 - Not packaged for Fedora, RPM Fusion, Terra or Flathub. The repo has a
   Flatpak manifest (`com.github.cyanreg.cyanrip.yaml`), but the maintainer
@@ -405,6 +408,94 @@ installed with pipx)
   (`/dev/sr0`, 6-track audio CD): udev and the ioctl both report it as audio.
 - Windows (later): `GetDriveTypeW == DRIVE_CDROM` via `ctypes`; audio CDs
   show `.cda` files.
+
+## Known issues
+
+### cyanrip writes R128 gain tags 10 dB off (found 2026-11-07, worked around 2026-11-08)
+
+**What:** cyanrip writes `R128_TRACK_GAIN` and `R128_ALBUM_GAIN` next to the
+ReplayGain tags. The ReplayGain tags are right; the R128 ones are 10 dB too
+high. R128 gains are relative to −23 LUFS (Q7.8, as in Opus), but cyanrip
+computes them relative to −13 LUFS. In cyanrip 0.9.4-rc3 (648b1dd),
+`src/cyanrip_main.c` lines 394 and 418:
+
+```c
+lrintf((REPLAYGAIN_REF_LOUDNESS - t->ebu_integrated + 5) * 256)  /* REF = -18 */
+```
+
+It should be `- 5`: R128 gain = ReplayGain gain − 5 dB.
+
+**Evidence:** all 285 FLAC files from cdimport rips in `~/Musik` (32 albums)
+have R128 = ReplayGain + 5.0 dB exactly, on all 570 track and album values.
+Example: Stray Kids, 樂-STAR, "락 (樂) (LALALALA)": measured −6.2 LUFS,
+`REPLAYGAIN_TRACK_GAIN=-11.79 dB` (right), `R128_TRACK_GAIN=-1739`
+(−6.79 dB; right would be −4298, −16.79 dB).
+
+**Effect:** players that prefer R128 tags play these albums about 10 dB too
+loud. GStreamer's `rgvolume` does (checked with GStreamer 1.28.8), so
+players built on it are affected; in Gatefold before the fix the song above
+came out at −6.6 LUFS instead of −14. Gatefold now ignores R128
+tags when ReplayGain ones exist (its commit 8210eb8), so it isn't affected
+any more; other players may be.
+
+**Present in** every cyanrip since v0.9.2 (commit 5285205, 2023-09-10),
+so distro packages too. Still in GitHub's master on 2026-11-08 (648b1dd), and
+not reported there (no issue or PR mentions R128).
+
+**cdimport's fix** (2026-11-08): `rip.drop_r128_gain` deletes both R128 tags
+from FLAC files that have `REPLAYGAIN_TRACK_GAIN`, in `rip.rip` before the
+album leaves the staging folder and in `rip.rerip` before the secure tracks
+replace the fast ones. `ALBUM_GAIN_TAGS` no longer carries
+`R128_ALBUM_GAIN`. Deleted rather than rewritten as ReplayGain − 5 dB: they
+say the same as the ReplayGain tags, which are FLAC's convention (R128 tags
+are Opus's), and deleting stays right once cyanrip is fixed. A file without
+ReplayGain tags (`cyanrip.replaygain: false` writes neither) keeps them.
+Only FLAC: an Opus rip via `extra_args` (`-o opus`) still gets the wrong
+values.
+
+**Open:** report it upstream (github.com/cyanreg/cyanrip) or send the fix
+(`+ 5` → `- 5` on both lines); only with the maintainer's go-ahead.
+
+**Cleaning up existing rips** (done for `~/Musik` on 2026-11-08 at the
+maintainer's request: 285 files, 285 `R128_TRACK_GAIN` and 285
+`R128_ALBUM_GAIN` removed; decoded audio (FFmpeg MD5), STREAMINFO MD5,
+pictures and every other tag compared before and after, unchanged; `~/Temp`
+had none). Deletes only the two R128 tags, only in FLAC files that also have
+ReplayGain tags; prints what it would change unless `--apply` is given.
+Uses the mutagen in cdimport's pipx environment:
+
+```python
+"""Remove cyanrip's wrong R128 gain tags from FLAC files that have
+ReplayGain tags. Dry run unless --apply is given."""
+import sys
+from pathlib import Path
+from mutagen.flac import FLAC
+
+apply = "--apply" in sys.argv
+roots = [Path(a).expanduser() for a in sys.argv[1:] if a != "--apply"]
+changed = 0
+for root in roots:
+    for path in sorted(root.rglob("*.flac")):
+        audio = FLAC(path)
+        keys = [k for k in ("R128_TRACK_GAIN", "R128_ALBUM_GAIN") if k in audio]
+        if not keys or "REPLAYGAIN_TRACK_GAIN" not in audio:
+            continue
+        changed += 1
+        if apply:
+            for k in keys:
+                del audio[k]
+            audio.save()
+        else:
+            print(path)
+print(f"{changed} files {'changed' if apply else 'would change'}")
+```
+
+```sh
+~/.local/share/pipx/venvs/cdimport/bin/python strip_r128.py ~/Musik          # dry run: 285 files
+~/.local/share/pipx/venvs/cdimport/bin/python strip_r128.py ~/Musik --apply
+```
+
+Players that watch the folder (Gatefold) re-read the tags.
 
 ## Planned behaviour worth building in from the start
 

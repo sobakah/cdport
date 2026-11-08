@@ -11,9 +11,15 @@ next line's tag.
 
 ## [Unreleased]
 
+## [1.2.1] — 2026-11-08
+
 ### Changed
 
 - The look shared with lyrembed sets the colours of dropdown lists, for dark mode. cdimport's page has no dropdowns yet, so nothing changes on it.
+
+### Fixed
+
+- **Ripped albums no longer play 10 dB too loud in some players.** cyanrip writes R128 gain tags 10 dB too high next to its correct ReplayGain tags, and players that prefer R128 tags (those built on GStreamer, for one) used them. cdimport now deletes the R128 tags after each rip and re-rip; the ReplayGain tags say the same and stay. Albums ripped before keep the wrong tags: the script under "Known issues" in CLAUDE.md removes them.
 
 ## [1.2.0] — 2026-10-31
 

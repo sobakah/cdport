@@ -13,7 +13,7 @@ does not rip, tag or fetch lyrics itself.
 5. Finish   offer to move the album into the music library, summary
 ```
 
-Version 1.2.0 · Python 3.10+ · Linux (Windows later)
+Version 1.2.1 · Python 3.10+ · Linux (Windows later)
 
 ## Requirements
 
