@@ -15,6 +15,7 @@ next line's tag.
 
 ### Changed
 
+- **Step 0 always says what the update check found:** "the newest version", that it couldn't look (and why), or that GitHub hasn't answered yet. Before, it only spoke up when an update was available, so a check that ran looked like one that didn't.
 - The look shared with lyrembed sets the colours of dropdown lists, for dark mode. cdimport's page has no dropdowns yet, so nothing changes on it.
 
 ### Fixed

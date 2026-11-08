@@ -74,7 +74,8 @@ and fixes from an outside code review: Enter on a focused button, stopped
 runs, the tag editor's order, album gain after a re-rip; updates installed on
 the page.
 1.2.1 (2026-11-08): cyanrip's R128 gain tags, 10 dB off, deleted after each
-rip (`rip.drop_r128_gain`, see "Known issues").
+rip (`rip.drop_r128_gain`, see "Known issues"); step 0 always says what the
+update check found.
 
 1.1.0 (2026-10-29): cyanrip installed and updated on the page
 (`install.run_package_manager`, `proc.run_shown`), the app-menu entry
@@ -195,7 +196,9 @@ thread (`app.UpdateCheck`, from the start of `run`; the maintainer's request
 2026-10-29, it was once a day): step 0 offers what an earlier check found
 (`selfupdate.known`, `<cache>/self-update.json`, written whole by `remember`)
 without waiting, `late_self_update` names a newer answer at the end of the
-run; `--update` waits for the answer; never when started with `--return-url` (lyrembed's Import a
+run; step 0 always has a cdimport line ("the newest version", could not look,
+or still asking GitHub; the maintainer's request 2026-11-08, as nothing at all
+read as a check that didn't run); `--update` waits for the answer; never when started with `--return-url` (lyrembed's Import a
 CD runs the show then). A pipx install (`pipx_metadata.json` in
 `sys.prefix`) is updated after a yes, in the terminal and on the page (the
 maintainer's request, 2026-10-31): `pipx upgrade`, or `pipx install --force`

@@ -272,10 +272,21 @@ def offer_self_update(session: Session) -> None:
             return
         found = check.found
     else:
-        found = check.found if check.answered() and check.found else selfupdate.known(self_update_state())
+        answered = check.answered()
+        found = check.found if answered and check.found else selfupdate.known(self_update_state())
+        if found is None or not selfupdate.newer(found):
+            # Always a line, so a start shows that it looked (asked by the
+            # maintainer, 2026-11-08: nothing at all read as a check that
+            # didn't run). It doesn't wait: a late answer comes at the end.
+            if not answered:
+                ui.check("cdimport", f"{config.__version__}; still asking GitHub for a newer one", None)
+            elif check.error is not None:
+                ui.check("cdimport", f"{config.__version__}; could not look for a newer one: {check.error}", False)
+            else:
+                ui.check("cdimport", f"{config.__version__}, the newest version", True)
+            return
     if found is None or not selfupdate.newer(found):
-        if mode == "now":
-            ui.check("cdimport", f"{config.__version__} is the newest version", True)
+        ui.check("cdimport", f"{config.__version__}, the newest version", True)
         return
     session.update_offered = found
     how = selfupdate.how_installed(found)

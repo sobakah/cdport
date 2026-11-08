@@ -1206,8 +1206,9 @@ def test_every_start_asks_without_waiting(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(selfupdate, "latest", slow)
     feed_input(monkeypatch, [])
     started = time.monotonic()
-    app.offer_self_update(session)  # nothing known yet, and GitHub hasn't answered: nothing
-    assert time.monotonic() - started < 1 and capsys.readouterr().out == ""
+    app.offer_self_update(session)  # nothing known yet, and GitHub hasn't answered: only says so
+    assert time.monotonic() - started < 1
+    assert "still asking GitHub for a newer one" in capsys.readouterr().out
     answer.set()
     feed_input(monkeypatch, ["n"])  # update now? no
     app.late_self_update(session)
@@ -1224,6 +1225,29 @@ def test_every_start_asks_without_waiting(tmp_path, monkeypatch, capsys):
     app.offer_self_update(never)
     app.late_self_update(never)
     assert never.update_check is None
+
+
+def test_step_0_always_says_what_the_update_check_found(tmp_path, monkeypatch, capsys):
+    """A start shows that it looked, also when nothing is newer."""
+    session = update_session(tmp_path, monkeypatch, "start", found=config.__version__)
+    session.update_check = app.UpdateCheck()
+    assert session.update_check.answered(5)
+    feed_input(monkeypatch, [])                                                 # asks nothing
+    app.offer_self_update(session)
+    assert f"{config.__version__}, the newest version" in capsys.readouterr().out
+
+    def offline(timeout=30):
+        raise selfupdate.UpdateError("GitHub can't be reached")
+    session = update_session(tmp_path, monkeypatch, "start")
+    monkeypatch.setattr(selfupdate, "latest", offline)
+    session.update_check = app.UpdateCheck()
+    assert session.update_check.answered(5)
+    app.offer_self_update(session)
+    assert "could not look for a newer one: GitHub can't be reached" in capsys.readouterr().out
+
+    never = update_session(tmp_path, monkeypatch, "never")                      # lyrembed's Import a CD
+    app.offer_self_update(never)
+    assert capsys.readouterr().out == ""
 
 
 def test_other_front_ends_and_installs_get_the_command(tmp_path, monkeypatch, front):
