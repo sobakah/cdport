@@ -185,12 +185,13 @@ The interface (`io.github.sobakah.cdport1` on `/io/github/sobakah/cdport`):
 | `UnfinishedAlbums() → as` | albums in the working folder with steps still open |
 | `Import(a{sv} options) → (s run, s url)` | starts a run on its own page (as `cdport --web --no-browser`) and answers with the page's address, for the caller to open; options `Library` (as `-l`) and `Folder` (one of `UnfinishedAlbums`, to continue it) |
 | `Runs() → a(ss)` | the runs still going, with their addresses |
-| `Stop(s run)` | as Ctrl+C: a running rip finishes first |
+| `Stop(s run)` | as Ctrl+C: a running rip finishes first (a second Stop changes nothing) |
 | signal `Finished(s run, i exit_code, s album)` | a run ended; `album` is the folder it finished, or empty |
 
 It has no call that runs a command or works on any folder the caller names,
-so it gives a sandboxed program no way out. Without calls or runs for a
-minute, the service ends; the bus starts it again at the next call. Needs the
+so it gives a sandboxed program no way out. A run whose page nobody opens
+within 10 minutes ends. Without calls or runs for a minute, the service
+ends (never while a run is going); the bus starts it again at the next call. Needs the
 Python package `jeepney`, which pipx installs with cdport.
 
 ```bash

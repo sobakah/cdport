@@ -116,8 +116,9 @@ def _refresh(applications: Path) -> None:
             pass
 
 
-def install() -> tuple[Path, Path, list[str]]:
-    """Write the icon and the entry; returns their paths and the command."""
+def install() -> tuple[Path, Path, list[str], str | None]:
+    """Write the icon and the entry; returns their paths, the command, and
+    why cdimport's old entry is still there (None when it is not)."""
     if not supported():
         raise DesktopError("App-menu entries are written for Linux and BSD desktops only.")
     command = launch_command()
@@ -130,9 +131,14 @@ def install() -> tuple[Path, Path, list[str]]:
     except OSError as exc:
         raise DesktopError(f"Could not write the app-menu entry: {exc}") from exc
     # Two entries for one program; the old one starts the cdimport alias.
-    _unlink(old_entry())
+    # The new one works either way, so a failure here is only reported.
+    try:
+        _unlink(old_entry())
+        leftover = None
+    except DesktopError as exc:
+        leftover = str(exc)
     _refresh(entry.parent)
-    return entry, icon, command
+    return entry, icon, command, leftover
 
 
 def _unlink(paths: list[Path]) -> list[Path]:

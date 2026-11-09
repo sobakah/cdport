@@ -177,7 +177,12 @@ repos later, only when asked):
   `pipx uninstall cdimport; pipx install git+https://github.com/sobakah/cdport.git`
   (config, cache and albums are untouched by that).
 - **Hidden files:** `.cdimport.json` (Gatefold looks for it in the working
-  folder's albums) and `.cdimport-rip-` keep their names.
+  folder's albums) and `.cdimport-rip-` keep their names, and so does the
+  runtime folder (`$XDG_RUNTIME_DIR/cdimport`, `config.runtime_dir`): a
+  cdimport 1.2.x still ripping and a cdport must see each other's drive
+  lock (code review, 2026-11-09).
+- A `~/.config/cdimport` that is itself a symlink (a dotfile manager's) is
+  not moved, and `config_dir` keeps using it.
 - `cli.OLD_RESTART_ENV` takes the page address from a cdimport 1.2.x that
   updated itself to cdport on the page; the app-menu entry cdimport wrote is
   replaced (`desktop.old_entry`, only one with `Name=cdimport`).
@@ -713,12 +718,27 @@ file and `.cdimport.json` (§10.2 there) has a call:
   callers gets a `cdport2` next to it). The calls are in the module's
   docstring and the README.
 - `Import` starts a page run as a child process (`dbus_service.page_command`:
-  the same cdport, `--web --no-browser`, its own session so the service's
-  end never stops a rip) and answers once the run prints its address (the
-  reply waits, the loop does not). The run's output is read to the end in
-  a thread per run; "… finished: FOLDER" becomes `Finished`'s album. `Stop`
-  sends SIGINT: without a terminal `web.serve` passes it on to a running
-  tool (`proc.terminal_interrupts_tools`), as Gatefold's own SIGINT did.
+  the same cdport, `--web --no-browser`, its own session) and answers once
+  the run prints its address (the reply waits, the loop does not;
+  `URL_TIMEOUT` 20 s, below the 25 s D-Bus clients wait by default, else
+  the caller gives up first and a run starts that nobody opens). Page runs
+  get `--unvisited-timeout 600` (hidden option, `web.serve`'s `unvisited`):
+  a page nobody opened ends, so a caller that failed to open it does not
+  keep the run, and the service, until logout. The run's output is read to
+  the end in a thread per run; "… finished: FOLDER" becomes `Finished`'s
+  album. The patterns are built from `web.RUNNING_LINE`/`web.FINISHED_LINE`.
+  `Stop` sends SIGINT: without a terminal `web.serve` passes it on to a
+  running tool (`proc.terminal_interrupts_tools`), as Gatefold's own SIGINT
+  did. Only once per run (`PageRun.stopping`): a second SIGINT would
+  interrupt `web.serve`'s own stopping while it waits for the flow, and cut
+  the rip off.
+- The service never ends while runs are going, whatever ended its loop
+  (`_outlive_runs`): dbus-broker runs it as a systemd unit, and the unit's
+  end kills every process in its cgroup, the page runs and cyanrip
+  included; their own session does not help there. A call that fails with
+  anything but a `ServiceError` is answered with
+  `org.freedesktop.DBus.Error.Failed` and its traceback goes to stderr; it
+  never ends the service.
 - **No way out of a sandbox** (Flathub would treat one like `flatpak-spawn
   --host`): no command, no free folder. `Folder` must be one of
   `UnfinishedAlbums`; `Library` must be an existing absolute folder (as
@@ -743,9 +763,11 @@ file and `.cdimport.json` (§10.2 there) has a call:
   cdport and every call works (`test_dbus_on_a_real_bus_started_by_the_bus`,
   skipped without jeepney or dbus-daemon; its bus config needs session.conf's
   `<allow eavesdrop="true"/>`, else every reply is rejected and the client
-  hangs); on the maintainer's dbus-broker session bus with `--dbus` started
+  hangs; its bus and service get an empty `PATH` and a fake `HOME`, as
+  they are outside `no_real_tools`' reach); on the maintainer's dbus-broker session bus with `--dbus` started
   by hand (GetInfo, UnfinishedAlbums, Import with the page answering, Runs,
-  Stop → `Finished(…, 130, '')`, `/etc` refused, idle exit). Activation
+  Stop → `Finished(…, 130, '')`, `/etc` refused, idle exit; after the
+  code review again, Stop twice giving one SIGINT). Activation
   by dbus-broker itself (it starts services as transient systemd units)
   needs the service file installed and is not checked yet.
 - Gatefold does not use it yet (it still runs `cdimport` and reads the

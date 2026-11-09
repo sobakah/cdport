@@ -704,19 +704,26 @@ def _say(message: str) -> None:
 # CD" to open the imported album: keep the wording. {name} is the name it was
 # started under (config.program_name): lyrembed starts and looks for cdimport.
 FINISHED_LINE = "{name} finished: {folder}"
+# The page's address, read by lyrembed, Gatefold and dbus_service.
+RUNNING_LINE = "{name} is running at {url}"
 
 
 def serve(session: app.Session, open_browser: bool = True, port: int = 0,
           back: tuple[str, str] | None = None, warnings: list[str] | None = None, token: str = "",
-          notes: list[str] | None = None) -> int:
+          notes: list[str] | None = None, unvisited: float = 0) -> int:
     """Run the flow with the page as its front end; returns its exit code.
 
     port and token come from the cdport this one replaced after an update
     (cli.RESTART_ENV): the same address and cookie, so its open tab only
     needs to reload. When the port is taken meanwhile, a new one is printed.
     Raises app.Restart when an update on the page needs a new process.
+    unvisited: end when nobody opened the page for that many seconds (0:
+    wait for ever). Runs started over D-Bus use it: a caller that never
+    opened the address would otherwise keep the run, and the service with
+    it, until logout.
     """
     restarted = bool(token)
+    began = time.monotonic()
     open_browser = open_browser and not restarted
     token = token or secrets.token_urlsafe(24)
     run = Run(session, back, warnings, notes)
@@ -734,7 +741,7 @@ def serve(session: app.Session, open_browser: bool = True, port: int = 0,
     session.page_url = f"http://127.0.0.1:{server.port}/"
     thread = threading.Thread(target=server.serve_forever, name="cdport-web", daemon=True)
     thread.start()
-    _say(f"{config.program_name()} is running at {url}")
+    _say(RUNNING_LINE.format(name=config.program_name(), url=url))
     opened = open_browser and webbrowser.open(url)
     if back:
         _say(f"When the run is done, its page leads back to {back[1] or 'the previous page'}.")
@@ -753,6 +760,10 @@ def serve(session: app.Session, open_browser: bool = True, port: int = 0,
                 # and nothing would end it.
                 page_gone = server.page_gone()
                 server.stop.wait(0.5)  # the page's long poll takes the news
+                break
+            if (unvisited and server.last_contact is None and time.monotonic() - began > unvisited
+                    and run.prevent_start()):
+                _say(f"Nobody opened the page within {unvisited / 60:.0f} minutes; ending.")
                 break
             if server.page_gone() and not run.front.away:
                 # Closed before its first request started the flow: nothing

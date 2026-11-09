@@ -44,6 +44,8 @@ def build_parser() -> argparse.ArgumentParser:
     page.add_argument("--no-browser", action="store_true", help="with --web, print the page's address instead of opening it")
     page.add_argument("--return-url", metavar="URL",
                       help="with --web: when done, a button leads back to this local address (lyrembed's page)")
+    # For dbus_service's page runs: end when nobody opens the page.
+    page.add_argument("--unvisited-timeout", type=float, default=0, metavar="SECONDS", help=argparse.SUPPRESS)
     page.add_argument("--return-name", metavar="NAME", default="",
                       help="with --return-url, the name on that button (default: 'the previous page')")
     entry = page.add_mutually_exclusive_group()
@@ -133,6 +135,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--return-name only applies together with --return-url")
     if args.return_url and not local_page(args.return_url):
         parser.error("--return-url must be a page on this computer, such as http://127.0.0.1:8000/")
+    if args.unvisited_timeout and not args.web:
+        parser.error("--unvisited-timeout only applies together with --web")
     if args.update and args.return_url:
         parser.error("--update does not apply with --return-url")
     if args.editor and args.editor != "skip" and args.editor not in cfg["editors"]:
@@ -159,7 +163,8 @@ def main(argv: list[str] | None = None) -> int:
                              back=(args.return_url, args.return_name) if args.return_url else None,
                              warnings=([moved[1]] if moved and not moved[0] else [])
                              + [f"Warning: {message}" for message in warnings],
-                             notes=[moved[1]] if moved and moved[0] else [])
+                             notes=[moved[1]] if moved and moved[0] else [],
+                             unvisited=args.unvisited_timeout)
         return run_session(session)
     except app.Restart as restart:
         return _restart(restart)
@@ -170,8 +175,10 @@ def _desktop_entry(install: bool) -> int:
 
     try:
         if install:
-            entry, icon, command = desktop.install()
+            entry, icon, command, leftover = desktop.install()
             ui.success(f"Added cdport to the app menu: {entry}")
+            if leftover:
+                ui.warn(f"cdimport's old entry is still there: {leftover}")
             ui.info(f"It starts: {' '.join(command + desktop.PAGE_ARGUMENTS)}")
             ui.info("Run this again after installing cdport elsewhere (pipx, another checkout).")
         else:

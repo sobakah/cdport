@@ -247,7 +247,9 @@ def config_dir() -> Path:
     move_old_config has moved cdimport's folder, that one, so settings are
     never lost to a move that failed."""
     new, old = _config_base() / NAME, old_config_dir()
-    if not new.exists() and old.is_dir() and not old.is_symlink():
+    # A symlink there (a dotfile manager's) counts too: it is not moved, but
+    # its settings must not be dropped.
+    if not new.exists() and old.is_dir():
         return old
     return new
 
@@ -289,12 +291,14 @@ def default_config_path() -> Path:
 def runtime_dir() -> Path:
     """cdport's per-user folder for short-lived files (drive locks, the
     cover preview): shared by every cdport of that user whatever its
-    working folder (-w), private to the user, and emptied at logout."""
+    working folder (-w), private to the user, and emptied at logout. It
+    keeps cdimport's name, so a cdimport 1.2.x still ripping and a cdport
+    see each other's drive locks (disc.hold)."""
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if runtime and Path(runtime).is_dir():
-        return Path(runtime) / "cdport"
+        return Path(runtime) / OLD_NAME
     uid = os.getuid() if hasattr(os, "getuid") else 0
-    return Path(tempfile.gettempdir()) / f"cdport-{uid}"
+    return Path(tempfile.gettempdir()) / f"{OLD_NAME}-{uid}"
 
 
 def make_runtime_dir() -> Path:

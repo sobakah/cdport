@@ -1161,8 +1161,11 @@ def test_restart_command(monkeypatch, tmp_path):
     assert selfupdate.restart_argv() == [sys.executable, "run.py"]
 
 
-def update_session(tmp_path, monkeypatch, mode, found="9.0.0", argv=("/usr/bin/pipx", "upgrade", "cdport")):
-    monkeypatch.setattr(selfupdate, "latest", lambda timeout=30: found)
+def update_session(tmp_path, monkeypatch, mode, found="9.0.0", argv=("/usr/bin/pipx", "upgrade", "cdport"),
+                   latest=None):
+    # latest: a fake for GitHub's answer, in place before the session's
+    # background check starts (patching it afterwards is a race).
+    monkeypatch.setattr(selfupdate, "latest", latest or (lambda timeout=30: found))
     monkeypatch.setattr(selfupdate, "how_installed", lambda version: selfupdate.Install(
         "pipx", "pipx upgrade cdport", list(argv) if argv else None))
     return app.new_session(default_cfg(), app.Options(self_update=mode), tmp_path / "config.json")
@@ -1202,8 +1205,7 @@ def test_every_start_asks_without_waiting(tmp_path, monkeypatch, capsys):
     def slow(timeout=30):
         answer.wait(10)
         return "9.0.0"
-    session = update_session(tmp_path, monkeypatch, "start")
-    monkeypatch.setattr(selfupdate, "latest", slow)
+    session = update_session(tmp_path, monkeypatch, "start", latest=slow)
     feed_input(monkeypatch, [])
     started = time.monotonic()
     app.offer_self_update(session)  # nothing known yet, and GitHub hasn't answered: only says so
@@ -1213,11 +1215,18 @@ def test_every_start_asks_without_waiting(tmp_path, monkeypatch, capsys):
     feed_input(monkeypatch, ["n"])  # update now? no
     app.late_self_update(session)
     assert "cdport 9.0.0 is available" in capsys.readouterr().out   # at the end of the run
-    asked = []
-    session = update_session(tmp_path, monkeypatch, "start", found=config.__version__)
-    monkeypatch.setattr(selfupdate, "latest", lambda timeout=30: asked.append(1) or config.__version__)
+    asked, looked = [], threading.Event()
+
+    def after_step_0(timeout=30):
+        # Held back until step 0 has looked: an answer before that is fresher
+        # than the cache, and step 0 rightly goes by it (a race, seen 2026-11-09).
+        looked.wait(10)
+        asked.append(1)
+        return config.__version__
+    session = update_session(tmp_path, monkeypatch, "start", latest=after_step_0)
     feed_input(monkeypatch, ["n"])  # update now? no
     app.offer_self_update(session)  # the next start: what the last one found
+    looked.set()
     assert "9.0.0 is available" in capsys.readouterr().out
     assert session.update_check.answered(5) and asked == [1]  # and GitHub asked again
     never = update_session(tmp_path, monkeypatch, "never")
@@ -4080,7 +4089,7 @@ def test_dbus_import_answers_with_the_page_and_signals_the_end(tmp_path):
     library = tmp_path / "Musik"
     library.mkdir()
     assert service.call("Import", "a{sv}", ({"Library": ("s", str(library))},), "the call") is None
-    assert started[0][-4:] == ["--web", "--no-browser", "-l", str(library)]
+    assert started[0][-6:] == ["--web", "--no-browser", "--unvisited-timeout", "600", "-l", str(library)]
     assert drain(service) == [("return", "the call", "ss", ("1", "http://127.0.0.1:43210/?token=abc_DEF-1"))]
     assert service.call("Runs", "", (), None) == ("a(ss)", ([("1", "http://127.0.0.1:43210/?token=abc_DEF-1")],))
     process.lines.append("cdport finished: /m/Artist/Album")
@@ -4095,6 +4104,9 @@ def test_dbus_stop_is_ctrl_c_for_the_run(tmp_path):
     service, _ = bus_service(tmp_path, process)
     service.call("Import", "a{sv}", ({},), "call")
     drain(service)
+    assert service.call("Stop", "s", ("1",), None) == ("", ())
+    # A second Stop (a second click) must not be a second Ctrl+C, which would
+    # cut off web.serve's own stopping, and a rip with it.
     assert service.call("Stop", "s", ("1",), None) == ("", ())
     assert process.signals == [signal.SIGINT]
     assert drain(service) == [("signal", "Finished", "sis", ("1", 130, ""))]
@@ -4173,7 +4185,7 @@ def test_dbus_page_command_continues_an_album_in_a_checkout(monkeypatch, tmp_pat
     launcher.write_text("", encoding="utf-8")
     monkeypatch.setattr(sys, "argv", [str(launcher), "--dbus"])
     assert dbus_service.page_command("/w/Album", "/m") == [
-        sys.executable, str(launcher), "/w/Album", "--web", "--no-browser", "-l", "/m"]
+        sys.executable, str(launcher), "/w/Album", "--web", "--no-browser", "--unvisited-timeout", "600", "-l", "/m"]
 
 
 def test_dbus_on_a_real_bus_started_by_the_bus(tmp_path, monkeypatch):
@@ -4207,6 +4219,11 @@ def test_dbus_on_a_real_bus_started_by_the_bus(tmp_path, monkeypatch):
 """, encoding="utf-8")
     write_user_config(tmp_path, work_dir=str(tmp_path / "work"), library_dir=str(tmp_path / "Musik"),
                       check_for_updates=False)
+    # The processes the bus starts are outside no_real_tools' reach: without
+    # a PATH or a home with ~/.local/bin, they could not find a real tool.
+    (tmp_path / "home").mkdir()
+    monkeypatch.setenv("PATH", str(tmp_path / "no-tools"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     folder = unfinished_album(tmp_path / "work")
     bus = subprocess.Popen([daemon, f"--config-file={tmp_path / 'bus.conf'}", "--nofork", "--print-address"],
                            stdout=subprocess.PIPE, text=True)
@@ -4239,3 +4256,124 @@ def test_dbus_on_a_real_bus_started_by_the_bus(tmp_path, monkeypatch):
     finally:
         bus.terminate()
         bus.wait(10)
+
+
+# --- fixes from the code review of 1.3.0 ------------------------------------
+def test_a_symlinked_cdimport_config_folder_is_used_where_it_is(tmp_path):
+    # A dotfile manager's link: not moved, and not dropped either.
+    dotfiles = tmp_path / "dotfiles" / "cdimport"
+    dotfiles.mkdir(parents=True)
+    (dotfiles / "config.json").write_text('{"cyanrip": {"offset": 6}}', encoding="utf-8")
+    home = tmp_path / "config-home"
+    home.mkdir()
+    (home / "cdimport").symlink_to(dotfiles)
+    assert config.move_old_config() is None
+    assert config.load_config()[0]["cyanrip"]["offset"] == 6
+
+
+def test_the_drive_locks_stay_where_cdimport_looks_for_them():
+    # A cdimport 1.2.x still ripping and a new cdport must see each other's lock.
+    assert config.runtime_dir().name == "cdimport"
+
+
+def test_a_menu_entry_is_added_even_when_cdimports_cannot_be_removed(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setattr(desktop, "_refresh", lambda folder: None)
+    monkeypatch.setattr(sys, "argv", [str(tmp_path / "cdport")])
+    applications = tmp_path / "data" / "applications"
+    applications.mkdir(parents=True)
+    (applications / "cdimport.desktop").write_text("[Desktop Entry]\nName=cdimport\n", encoding="utf-8")
+    real_unlink = Path.unlink
+
+    def refuse(self, missing_ok=False):
+        if self.name == "cdimport.desktop":
+            raise PermissionError(13, "Permission denied")
+        return real_unlink(self, missing_ok=missing_ok)
+    monkeypatch.setattr(Path, "unlink", refuse)
+    assert cli.main(["--install-desktop-entry"]) == 0
+    out = "".join(capsys.readouterr())
+    assert desktop.entry_path().exists() and "old entry is still there" in out and "Permission denied" in out
+
+
+def test_a_page_nobody_opens_ends_when_asked_to(tmp_path, monkeypatch):
+    said = []
+    monkeypatch.setattr(web, "_say", said.append)
+    session = app.new_session(default_cfg(), app.Options(), tmp_path / "config.json")
+    started = time.monotonic()
+    assert web.serve(session, open_browser=False, unvisited=0.2) == 130
+    assert time.monotonic() - started < 5 and any("Nobody opened the page" in line for line in said)
+    with pytest.raises(SystemExit):
+        cli.main(["--unvisited-timeout", "5"])   # only with --web
+
+
+def test_the_service_reads_exactly_the_lines_the_page_prints():
+    for name in ("cdport", "cdimport"):
+        line = web.RUNNING_LINE.format(name=name, url="http://127.0.0.1:8123/?token=a_B-9")
+        assert dbus_service._PAGE.match(line).group(1) == "http://127.0.0.1:8123/?token=a_B-9"
+        line = web.FINISHED_LINE.format(name=name, folder="/m/A B/Album: Live")
+        assert dbus_service._FINISHED.match(line).group(1) == "/m/A B/Album: Live"
+    assert not dbus_service._PAGE.match("lyrembed is running at http://127.0.0.1:1/?token=x")
+    assert not dbus_service._PAGE.match("cdport is running at https://evil.example/?token=x")
+
+
+def test_import_answers_before_d_bus_clients_give_up():
+    assert dbus_service.URL_TIMEOUT < 25   # GDBus' and libdbus' default reply timeout
+
+
+class FakeBus:
+    """Just enough of a jeepney connection for dbus_service._answer."""
+
+    def __init__(self, before_reply=(), after=()):
+        self.outgoing_serial = itertools.count(1)
+        self.sent, self.before_reply, self.after = [], list(before_reply), list(after)
+
+    def send(self, message, serial=None):
+        self.sent.append((message, serial))
+
+    def receive(self, timeout=None):
+        from jeepney import new_method_return
+
+        if self.before_reply:
+            return self.before_reply.pop(0)
+        if len(self.sent) == 1:   # RequestName: answered "now the owner"
+            request = self.sent[0][0]
+            request.header.serial = self.sent[0][1]
+            return new_method_return(request, "u", (1,))
+        if self.after:
+            return self.after.pop(0)
+        raise OSError("the bus went away")
+
+
+import itertools  # noqa: E402
+
+
+def test_the_service_survives_a_failing_call_and_keeps_the_one_that_started_it(tmp_path, capsys):
+    pytest.importorskip("jeepney")
+    from jeepney import DBusAddress, MessageType, new_method_call
+
+    target = DBusAddress(dbus_service.OBJECT_PATH, dbus_service.BUS_NAME, dbus_service.INTERFACE)
+    first = new_method_call(target, "Runs")              # arrives before RequestName's reply
+    first.header.serial = 7
+    failing = new_method_call(target, "UnfinishedAlbums")
+    failing.header.serial = 8
+    then = new_method_call(target, "Runs")
+    then.header.serial = 9
+    bus = FakeBus(before_reply=[first], after=[failing, then])
+    service = dbus_service.Service()
+    service.unfinished = lambda: (_ for _ in ()).throw(PermissionError(13, "Permission denied"))
+    assert dbus_service._answer(bus, service, idle_exit=60) == 0   # ended by the bus going away
+    replies = [m for m, _ in bus.sent[1:]]
+    assert [m.header.message_type for m in replies] == [MessageType.method_return, MessageType.error,
+                                                        MessageType.method_return]
+    assert "PermissionError" in replies[1].body[0] and "Traceback" in capsys.readouterr().err
+
+
+def test_the_service_waits_for_its_runs_before_it_ends(tmp_path):
+    process = FakePageRun([PAGE_LINE])
+    service, _ = bus_service(tmp_path, process)
+    service.call("Import", "a{sv}", ({},), "call")
+    drain(service)
+    threading.Timer(0.3, process.release.set).start()
+    started = time.monotonic()
+    dbus_service._outlive_runs(service)
+    assert service.runs == {} and time.monotonic() - started >= 0.25

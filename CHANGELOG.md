@@ -15,7 +15,7 @@ next line's tag.
 
 ### Added
 
-- **A D-Bus interface for Gatefold and other programs**, also from inside a Flatpak: `io.github.sobakah.cdport` on the session bus. A program can read the folders and the editor from the settings, list unfinished albums, start an import on its own page (and get its address), stop it, and hear when it ended and which album it finished. `cdport --install-dbus-service` lets the bus start cdport when it is called; idle for a minute, it ends again. It has no call that runs a command or works on any folder the caller names. Needs the Python package jeepney, which pipx now installs with cdport.
+- **A D-Bus interface for Gatefold and other programs**, also from inside a Flatpak: `io.github.sobakah.cdport` on the session bus. A program can read the folders and the editor from the settings, list unfinished albums, start an import on its own page (and get its address), stop it, and hear when it ended and which album it finished. `cdport --install-dbus-service` lets the bus start cdport when it is called; idle for a minute, it ends again. It has no call that runs a command or works on any folder the caller names. A run whose page nobody opens within 10 minutes ends, and the service never ends while a run is going. Needs the Python package jeepney, which pipx now installs with cdport.
 
 ### Changed
 
@@ -24,7 +24,7 @@ next line's tag.
 - On its first start cdport moves the settings from `~/.config/cdimport` to `~/.config/cdport` and leaves a link at the old place, where Gatefold reads them. If the move fails, it keeps using them where they are and says why.
 - `--install-desktop-entry` replaces the app-menu entry cdimport wrote, and `--remove-desktop-entry` removes both.
 - The update check's cache starts fresh in `~/.cache/cdport`; `~/.cache/cdimport` is no longer used and can be deleted.
-- Unchanged: the hidden `.cdimport.json` in unfinished albums (Gatefold looks for it) and `.cdimport-rip-` rip folders.
+- Unchanged: the hidden `.cdimport.json` in unfinished albums (Gatefold looks for it), `.cdimport-rip-` rip folders, and the folder of the drive locks, so a cdimport 1.2.x still ripping and cdport see each other's. A `~/.config/cdimport` that is a link (from a dotfile manager) stays where it is and is used.
 
 ## [1.2.1] — 2026-11-08
 
