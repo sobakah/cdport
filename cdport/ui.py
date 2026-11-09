@@ -1,6 +1,6 @@
 """Output and prompts: in the terminal, or through another front end.
 
-Every message and question of cdimport goes through this module. Without a
+Every message and question of cdport goes through this module. Without a
 front end (the default) it writes to the terminal and reads answers there.
 With one set by use() - the browser page - each call is handed to it with
 its plain content (prompt, options, default; label and value), and how it
@@ -286,7 +286,7 @@ def check(label: str, value: str, ok: bool | None, note: str = "") -> None:
 
 def tool_start(name: str, command: str = "", handoff: bool = False) -> None:
     """A frame line above an external tool's output, which otherwise runs
-    straight into cdimport's own text. *handoff*: the tool opens a page of
+    straight into cdport's own text. *handoff*: the tool opens a page of
     its own and prints its address, which a front end may switch to."""
     if _front is not None:
         _front.message("tool_start", command, name=name, handoff=handoff)

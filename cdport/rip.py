@@ -135,7 +135,7 @@ _ACCURATERIP = re.compile(r"^AccurateRip:\s+(\S.*?)\s*$", re.MULTILINE)
 def preview(cyanrip: str, cfg: dict[str, Any], *, device: str = "", release: str = "",
             no_musicbrainz: bool = False, tags: ManualTags | None = None) -> Preview:
     """Show the disc and its MusicBrainz match (cyanrip -I) on the terminal,
-    and pick out what cdimport needs from it."""
+    and pick out what cdport needs from it."""
     cmd = [cyanrip] + cyanrip_args(cfg, device=device, release=release,
                                    no_musicbrainz=no_musicbrainz, info_only=True, tags=tags)
     # The submission link comes early, followed by the track list and a QR
@@ -185,7 +185,7 @@ def staging_dir(work_dir: Path) -> Iterator[Path]:
 
     cyanrip names the album folder from metadata only it knows, so it rips
     into an empty folder of its own; whatever appears there is the album.
-    Another cdimport started meanwhile must not take it for an interrupted
+    Another cdport started meanwhile must not take it for an interrupted
     rip and offer to delete it, so the lock is taken before the folder
     exists: no moment shows the folder unlocked. The operating system drops
     the lock when this process ends in any way, so a crashed run's folder
@@ -206,7 +206,7 @@ def staging_dir(work_dir: Path) -> Iterator[Path]:
                 try:
                     fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
-                    continue  # another cdimport took this name in the same second
+                    continue  # another cdport took this name in the same second
             try:
                 path.mkdir()
             except FileExistsError:
@@ -222,7 +222,7 @@ def staging_dir(work_dir: Path) -> Iterator[Path]:
 
 
 def in_use(staging: Path) -> bool | None:
-    """Whether a running cdimport holds the staging folder; None when this
+    """Whether a running cdport holds the staging folder; None when this
     platform cannot tell."""
     try:
         import fcntl

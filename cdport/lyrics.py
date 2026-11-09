@@ -33,7 +33,7 @@ def without_lyrics(files: list[Path]) -> list[Path]:
     """The tracks that have no embedded lyrics.
 
     lyrembed's batch mode exits 0 also when it found nothing, so this is
-    how cdimport learns which tracks are left. Raises TagReadError.
+    how cdport learns which tracks are left. Raises TagReadError.
     """
     return [f for f in files if not has_lyrics(f)]
 
@@ -66,7 +66,7 @@ def lyrembed_command(lyrembed: str, cfg: dict[str, Any], folder: Path, mode: str
     """mode is "auto" (batch, never prompts) or "interactive".
 
     romanize applies to "auto" only; None leaves it to lyrembed's own
-    settings.auto_romanize. return_url (cdimport's page) makes lyrembed's
+    settings.auto_romanize. return_url (cdport's page) makes lyrembed's
     page lead back there instead of opening a tab of its own.
     """
     cmd = [lyrembed, str(folder)]
@@ -75,13 +75,13 @@ def lyrembed_command(lyrembed: str, cfg: dict[str, Any], folder: Path, mode: str
         if romanize is not None:
             cmd.append("--romanize" if romanize else "--no-romanize")
     elif return_url:
-        cmd += ["--no-browser", "--return-url", return_url, "--return-name", "cdimport"]
+        cmd += ["--no-browser", "--return-url", return_url, "--return-name", "cdport"]
     return cmd + cfg["lyrembed"]["extra_args"]
 
 
 def run_lyrembed(lyrembed: str, cfg: dict[str, Any], folder: Path, mode: str,
                  romanize: bool | None = None, return_url: str = "") -> int:
-    """In the terminal lyrembed gets the terminal; on cdimport's page its
+    """In the terminal lyrembed gets the terminal; on cdport's page its
     output goes to the page, which also reads lyrembed's address from it."""
     return proc.run_shown(lyrembed_command(lyrembed, cfg, folder, mode, romanize, return_url))
 
@@ -91,14 +91,14 @@ class Features:
     """What the installed lyrembed can do."""
     page: bool = False        # 0.8.0+: the interactive mode is a page in the browser, not terminal menus
     romanize: bool = False    # 0.6.0+: --romanize for batch mode; older versions reject it
-    return_url: bool = False  # 0.9.0+: --return-url, its page can lead back to cdimport's
+    return_url: bool = False  # 0.9.0+: --return-url, its page can lead back to cdport's
 
 
 def probe(lyrembed: str) -> Features:
     """Read the features from one --help: each start of a pipx tool costs a
     Python start, and a flag shows exactly what is there, unlike a version
     number. `--no-browser` came with the page. Either way
-    cdimport starts `lyrembed DIR` and waits for it to end; the page only
+    cdport starts `lyrembed DIR` and waits for it to end; the page only
     changes what to tell the user."""
     found = proc.capture([lyrembed, "--help"])
     usage = found.stdout if found is not None else ""

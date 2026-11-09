@@ -10,9 +10,16 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-__version__ = "1.2.1"
+__version__ = "1.3.0"
 
-# File names cdimport owns inside the working folder and album folders.
+NAME = "cdport"
+# The name before 1.3.0. The command stays as an alias: lyrembed and Gatefold
+# start it, and read lines in its wording (program_name).
+OLD_NAME = "cdimport"
+
+# File names cdport owns inside the working folder and album folders. They
+# keep the old name: Gatefold looks for .cdimport.json to find unfinished
+# imports, and older rips carry these names.
 STATE_FILE_NAME = ".cdimport.json"
 STAGING_PREFIX = ".cdimport-rip-"
 
@@ -74,11 +81,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
 # documents a whole section at once.
 SETTING_HELP: dict[str, Any] = {
     "work_dir": (
-        "Folder where rips land first and where unfinished albums are looked for. Empty: cdimport "
+        "Folder where rips land first and where unfinished albums are looked for. Empty: cdport "
         "asks on first use and saves the answer here. -w DIR overrides it for one run."
     ),
     "library_dir": (
-        "Your music library; at the end cdimport offers to move the album there. Empty: cdimport "
+        "Your music library; at the end cdport offers to move the album there. Empty: cdport "
         "asks on first use (suggesting the desktop's music folder) and saves the answer here. "
         "-l DIR overrides it for one run."
     ),
@@ -105,17 +112,17 @@ SETTING_HELP: dict[str, Any] = {
             "\"release\" installs the latest release (a distribution package where there is one, "
             "else a source build of the newest vX.Y.Z tag). \"master\" builds the master branch "
             "from source into ~/.local, also on systems with a package; use it when the release does "
-            "not build against your FFmpeg. At start cdimport offers to update an outdated cyanrip, "
+            "not build against your FFmpeg. At start cdport offers to update an outdated cyanrip, "
             "and to switch a release to master."
         ),
         "path": (
             "Path to the cyanrip program. Empty: search PATH, then ~/.local/bin (with channel "
             "master ~/.local/bin first, where that build goes)."
         ),
-        "device": "CD drive, e.g. /dev/sr0. Empty: the drive cdimport finds an audio CD in.",
+        "device": "CD drive, e.g. /dev/sr0. Empty: the drive cdport finds an audio CD in.",
         "offset": (
             "Drive read offset in samples (-s). cyanrip refuses to rip without one, so with null "
-            "cdimport asks before the first rip: measure it with cyanrip -f (needs a disc in the "
+            "cdport asks before the first rip: measure it with cyanrip -f (needs a disc in the "
             "AccurateRip database; saved without asking when at least 4 tracks confirm it), type "
             "it in, or use 0 for one rip."
         ),
@@ -143,20 +150,20 @@ SETTING_HELP: dict[str, Any] = {
         "extra_args": "More lyrembed options, e.g. [\"--color\", \"never\"].",
     },
     "cyanrip_source_dir": (
-        "Source checkout of a cyanrip built by cdimport (Fedora). Set by the installer; "
+        "Source checkout of a cyanrip built by cdport (Fedora). Set by the installer; "
         "prefilled when rebuilding."
     ),
     "cyanrip_build_dir": "Meson build folder of that source build. Set by the installer.",
     "color": "\"auto\", \"always\" or \"never\". auto honours NO_COLOR and non-terminal output.",
     "check_for_updates": (
-        "Look for a newer cdimport at every start, in the background (asks GitHub through git), "
-        "and offer to update it with pipx at the next start. cdimport --update looks right away."
+        "Look for a newer cdport at every start, in the background (asks GitHub through git), "
+        "and offer to update it with pipx at the next start. cdport --update looks right away."
     ),
 }
 
 EXAMPLE_ABOUT = [
-    "cdimport does NOT read this file. It lists every setting with its built-in default.",
-    "To change settings, create ~/.config/cdimport/config.json (or pass --config FILE)",
+    "cdport does NOT read this file. It lists every setting with its built-in default.",
+    "To change settings, create ~/.config/cdport/config.json (or pass --config FILE)",
     "with only the keys you want to change; everything else keeps its default. Example:",
     "{ \"library_dir\": \"~/Music\", \"cyanrip\": { \"offset\": 6 } }",
     "Keys starting with an underscore, like this one, are comments and ignored.",
@@ -198,7 +205,7 @@ def example_config() -> dict[str, Any]:
 def write_example(path: Path) -> None:
     """Regenerate the example after changing a default or its help text:
 
-        python -c 'from pathlib import Path; from cdimport import config;
+        python -c 'from pathlib import Path; from cdport import config;
                    config.write_example(Path("config.example.json"))'
 
     test_example_config_is_current fails until that is done.
@@ -221,14 +228,58 @@ def _dump(value: Any, level: int = 0) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def config_dir() -> Path:
-    """Per-user config folder: XDG on Linux, %APPDATA% on Windows."""
+def _config_base() -> Path:
     if sys.platform == "win32":
         base = os.environ.get("APPDATA")
         if base:
-            return Path(base) / "cdimport"
+            return Path(base)
     base = os.environ.get("XDG_CONFIG_HOME")
-    return (Path(base) if base else Path.home() / ".config") / "cdimport"
+    return Path(base) if base else Path.home() / ".config"
+
+
+def old_config_dir() -> Path:
+    """Where cdimport (before 1.3.0) kept its settings."""
+    return _config_base() / OLD_NAME
+
+
+def config_dir() -> Path:
+    """Per-user config folder: XDG on Linux, %APPDATA% on Windows. Until
+    move_old_config has moved cdimport's folder, that one, so settings are
+    never lost to a move that failed."""
+    new, old = _config_base() / NAME, old_config_dir()
+    if not new.exists() and old.is_dir() and not old.is_symlink():
+        return old
+    return new
+
+
+def move_old_config() -> tuple[bool, str] | None:
+    """Move cdimport's config folder to cdport's, once, and leave a symlink
+    in its place: Gatefold reads ~/.config/cdimport/config.json. Returns
+    (worked, what to tell the user), or None when there was nothing to move.
+    A failed move leaves everything where it was, and config_dir keeps
+    using the old folder."""
+    old, new = old_config_dir(), _config_base() / NAME
+    if new.exists() or new.is_symlink() or old.is_symlink() or not old.is_dir():
+        return None
+    try:
+        old.rename(new)
+    except OSError as exc:
+        return False, f"Could not move your settings from {old} to {new} ({exc}); using them where they are."
+    if sys.platform == "win32":
+        return True, f"cdimport is now cdport: moved your settings from {old} to {new}."
+    try:
+        old.symlink_to(NAME, target_is_directory=True)
+    except OSError as exc:
+        return False, (f"cdimport is now cdport: moved your settings from {old} to {new}, but could not "
+                       f"leave a link at the old place ({exc}); Gatefold looks for them there.")
+    return True, f"cdimport is now cdport: moved your settings from {old} to {new} (the old place links there)."
+
+
+def program_name() -> str:
+    """The name this was started under: the old command (lyrembed and Gatefold
+    start that one) gets the old wording in the lines other programs read
+    (web.serve's address and finished lines), everything else the new."""
+    return OLD_NAME if Path(sys.argv[0]).stem == OLD_NAME else NAME
 
 
 def default_config_path() -> Path:
@@ -236,14 +287,14 @@ def default_config_path() -> Path:
 
 
 def runtime_dir() -> Path:
-    """cdimport's per-user folder for short-lived files (drive locks, the
-    cover preview): shared by every cdimport of that user whatever its
+    """cdport's per-user folder for short-lived files (drive locks, the
+    cover preview): shared by every cdport of that user whatever its
     working folder (-w), private to the user, and emptied at logout."""
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if runtime and Path(runtime).is_dir():
-        return Path(runtime) / "cdimport"
+        return Path(runtime) / "cdport"
     uid = os.getuid() if hasattr(os, "getuid") else 0
-    return Path(tempfile.gettempdir()) / f"cdimport-{uid}"
+    return Path(tempfile.gettempdir()) / f"cdport-{uid}"
 
 
 def make_runtime_dir() -> Path:
@@ -322,7 +373,7 @@ def _value_problems(cfg: dict[str, Any]) -> list[tuple[tuple[str, ...], str]]:
         problems.append((("library_layout",),
                          f"'library_layout' may only use {{albumartist}} and {{folder}} ({exc})"))
     scheme = cfg["cyanrip"]["dir_scheme"]
-    # cdimport finds the rip inside its own staging folder; an absolute
+    # cdport finds the rip inside its own staging folder; an absolute
     # scheme would put it somewhere else.
     if scheme and (os.path.isabs(scheme) or scheme.startswith("~")):
         problems.append((("cyanrip", "dir_scheme"),

@@ -55,9 +55,9 @@ def interrupt_tool() -> bool:
 
 
 def terminal_interrupts_tools() -> bool:
-    """Whether a Ctrl+C in cdimport's terminal also reaches the tools.
+    """Whether a Ctrl+C in cdport's terminal also reaches the tools.
 
-    They run in cdimport's process group, which gets the terminal's SIGINT
+    They run in cdport's process group, which gets the terminal's SIGINT
     when it is in the foreground. Sending them another one would be a
     second Ctrl+C, on which cyanrip quits without finishing its log.
     """
@@ -104,7 +104,7 @@ def _cannot_start(cmd: list[str], exc: OSError) -> None:
     """Report a tool that does not start (missing, or a launcher whose
     interpreter is gone) the way a shell would, so callers handle it like
     any other failed run instead of crashing."""
-    print(f"cdimport: cannot start {cmd[0]}: {exc.strerror or exc}", file=sys.stderr)
+    print(f"cdport: cannot start {cmd[0]}: {exc.strerror or exc}", file=sys.stderr)
 
 
 def _let_finish(proc: subprocess.Popen) -> None:
@@ -144,10 +144,10 @@ def run_tail(cmd: list[str], cwd: Path | None = None, lines: int = 3,
              keep_bytes: int = 8192) -> tuple[int, list[str]]:
     """Like run(), and also return the last lines the tool printed.
 
-    Those lines usually say why a tool failed, and cdimport repeats them in
+    Those lines usually say why a tool failed, and cdport repeats them in
     its error message, where they cannot scroll away; the disc preview and
     the offset measurement read their results from them. The tool writes to
-    a pseudo-terminal that cdimport copies to the real one: it still sees a
+    a pseudo-terminal that cdport copies to the real one: it still sees a
     terminal, so its progress display and output buffering stay as they are.
     Without a terminal (output redirected, or Windows) it writes into a pipe
     instead: the same lines, but the tool may buffer them, so its progress
@@ -276,7 +276,7 @@ class Launched:
         return text or f"exited with code {code}"
 
     def close(self) -> None:
-        """Done checking: close cdimport's end of the error output (the
+        """Done checking: close cdport's end of the error output (the
         program keeps writing to its own)."""
         self.stderr_file.close()
 

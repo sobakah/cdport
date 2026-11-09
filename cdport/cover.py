@@ -25,7 +25,7 @@ from .config import __version__
 MB_SITE = "https://musicbrainz.org"
 MB_URL = f"{MB_SITE}/ws/2"
 CAA_URL = "https://coverartarchive.org"
-USER_AGENT = f"cdimport/{__version__}"
+USER_AGENT = f"cdport/{__version__}"
 # Ten tracks each carry a copy, so the original (often several MB) is too big.
 THUMBNAIL = "1200"
 FRONT_COVER = 3  # FLAC picture type
@@ -253,7 +253,7 @@ def preview(files: list[Path]) -> Path | None:
                 except CoverError:
                     return None
                 # Per user and per process: no other user's file in the way,
-                # no other cdimport overwriting it while it is looked at.
+                # no other cdport overwriting it while it is looked at.
                 path = config.make_runtime_dir() / f"cover-preview-{os.getpid()}{ext}"
                 path.write_bytes(picture.data)
                 return path

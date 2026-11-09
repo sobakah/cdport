@@ -57,7 +57,7 @@ class Drive:
 
 
 class DriveBusy(Exception):
-    """Another cdimport is using the drive; the message says which process."""
+    """Another cdport is using the drive; the message says which process."""
 
 
 def lock_dir() -> Path:
@@ -73,14 +73,14 @@ def lock_path(device: str) -> Path:
 
 @contextlib.contextmanager
 def hold(device: str) -> Iterator[None]:
-    """Keep other cdimports off the drive while this one works with its disc.
+    """Keep other cdports off the drive while this one works with its disc.
 
     Held from the disc preview to the end of the rip: cyanrip -I, -f and the
     rip itself all move the drive's head, and a second process doing that
     during a rip forces re-reads (seen 2026-10-12: a preview ran during a
     rip; AccurateRip still matched, but only thanks to cyanrip's retries).
     The operating system drops the lock when the process ends in any way.
-    Raises DriveBusy when another cdimport holds it.
+    Raises DriveBusy when another cdport holds it.
     """
     try:
         import fcntl
@@ -109,10 +109,10 @@ def hold(device: str) -> Iterator[None]:
 
 
 def busy(device: str) -> str | None:
-    """Why the drive is in use by another cdimport, or None when it is free.
+    """Why the drive is in use by another cdport, or None when it is free.
 
     Only looks: taking the lock in hold()'s way, each poll could make another
-    cdimport starting at that moment report this one as using the drive.
+    cdport starting at that moment report this one as using the drive.
     """
     try:
         import fcntl
@@ -132,7 +132,7 @@ def busy(device: str) -> str | None:
 
 def _busy_message(device: str, content: str) -> str:
     pid = content.strip()
-    return f"{device or 'The drive'} is in use by another cdimport" + (f" (process {pid})" if pid else "")
+    return f"{device or 'The drive'} is in use by another cdport" + (f" (process {pid})" if pid else "")
 
 
 def find_drives() -> list[Drive] | None:
@@ -153,7 +153,7 @@ def _linux_drives(sys_block: Path = Path("/sys/class/block")) -> list[Drive]:
         device = f"/dev/{name}"
         drive = _from_udev(device)
         if drive is None:
-            # The ioctl talks to the drive; leave one another cdimport rips from.
+            # The ioctl talks to the drive; leave one another cdport rips from.
             drive = Drive(device, status="unknown" if busy(device) else _ioctl_status(device))
         drives.append(drive)
     return drives

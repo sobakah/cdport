@@ -1,4 +1,4 @@
-"""Embed missing cover art: step of cdimport, and the cdimport-cover command."""
+"""Embed missing cover art: step of cdport, and the cdport-cover command."""
 
 from __future__ import annotations
 
@@ -126,7 +126,7 @@ def album_folders(paths: list[Path], recursive: bool) -> list[Path]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="cdimport-cover",
+        prog="cdport-cover",
         description="Embed cover art in FLAC albums, from the Cover Art Archive or a picture "
                     "file. Albums with a cover can keep it or change it.",
     )
@@ -135,7 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="also every album folder below the given ones")
     parser.add_argument("--release", metavar="MBID",
                         help="MusicBrainz release ID to take the cover from (one album only)")
-    parser.add_argument("--version", action="version", version=f"cdimport-cover {__version__}")
+    parser.add_argument("--version", action="version", version=f"cdport-cover {__version__}")
     parser.add_argument("--color", choices=("auto", "always", "never"), default="auto",
                         help="colour handling (default: auto)")
     return parser

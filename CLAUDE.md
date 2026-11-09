@@ -4,11 +4,11 @@ Guidance for Claude Code working in this repository.
 
 ## What this is
 
-`cdimport` is an interactive terminal program that turns an audio CD into a
+`cdport` (called cdimport before 1.3.0) is an interactive terminal program that turns an audio CD into a
 tagged, lyrics-embedded FLAC album by driving existing tools in sequence:
 
 ```
-cdimport
+cdport
  ├─ 0. Tools      cyanrip, a tag editor, lyrembed: find them, offer to install
  ├─ 1. Disc       audio CD in the drive? preview the MusicBrainz match
  ├─ 2. Rip        cyanrip → FLAC with tags, cover, AccurateRip log
@@ -27,7 +27,7 @@ installs cyanrip (package manager, or source build on Fedora;
 build has not run for real (the dnf step needs the maintainer's sudo).
 Editor and lyrembed are only detected, not installed. `cyanrip.channel`
 ("release" default, or "master") and the update check at start are
-built (`install.update_offer`, cache `~/.cache/cdimport/cyanrip-update.json`).
+built (`install.update_offer`, cache `~/.cache/cdport/cyanrip-update.json`).
 0.2.0 (2026-10-11): asks for another run after the summary, links the
 embedded cover and MusicBrainz search hits, offers an interactive lyrembed
 check after automatic lyrics.
@@ -46,7 +46,7 @@ offset, config falls back per setting, link punctuation, re-rip leftovers,
 cover checks, `run_tail` without a terminal and after Ctrl+C, disc merge
 over all tracks with rollback, Flatpak option values.
 0.5.1 (2026-10-21): ready for lyrembed 0.8.0's browser page (version check,
-texts, how to get back to cdimport).
+texts, how to get back to cdport).
 0.6.0 (2026-10-21): the page (`--web`, preview) with pictures, the tag editor,
 the lyrics handoff to lyrembed, and `--return-url` for lyrembed's Import a CD.
 0.6.1 (2026-10-21): the tag editor shows every tag, disc/track numbers and the
@@ -65,7 +65,7 @@ at each save, case-only renames, the track range kept without MusicBrainz.
 their tags removed. New in it: other Linux distributions, checked in containers:
 the packaged cyanrip is found (`-h`, not `-v`), build dependencies via
 apt/pacman/zypper, the editor falls back to an installed one, no release
-search for unknown discs with cyanrip before 0.9.4-rc3; and cdimport's own
+search for unknown discs with cyanrip before 0.9.4-rc3; and cdport's own
 update check (`selfupdate.py`, taken from picktag's `core/selfupdate.py`).
 1.0.1 (2026-10-29): the update check runs at every start, in the background
 (`app.UpdateCheck`), instead of once a day with step 0 waiting for it.
@@ -76,19 +76,21 @@ the page.
 1.2.1 (2026-11-08): cyanrip's R128 gain tags, 10 dB off, deleted after each
 rip (`rip.drop_r128_gain`, see "Known issues"); step 0 always says what the
 update check found.
+1.3.0 (2026-11-09): renamed from cdimport to cdport, with the old name kept
+where other programs depend on it (see "The name" below).
 
 1.1.0 (2026-10-29): cyanrip installed and updated on the page
 (`install.run_package_manager`, `proc.run_shown`), the app-menu entry
 (`desktop.py`, `--install-desktop-entry`, copied from lyrembed/keepbest)
 and a new icon in their style (`static/icon.svg`, also the page's favicon).
 
-Layout: `cdimport/` package (`app.py` runs the steps, one module per step:
+Layout: `cdport/` package (`app.py` runs the steps, one module per step:
 `disc`, `rip`, `tags`, `lyrics`, `library`; `state`, `tools`, `proc`,
 `config`, `ui`, `cli`, `install`, `cover` (Cover Art Archive/MusicBrainz,
 no UI), `musicbrainz` (release search for discs MusicBrainz does not know,
-no UI), `covertool` (the cover step and the `cdimport-cover` command) and
+no UI), `covertool` (the cover step and the `cdport-cover` command) and
 `desktop` (the app-menu entry)),
-`run.py` and `cover.py` launchers, `tests/test_cdimport.py`.
+`run.py` and `cover.py` launchers, `tests/test_cdport.py`.
 `config.example.json` is generated from `DEFAULT_CONFIG` and `SETTING_HELP`
 in `config.py`. After adding or changing a setting, update both and
 regenerate it (see `config.write_example`); a test fails until then.
@@ -96,7 +98,7 @@ regenerate it (see `config.write_example`); a test fails until then.
 ## Decisions made by the maintainer
 
 - **Separate programs that hand off to each other**, not one program that
-  does everything. cdimport calls `cyanrip`, the editor and `lyrembed` as
+  does everything. cdport calls `cyanrip`, the editor and `lyrembed` as
   subprocesses; it never imports lyrembed (that keeps it working with a pipx
   install and keeps the tools independent).
 - **Linux first.** Windows is an afterthought, but do not make choices that
@@ -105,7 +107,7 @@ regenerate it (see `config.write_example`); a test fails until then.
 - **Python**, like lyrembed (Python 3.10+).
 - **Everything in English**: code, docs, UI text.
 - **Working folder** and **music library** have no defaults (decided
-  2026-10-11): on first use cdimport asks for both, prefilled with `~/Temp`
+  2026-10-11): on first use cdport asks for both, prefilled with `~/Temp`
   and the desktop's music folder (`XDG_MUSIC_DIR`, `~/Musik` for the
   maintainer), and saves them as `work_dir`/`library_dir` in the config.
   `-w`/`-l` override them for one run. A wrong value in the config file
@@ -125,25 +127,62 @@ regenerate it (see `config.write_example`); a test fails until then.
   after the move, `*.log` goes to `<work_dir>/logs/` (`library.keep_logs_out`,
   numbered "name (2).log" instead of overwriting). The `.cue` stays with
   the album.
-- **A running rip is locked** (`<staging>.lock`, flock): another cdimport
+- **A running rip is locked** (`<staging>.lock`, flock): another cdport
   must not offer to delete it as an interrupted rip. Found 2026-10-11 when
   a test run did exactly that while the maintainer was ripping. The lock is taken
   before the folder exists (`rip.staging_dir`), and `rip.in_use` opens it
   read-only, so checking never creates a lock file again (2026-10-26).
 - **A drive in use is locked too** (`disc.hold`, flock on
-  `$XDG_RUNTIME_DIR/cdimport/drive-<sr0>.lock`, held from the disc preview
-  to the end of the rip). Another cdimport skips that drive, also for the
+  `$XDG_RUNTIME_DIR/cdport/drive-<sr0>.lock`, held from the disc preview
+  to the end of the rip). Another cdport skips that drive, also for the
   ioctl fallback of detection. Found 2026-10-12 when a test run's `cyanrip
   -I` ran on the drive during the maintainer's rip (AccurateRip still
   matched 6/6). Versions before this fix do not take the lock.
 - **Lyrics mode** chosen by the user each run: automatic (`lyrembed DIR
   --auto`) or interactive (`lyrembed DIR`). From lyrembed 0.8.0 the
-  interactive mode is a page in the browser; cdimport still starts
+  interactive mode is a page in the browser; cdport still starts
   `lyrembed DIR` and waits for it to exit (Quit on the page, or closing the
   tab, ends it), so only the texts differ (`lyrics.probe`,
   `Session.lyrembed_page`, `app.page_hint`).
 - **Tag editor**: Ear Tag by default, others selectable (Kid3, Picard),
   configurable as a command template, or skip.
+
+### The name
+
+Renamed from cdimport to cdport on 2026-11-09 (1.3.0, the maintainer's
+choice; the GitHub repository is `sobakah/cdport`, GitHub forwards the old
+address; the local checkout and the notes folder keep the old name). Other
+programs still depend on the old one, so it stays where they look until
+they are updated (the maintainer's decision: compatible now, the other
+repos later, only when asked):
+
+- **Commands:** `cdimport` and `cdimport-cover` stay as aliases in
+  `pyproject.toml`. lyrembed's "Import a CD" (`find_cdimport`) and Gatefold
+  (`tools/src/cdimport.rs`, setting `cdimport-path`) start `cdimport`.
+- **Output lines:** started as `cdimport` (`config.program_name`), the page's
+  "… is running at URL" and "… finished: FOLDER" lines say cdimport:
+  lyrembed's `_CDIMPORT_PAGE`/`_CDIMPORT_DONE` match that word. Gatefold's
+  `page_url` takes any name.
+- **Settings:** `config.move_old_config` moves `~/.config/cdimport` to
+  `~/.config/cdport` at the first start and leaves a symlink: Gatefold reads
+  `~/.config/cdimport/config.json` (it never writes it). Until moved,
+  `config_dir` keeps using the old folder, so a failed move loses nothing.
+  The message also goes to the page (`web.serve`'s `notes`, a failure in its
+  `warnings`): from the app menu there is no terminal.
+- **pipx:** a cdimport 1.2.x that updates itself (`pipx upgrade cdimport`)
+  gets cdport into its venv "cdimport" next to the old package: `cdimport`
+  then starts 1.3.0, but pipx says "unchanged at 1.2.1" and exposes no
+  `cdport` command (checked 2026-11-09 in a scratch PIPX_HOME). Clean:
+  `pipx uninstall cdimport; pipx install git+https://github.com/sobakah/cdport.git`
+  (config, cache and albums are untouched by that).
+- **Hidden files:** `.cdimport.json` (Gatefold looks for it in the working
+  folder's albums) and `.cdimport-rip-` keep their names.
+- `cli.OLD_RESTART_ENV` takes the page address from a cdimport 1.2.x that
+  updated itself to cdport on the page; the app-menu entry cdimport wrote is
+  replaced (`desktop.old_entry`, only one with `Name=cdimport`).
+
+Once lyrembed and Gatefold use the new name (and accept both), the output
+lines, the hidden file names and eventually the aliases can follow.
 
 ### Installing cyanrip
 
@@ -166,14 +205,14 @@ Detect the distro from `/etc/os-release` (`ID`, `ID_LIKE`), the platform from
 Fedora build dependencies (all in Fedora 45, `ffmpeg-devel` in RPM Fusion):
 `meson ninja-build gcc ffmpeg-devel libcdio-paranoia-devel
 libmusicbrainz5-devel libcurl-devel`, optional `qrencode-devel
-libchromaprint-devel`. cdimport checks them with pkg-config against the
+libchromaprint-devel`. cdport checks them with pkg-config against the
 versions in cyanrip's `src/meson.build` and installs only what is missing.
 On 2026-10-11 the maintainer's PC lacked `meson ninja-build
 libmusicbrainz5-devel libcurl-devel` (all in the `fedora` repo, checked with
 dnf repoquery); FFmpeg 9 and libcdio-paranoia headers were installed.
 
 Other distributions (`install.dependency_command`, checked 2026-10-27 in
-podman containers by installing exactly cdimport's command, then checking
+podman containers by installing exactly cdport's command, then checking
 every pkg-config requirement and building cyanrip): `apt` for
 debian/ubuntu (and ID_LIKE, e.g. Mint) with `-dev` names, `pacman -S
 --needed` for arch (its packages carry the headers; FFmpeg is one package),
@@ -184,7 +223,7 @@ built on Debian and Ubuntu (FFmpeg 7.1/6.1) but not against FFmpeg 9 (Arch,
 Tumbleweed), as on Fedora. Distros without a mapping (Gentoo, ...) get
 the list of pkg-config names, as before.
 
-### Updates of cdimport itself
+### Updates of cdport itself
 
 Asked for by the maintainer on 2026-10-27, after picktag got the same
 (`picktag/core/selfupdate.py`; copied, not imported, like everything shared
@@ -196,7 +235,7 @@ thread (`app.UpdateCheck`, from the start of `run`; the maintainer's request
 2026-10-29, it was once a day): step 0 offers what an earlier check found
 (`selfupdate.known`, `<cache>/self-update.json`, written whole by `remember`)
 without waiting, `late_self_update` names a newer answer at the end of the
-run; step 0 always has a cdimport line ("the newest version", could not look,
+run; step 0 always has a cdport line ("the newest version", could not look,
 or still asking GitHub; the maintainer's request 2026-11-08, as nothing at all
 read as a check that didn't run); `--update` waits for the answer; never when started with `--return-url` (lyrembed's Import a
 CD runs the show then). A pipx install (`pipx_metadata.json` in
@@ -206,7 +245,7 @@ with the new tag when the install is pinned to one. Only in step 0 and at the
 end of a run, not whenever the page likes as lyrembed does: pipx replaces
 files a running rip still imports from (mutagen and our own lazy imports).
 From step 0, `app.Restart` reaches `cli.main`, which `exec`s the command
-cdimport was started with, without `--update`. On the page the flow thread
+cdport was started with, without `--update`. On the page the flow thread
 hands it to `Run.restart`, `serve` ends the server and raises it again with
 "PORT:TOKEN" for `cli.RESTART_ENV`: the new process takes the same address
 and cookie and removes the variable at once. The page reloads when
@@ -221,7 +260,7 @@ a faked release and pipx (question, output, exec, reload on the same address).
 
 ### Update notification for cyanrip
 
-At most once a day, result cached (e.g. `~/.cache/cdimport/`):
+At most once a day, result cached (e.g. `~/.cache/cdport/`):
 
 - **Self-built:** compare the version and commit (`cyanrip -h`'s first line) with
   `git ls-remote` of GitHub (newest `vX.Y.Z` tag, `master` commit); behind
@@ -246,7 +285,7 @@ Behaviour depends on third-party tools; re-verify before relying on these.
 - **Drive offset is mandatory for ripping** (0.9.4-rc3, checked
   2026-10-11): without `-s` cyanrip exits 1 with "Offset is unset! To
   continue with an offset of 0, run with -s 0!", although `-h` says
-  "default: 0". `-I` works without it. cdimport asks before the first rip
+  "default: 0". `-I` works without it. cdport asks before the first rip
   (measure with `-f`, enter, or 0 for one rip) and saves `cyanrip.offset`.
 - The maintainer's ASUS SDRW-08D2S-U is "[Purged]" in AccurateRip's drive
   list (no constant offset across drives of that name), so it must be
@@ -256,7 +295,7 @@ Behaviour depends on third-party tools; re-verify before relying on these.
   with another disc, it found **+6** (confidence 10), saved as
   `cyanrip.offset: 6` in the maintainer's config.
 - `cyanrip -f` ends with `Drive offset of +6 found (confidence: N)!`, where
-  N counts the tracks that confirmed it (`src/cyanrip_main.c`). cdimport
+  N counts the tracks that confirmed it (`src/cyanrip_main.c`). cdport
   parses that line and saves the offset without asking from N >= 4
   (`app.MIN_OFFSET_CONFIDENCE`); below, it asks.
 - **Disc not on MusicBrainz** (0.9.4-rc3, checked 2026-10-12 with a
@@ -269,7 +308,7 @@ Behaviour depends on third-party tools; re-verify before relying on these.
   `-t N=title=...`); cyanrip's `append_missing_keys` only understands
   backslash escapes, so `rip.tag_args` escapes `\ ' : =` with a backslash
   (round trip checked against libavutil). Keys: `album`, `album_artist`,
-  `date`, `title`. cdimport reads the link and track range from all of
+  `date`, `title`. cdport reads the link and track range from all of
   `-I`'s output (`rip.parse_preview`); the link comes before the track list.
 - **Several releases for the disc ID:** `-I` (and a rip) exits 1 after
   "Multiple releases found in database for DiscID ...:", one line per
@@ -304,14 +343,14 @@ Behaviour depends on third-party tools; re-verify before relying on these.
   passes use the same release, tags and naming scheme.
 - **Older releases** (checked 2026-10-27 in the v0.9.2/v0.9.3.1 sources
   and with Debian 13's, Ubuntu 24.04's and Tumbleweed's packages): no `-v`
-  (`invalid option`, exit 1; cdimport reads `-h`, whose first line is
+  (`invalid option`, exit 1; cdport reads `-h`, whose first line is
   `cyanrip VERSION (TAG) help:` there and `cyanrip VERSION (COMMIT)` on
-  master). Every line cdimport parses (offset, unknown disc, several
+  master). Every line cdport parses (offset, unknown disc, several
   releases, AccurateRip, "Track N ripped and encoded successfully!") is the
   same; "with errors." exists only from 2025-10. `-R` for a disc
   MusicBrainz does not know needs master bde6a1e (2026-10-10, first in
   0.9.4-rc3, `install.RELEASE_FOR_UNKNOWN_DISC`); before, it only picks
-  among the disc ID's releases, so cdimport hides `s`/`m` for such a disc.
+  among the disc ID's releases, so cdport hides `s`/`m` for such a disc.
 - Relevant options: `-I` print disc info and MusicBrainz match without
   ripping; `-R` pick a MusicBrainz release (index or ID); `-D`/`-F` directory
   and file naming schemes (use `-D` to know the output folder instead of
@@ -340,7 +379,7 @@ Behaviour depends on third-party tools; re-verify before relying on these.
   (`flatpak run app.drey.EarTag FILE...`). Whether it accepts a folder is
   untested.
 - Its sandbox only has `xdg-download` and `xdg-music`, so files in `~/Temp`
-  are invisible to it. cdimport passes them with `flatpak run
+  are invisible to it. cdport passes them with `flatpak run
   --file-forwarding app.drey.EarTag @@ FILES @@` (document portal). Whether
   Ear Tag can save through the portal is untested.
 - Single-instance GApplication: if a window is already open, the launch
@@ -352,27 +391,27 @@ Behaviour depends on third-party tools; re-verify before relying on these.
 - cyanrip embeds only an image the Cover Art Archive marks as *front*. For
   P1Harmony "때깔 (Killin' It)" (색깔 (Superb) ver., release 5c580fb1-…) the
   only image is untyped, so cyanrip logged `Album Art: none`; the release
-  group has a front cover from another edition. cdimport (`cover.py`)
+  group has a front cover from another edition. cdport (`cover.py`)
   offers both, or a file, when tracks lack a picture, embeds the 1200 px
   version as front cover (never replacing a picture) and saves `cover.jpg`
-  unless one exists. Offered whenever cdimport works on an album: after a
-  rip and each time an album is opened again (resumed or `cdimport
+  unless one exists. Offered whenever cdport works on an album: after a
+  rip and each time an album is opened again (resumed or `cdport
   FOLDER`), at whatever step. Tracks without a picture get the offer;
   when all have one, keep (default) or change it. Changing swaps only the
   front-cover picture (type 3) and replaces cover.jpg/.png.
-- Also a separate command, `cdimport-cover FOLDER... [-r] [--release ID]`.
+- Also a separate command, `cdport-cover FOLDER... [-r] [--release ID]`.
   Without a release ID in the tags it searches release groups by the album
   and album-artist tags (again without a trailing "(...)" when nothing is
   found) and asks which hit is right. MusicBrainz gets at most one request
   per second and a 503 is retried twice; its User-Agent is
-  `cdimport/<version>` without contact details (never put the maintainer's
+  `cdport/<version>` without contact details (never put the maintainer's
   email there without asking). A 503 seen 2026-10-11 was temporary.
 
 **lyrembed** (`~/Projekte/Git-Repos/lyrembed`, private repo `sobakah/lyrembed`,
 installed with pipx)
 - 2026-10-11: Fedora moved `/usr/bin/python3` to 3.15 and removed 3.14, so
   every pipx venv built on 3.14 (lyrembed, keepbest, media-optimizer) fails
-  with "bad interpreter". cdimport crashed on it; now step 0 runs
+  with "bad interpreter". cdport crashed on it; now step 0 runs
   `lyrembed --version` / `cyanrip -h`, reports such a tool with the repair
   command (`pipx reinstall NAME`), and any tool that cannot start returns
   127 instead of raising.
@@ -380,17 +419,17 @@ installed with pipx)
   **Batch mode exits 0 also when it embedded nothing** (checked 2026-10-15
   in 0.7.0's `run_batch`): "no confident match", incomplete tags and
   instrumentals count as skipped; 1 means only unreadable files or failed
-  writes. There is no machine-readable summary. So cdimport reads the
+  writes. There is no machine-readable summary. So cdport reads the
   tracks after `--auto` (`lyrics.without_lyrics`: Vorbis `LYRICS`/
   `UNSYNCEDLYRICS`/`SYNCEDLYRICS`, ID3 `USLT`/`SYLT`, MP4 `©lyr`, as
   lyrembed's `tagging.py`) and offers interactive mode for what is left.
-- Tags only `.flac .mp3 .ogg .opus .m4a` (`SUPPORTED_EXTENSIONS`); cdimport
+- Tags only `.flac .mp3 .ogg .opus .m4a` (`SUPPORTED_EXTENSIONS`); cdport
   skips the lyrics step for albums with none of them.
 - Batch mode (`--auto`) never prompts; `--dry-run`, `--overwrite`,
   `--color never` exist.
 - Planned in lyrembed, not built yet: "automatic, then prompt only for the
   tracks it could not decide" (on the page: open it with only those
-  tracks), and a "Done – back to cdimport" button with a return address.
+  tracks), and a "Done – back to cdport" button with a return address.
   When they exist, offer the first as a third lyrics mode.
 - **lyrembed 0.8.0** (2026-10-21) replaced its terminal menus with a page in
   the browser. Its CLI flags, `--auto` and exit codes are unchanged; it
@@ -399,7 +438,7 @@ installed with pipx)
 - **Romanization in batch mode** was added to lyrembed on 2026-10-11 at the
   maintainer's request (released as lyrembed 0.6.0): `settings.auto_romanize` (default false) and `--romanize` /
   `--no-romanize` for `--auto`, reusing its bulk-action `auto_romanize`.
-  cdimport asks in automatic mode; Enter passes no flag, so lyrembed's own
+  cdport asks in automatic mode; Enter passes no flag, so lyrembed's own
   setting decides. It only asks when `lyrembed --help` lists `--romanize`
   (`lyrics.probe`); older versions would reject the flag.
 
@@ -428,7 +467,7 @@ lrintf((REPLAYGAIN_REF_LOUDNESS - t->ebu_integrated + 5) * 256)  /* REF = -18 */
 
 It should be `- 5`: R128 gain = ReplayGain gain − 5 dB.
 
-**Evidence:** all 285 FLAC files from cdimport rips in `~/Musik` (32 albums)
+**Evidence:** all 285 FLAC files from cdport rips in `~/Musik` (32 albums)
 have R128 = ReplayGain + 5.0 dB exactly, on all 570 track and album values.
 Example: Stray Kids, 樂-STAR, "락 (樂) (LALALALA)": measured −6.2 LUFS,
 `REPLAYGAIN_TRACK_GAIN=-11.79 dB` (right), `R128_TRACK_GAIN=-1739`
@@ -445,7 +484,7 @@ any more; other players may be.
 so distro packages too. Still in GitHub's master on 2026-11-08 (648b1dd), and
 not reported there (no issue or PR mentions R128).
 
-**cdimport's fix** (2026-11-08): `rip.drop_r128_gain` deletes both R128 tags
+**cdport's fix** (2026-11-08): `rip.drop_r128_gain` deletes both R128 tags
 from FLAC files that have `REPLAYGAIN_TRACK_GAIN`, in `rip.rip` before the
 album leaves the staging folder and in `rip.rerip` before the secure tracks
 replace the fast ones. `ALBUM_GAIN_TAGS` no longer carries
@@ -465,7 +504,7 @@ maintainer's request: 285 files, 285 `R128_TRACK_GAIN` and 285
 pictures and every other tag compared before and after, unchanged; `~/Temp`
 had none). Deletes only the two R128 tags, only in FLAC files that also have
 ReplayGain tags; prints what it would change unless `--apply` is given.
-Uses the mutagen in cdimport's pipx environment:
+Uses the mutagen in cdport's pipx environment:
 
 ```python
 """Remove cyanrip's wrong R128 gain tags from FLAC files that have
@@ -494,8 +533,8 @@ print(f"{changed} files {'changed' if apply else 'would change'}")
 ```
 
 ```sh
-~/.local/share/pipx/venvs/cdimport/bin/python strip_r128.py ~/Musik          # dry run: 285 files
-~/.local/share/pipx/venvs/cdimport/bin/python strip_r128.py ~/Musik --apply
+~/.local/share/pipx/venvs/cdport/bin/python strip_r128.py ~/Musik          # dry run: 285 files
+~/.local/share/pipx/venvs/cdport/bin/python strip_r128.py ~/Musik --apply
 ```
 
 Players that watch the folder (Gatefold) re-read the tags.
@@ -558,7 +597,7 @@ A front end that wants live tool progress keeps the pseudo-terminal
   `on_quit_signal`, checked 2026-10-25).
 - Installing and updating cyanrip work on the page as in the terminal (the
   maintainer's request, 2026-10-29; until then the page only named
-  `cdimport --install-cyanrip`, so the app menu could not update it). The
+  `cdport --install-cyanrip`, so the app menu could not update it). The
   source build (git, meson into `~/.local`) needs no sudo and runs with
   `proc.run_shown`, its output on the page. A package manager's command
   asks for a sudo password and its own yes, which the page cannot pass on:
@@ -568,8 +607,8 @@ A front end that wants live tool progress keeps the pseudo-terminal
   offers no interactive lyrics with it (`app.interactive_lyrics`).
 - **App menu** (`desktop.py`, as in lyrembed and keepbest): pipx cannot
   install desktop files, so `--install-desktop-entry` writes
-  `~/.local/share/applications/cdimport.desktop` and the icon, starting the
-  cdimport that wrote it with `--web` (`Terminal=false`; from the menu
+  `~/.local/share/applications/cdport.desktop` and the icon, starting the
+  cdport that wrote it with `--web` (`Terminal=false`; from the menu
   there is no terminal to answer in). Checked with `desktop-file-validate`.
 - Security as in lyrembed: 127.0.0.1, the token as an HttpOnly SameSite
   cookie, `Host` and `Origin` checks, JSON only, a CSP. A package manager's
@@ -577,7 +616,7 @@ A front end that wants live tool progress keeps the pseudo-terminal
 - Pictures: `ui.choose(..., info={"images": {key: {"url"|"file": ...}}})`
   gives an option a picture; the terminal ignores `info`. `WebFront`
   registers each source under a random id, and `/api/image/<id>` serves only
-  those, so the page cannot make cdimport fetch arbitrary addresses. A file
+  those, so the page cannot make cdport fetch arbitrary addresses. A file
   (the cover preview, deleted after its question and rewritten under the
   same name) is read when registered, under a new id each time. Only
   JPEG and PNG are served (`cover.image_type`), and downloads are cached.
@@ -611,15 +650,15 @@ A front end that wants live tool progress keeps the pseudo-terminal
   names, so two tracks that swap titles do not overwrite each other.
 - The lyrics step hands the tab to lyrembed's page, if lyrembed has
   `--return-url` (`lyrics.probe`, from its `--help`; lyrembed 0.9.0):
-  - cdimport starts `lyrembed DIR --no-browser --return-url <its own page>
-    --return-name cdimport` with `ui.tool_start(..., handoff=True)`;
+  - cdport starts `lyrembed DIR --no-browser --return-url <its own page>
+    --return-name cdport` with `ui.tool_start(..., handoff=True)`;
   - `WebFront` reads lyrembed's address from its output line "lyrembed is
     running at <url>" (`_HANDOFF`) and adds a `handoff` event, and the page
     follows it once (remembered in `sessionStorage`, so coming back does not
     send it there again);
-  - lyrembed's "Done – back to cdimport" ends lyrembed, and `run_lyrembed`
+  - lyrembed's "Done – back to cdport" ends lyrembed, and `run_lyrembed`
     returns.
-  Leaving sends cdimport's own "closing", so the page does not count as
+  Leaving sends cdport's own "closing", so the page does not count as
   gone while it is away or for `HANDOFF_GRACE` after (`WebFront.away`). On
   the page, lyrembed's output (also `--auto`'s) goes to it through
   `run_tail`; in the terminal lyrembed still gets the terminal (`proc.run`).
@@ -627,12 +666,14 @@ A front end that wants live tool progress keeps the pseudo-terminal
 - Started by lyrembed's "Import a CD" (`--return-url URL --return-name
   lyrembed`, with `--web` only, local addresses only, `cli.local_page`),
   the finished run's button leads back there. `serve` ends by printing
-  "cdimport finished: <album folder>" (`FINISHED_LINE`), which lyrembed
-  reads to open the album: keep that wording. It names the newest album
+  "<name> finished: <album folder>" (`FINISHED_LINE`), which lyrembed
+  reads to open the album: keep that wording. <name> is
+  `config.program_name()`: "cdimport" when started as `cdimport`, which
+  lyrembed does and whose wording it looks for (as in "… is running at"). It names the newest album
   that got through its steps (`last_album`); a stopped one is not finished,
   and lyrembed would announce its working folder as imported. lyrembed may
   be gone by then: `_say` survives the closed pipe, and lyrembed must not
-  end cdimport, which would cut a rip off. The token cookie's name
+  end cdport, which would cut a rip off. The token cookie's name
   carries the port (`web.cookie_name`), as in lyrembed: cookies belong to
   a host, not a port, and two pages on 127.0.0.1 overwrote each other's.
 - The page scrolls like a terminal: it follows new content only while the
@@ -641,7 +682,7 @@ A front end that wants live tool progress keeps the pseudo-terminal
   (a cover that loads late), and the page's own `scrollTo` is flagged
   (`ownScroll`): its scroll event can arrive after the page grew again and
   would otherwise count as the reader leaving the end.
-- lyrembed and cdimport share one look, libadwaita's (the maintainer's
+- lyrembed and cdport share one look, libadwaita's (the maintainer's
   request, 2026-10-31; the details are in lyrembed's CLAUDE.md):
   `static/base.css` and `static/icons.js` are the same file in both repos,
   copies like `vendor/`, so change both; only the teal accent and what only

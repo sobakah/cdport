@@ -11,6 +11,17 @@ next line's tag.
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-11-09
+
+### Changed
+
+- **cdimport is now called cdport.** The command, the package and the repository (github.com/sobakah/cdport) have the new name; GitHub forwards the old address.
+- The old commands `cdimport` and `cdimport-cover` stay and start cdport. lyrembed's **Import a CD** and Gatefold start `cdimport`, so started under that name, cdport prints its address and "finished" lines in the old wording they look for.
+- On its first start cdport moves the settings from `~/.config/cdimport` to `~/.config/cdport` and leaves a link at the old place, where Gatefold reads them. If the move fails, it keeps using them where they are and says why.
+- `--install-desktop-entry` replaces the app-menu entry cdimport wrote, and `--remove-desktop-entry` removes both.
+- The update check's cache starts fresh in `~/.cache/cdport`; `~/.cache/cdimport` is no longer used and can be deleted.
+- Unchanged: the hidden `.cdimport.json` in unfinished albums (Gatefold looks for it) and `.cdimport-rip-` rip folders.
+
 ## [1.2.1] — 2026-11-08
 
 ### Changed

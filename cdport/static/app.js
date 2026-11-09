@@ -1,5 +1,5 @@
-// cdimport's page: what the flow in app.py shows, and its open question.
-// Everything comes from /api/state (cdimport/web.py); answers go back to
+// cdport's page: what the flow in app.py shows, and its open question.
+// Everything comes from /api/state (cdport/web.py); answers go back to
 // /api/answer. The flow itself is the terminal's, step for step.
 import { html, render, useState, useEffect, useRef } from '/static/vendor/preact-htm.js';
 import { Icon } from '/static/icons.js';
@@ -15,7 +15,7 @@ async function api(path, body) {
   try {
     response = await fetch('/api' + path, options);
   } catch (err) {
-    throw new Error('cdimport is not responding. Is it still running?');
+    throw new Error('cdport is not responding. Is it still running?');
   }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || `${response.status} ${response.statusText}`);
@@ -83,7 +83,7 @@ function Tool({ event }) {
   });
   const scrolled = (e) => { stick.current = atEnd(e.target.scrollTop + e.target.clientHeight, e.target.scrollHeight); };
   const stop = async () => {
-    if (!confirm(`Stop ${event.name}? It finishes its log first, as on Ctrl+C; cdimport then asks what to do.`)) return;
+    if (!confirm(`Stop ${event.name}? It finishes its log first, as on Ctrl+C; cdport then asks what to do.`)) return;
     setStopping(true);
     await api('/stop-tool', {}).catch(() => {});
   };
@@ -424,7 +424,7 @@ function App() {
   const [error, setError] = useState('');
   const [closed, setClosed] = useState(false);
   const [back, setBack] = useState(null);
-  // An update on the page: the new cdimport takes over this address, and the
+  // An update on the page: the new cdport takes over this address, and the
   // tab reloads once it answers (its instance differs).
   const [restarting, setRestarting] = useState(false);
   const [restartLost, setRestartLost] = useState(false);
@@ -449,7 +449,7 @@ function App() {
           // coming back, the same event is not followed again.
           for (const e of state.events) {
             if (e.kind !== 'handoff' || !state.toolRunning) continue;
-            const key = `cdimport-handoff-${e.id}-${e.url}`;
+            const key = `cdport-handoff-${e.id}-${e.url}`;
             let seen = false;
             try { seen = sessionStorage.getItem(key) === '1'; sessionStorage.setItem(key, '1'); } catch (err) { seen = false; }
             if (!seen) { location.href = e.url; return; }
@@ -521,7 +521,7 @@ function App() {
     }
   };
   const quit = async () => {
-    if (!confirm('Stop cdimport here? Finished steps are saved; start it again to continue.')) return;
+    if (!confirm('Stop cdport here? Finished steps are saved; start it again to continue.')) return;
     try { await api('/quit', {}); } catch (err) { setError(err.message); }
   };
   const close = async () => {
@@ -547,7 +547,7 @@ function App() {
 
   return html`
     <header class="topbar">
-      <div><span class="brand"><img src="/static/logo.svg" alt="" width="28" height="28" /><span class="brand-name">cdimport</span></span></div>
+      <div><span class="brand"><img src="/static/logo.svg" alt="" width="28" height="28" /><span class="brand-name">cdport</span></span></div>
       <ol class="steps" aria-label="Workflow">
         ${STEPS.map(([n, name, icon]) => {
           // The summary has no number: once it shows, every step reached is done.
@@ -558,8 +558,8 @@ function App() {
         })}
       </ol>
       <div class="topbar-end">
-        ${finished === null && html`<button class="btn btn-flat" disabled=${toolRunning} title=${toolRunning ? 'A tool is running: stop it first' : 'Stop cdimport'}
-          onClick=${quit}><${Icon} name="stop" /><span class="btn-text">Stop cdimport</span></button>`}
+        ${finished === null && html`<button class="btn btn-flat" disabled=${toolRunning} title=${toolRunning ? 'A tool is running: stop it first' : 'Stop cdport'}
+          onClick=${quit}><${Icon} name="stop" /><span class="btn-text">Stop cdport</span></button>`}
       </div>
     </header>
     <main>
@@ -569,13 +569,13 @@ function App() {
       </section>`)}
       ${question && html`<${Question} key=${question.id} question=${question} onAnswer=${answer} />`}
       ${restarting && !restartLost && html`<p class="note note-info row-wrap"><span class="spinner" aria-hidden="true"></span>
-        Starting the new cdimport… this page reloads once it answers.</p>`}
-      ${restartLost && html`<p class="note note-error">The new cdimport did not answer on this address. Start cdimport
+        Starting the new cdport… this page reloads once it answers.</p>`}
+      ${restartLost && html`<p class="note note-error">The new cdport did not answer on this address. Start cdport
         again (in a terminal or from the app menu); it opens a new page.</p>`}
       ${finished !== null && !question && html`<section class="section finished status">
         <img class="status-icon" src="/static/icon.svg" alt="" />
-        <h1>${finished === 0 ? 'cdimport has finished' : finished === 130 ? 'cdimport was stopped' : `cdimport ended with exit code ${finished}`}</h1>
-        <p class="muted">${finished === 0 ? 'Everything above is done.' : 'Finished steps are saved; start cdimport again to continue.'}</p>
+        <h1>${finished === 0 ? 'cdport has finished' : finished === 130 ? 'cdport was stopped' : `cdport ended with exit code ${finished}`}</h1>
+        <p class="muted">${finished === 0 ? 'Everything above is done.' : 'Finished steps are saved; start cdport again to continue.'}</p>
         <div class="row-wrap"><button class="btn btn-primary" onClick=${close}><${Icon} name="check" /> ${back ? `Done – back to ${back.name}` : 'Close'}</button></div>
       </section>`}
       <div ref=${end}></div>
@@ -583,7 +583,7 @@ function App() {
     ${error && html`<div class="toasts"><div class="toast toast-error" role="alert"><span>${error}</span></div></div>`}
     ${closed && html`<div class="overlay"><div class="card status">
       <img class="status-icon" src="/static/icon.svg" alt="" />
-      <h1>cdimport has ended</h1>
+      <h1>cdport has ended</h1>
       <p class="muted">You can close this tab.</p>
     </div></div>`}
   `;

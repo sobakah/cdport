@@ -14,13 +14,13 @@ from .config import __version__
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="cdimport",
+        prog="cdport",
         description="Rip an audio CD to tagged FLAC with cyanrip, revise the tags in a tag editor, "
                     "embed lyrics with lyrembed and move the album into the music library.",
     )
     parser.add_argument("folder", nargs="?", type=Path,
                         help="continue with an album ripped earlier (tags, lyrics, finish) instead of a disc")
-    parser.add_argument("--version", action="version", version=f"cdimport {__version__}")
+    parser.add_argument("--version", action="version", version=f"cdport {__version__}")
     parser.add_argument("-c", "--config", type=Path, metavar="FILE",
                         help=f"config file (default: {config.default_config_path()})")
     parser.add_argument("-w", "--work-dir", metavar="DIR", help="working folder for this run (default: config work_dir, asked on first use)")
@@ -36,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--install-cyanrip", action="store_true",
                         help="install cyanrip, or update and rebuild a source build, before starting")
     parser.add_argument("--update", action="store_true",
-                        help="look for a newer cdimport now and wait for the answer (else in the background) and offer to install it")
+                        help="look for a newer cdport now and wait for the answer (else in the background) and offer to install it")
     parser.add_argument("--color", choices=("auto", "always", "never"), help="override colour handling")
     page = parser.add_argument_group("browser (preview)")
     page.add_argument("--web", action="store_true",
@@ -48,14 +48,14 @@ def build_parser() -> argparse.ArgumentParser:
                       help="with --return-url, the name on that button (default: 'the previous page')")
     entry = page.add_mutually_exclusive_group()
     entry.add_argument("--install-desktop-entry", action="store_true",
-                       help="add cdimport to the app menu (Linux/BSD), starting this cdimport's page, then exit")
-    entry.add_argument("--remove-desktop-entry", action="store_true", help="remove cdimport from the app menu, then exit")
+                       help="add cdport to the app menu (Linux/BSD), starting this cdport's page, then exit")
+    entry.add_argument("--remove-desktop-entry", action="store_true", help="remove cdport from the app menu, then exit")
     return parser
 
 
 def local_page(url: str) -> bool:
     """Whether *url* is a page on this computer: the only kind the page may
-    lead back to, so cdimport cannot be used to send a tab elsewhere."""
+    lead back to, so cdport cannot be used to send a tab elsewhere."""
     try:
         parts = urlsplit(url)
         return parts.scheme == "http" and parts.hostname in ("127.0.0.1", "localhost") and parts.port is not None
@@ -63,19 +63,23 @@ def local_page(url: str) -> bool:
         return False
 
 
-# After an update on the page: the new cdimport takes over the page's address
+# After an update on the page: the new cdport takes over the page's address
 # and token, so its open tab still fits. Taken out of the environment at once,
 # as tools started from the page must not see the token.
-RESTART_ENV = "CDIMPORT_RESTART"
+RESTART_ENV = "CDPORT_RESTART"
+# What cdimport 1.2.x sets when it updates itself to cdport on the page.
+OLD_RESTART_ENV = "CDIMPORT_RESTART"
 
 
 def _take_restart() -> tuple[int, str]:
-    port, _, token = os.environ.pop(RESTART_ENV, "").partition(":")
+    value = os.environ.pop(RESTART_ENV, "")
+    old = os.environ.pop(OLD_RESTART_ENV, "")
+    port, _, token = (value or old).partition(":")
     return (int(port), token) if port.isdigit() and token else (0, "")
 
 
 def _restart(restart: app.Restart) -> int:
-    """Start the cdimport just installed in this process's place."""
+    """Start the cdport just installed in this process's place."""
     sys.stdout.flush()
     sys.stderr.flush()
     if restart.address:
@@ -84,7 +88,7 @@ def _restart(restart: app.Restart) -> int:
         os.execvp(restart.argv[0], restart.argv)
     except OSError as exc:
         os.environ.pop(RESTART_ENV, None)
-        ui.error(f"Could not start the new cdimport ({exc}); start it again yourself.")
+        ui.error(f"Could not start the new cdport ({exc}); start it again yourself.")
         return 1
     return 0  # pragma: no cover - execvp does not return
 
@@ -96,6 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.install_desktop_entry or args.remove_desktop_entry:
         return _desktop_entry(install=args.install_desktop_entry)
 
+    moved = config.move_old_config()
     try:
         cfg, warnings = config.load_config(args.config)
     except config.ConfigError as exc:
@@ -121,6 +126,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"unknown editor '{args.editor}' (known: {', '.join(cfg['editors'])}, skip)")
 
     ui.setup_color(cfg["color"])
+    if moved:
+        (ui.info if moved[0] else ui.warn)(moved[1])
     for message in warnings:
         ui.warn(f"Warning: {message}")
 
@@ -137,7 +144,9 @@ def main(argv: list[str] | None = None) -> int:
 
             return web.serve(session, open_browser=not args.no_browser, port=port, token=token,
                              back=(args.return_url, args.return_name) if args.return_url else None,
-                             warnings=[f"Warning: {message}" for message in warnings])
+                             warnings=([moved[1]] if moved and not moved[0] else [])
+                             + [f"Warning: {message}" for message in warnings],
+                             notes=[moved[1]] if moved and moved[0] else [])
         return run_session(session)
     except app.Restart as restart:
         return _restart(restart)
@@ -149,9 +158,9 @@ def _desktop_entry(install: bool) -> int:
     try:
         if install:
             entry, icon, command = desktop.install()
-            ui.success(f"Added cdimport to the app menu: {entry}")
+            ui.success(f"Added cdport to the app menu: {entry}")
             ui.info(f"It starts: {' '.join(command + desktop.PAGE_ARGUMENTS)}")
-            ui.info("Run this again after installing cdimport elsewhere (pipx, another checkout).")
+            ui.info("Run this again after installing cdport elsewhere (pipx, another checkout).")
         else:
             removed = desktop.remove()
             ui.success("Removed: " + ", ".join(str(p) for p in removed) if removed else "There was no app-menu entry.")
@@ -180,7 +189,7 @@ def run_session(session: app.Session) -> int:
 def _resume_hint(session: app.Session) -> None:
     album = session.album
     if album and album.next_step() and album.path.exists():
-        ui.info(f"Finished steps are saved. Run cdimport again to continue with {album.folder.name}.")
+        ui.info(f"Finished steps are saved. Run cdport again to continue with {album.folder.name}.")
 
 
 if __name__ == "__main__":  # pragma: no cover

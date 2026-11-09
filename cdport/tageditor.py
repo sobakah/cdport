@@ -1,6 +1,6 @@
 """The page's tag editor: read and write an album's tags, and rename what follows them.
 
-FLAC only, as cdimport rips. Several artists follow Picard: ARTIST holds
+FLAC only, as cdport rips. Several artists follow Picard: ARTIST holds
 the credit as one line ("A feat. B"), ARTISTS the single names, and the same
 for ALBUMARTIST and ALBUMARTISTS. cyanrip writes the credit only.
 
@@ -365,9 +365,9 @@ def save(folder: Path, edit: dict) -> dict:
     folder_renamed: list[list[str]] = []
     try:
         for i, entry in enumerate(moving):
-            _move(folder / entry["file"], folder / f".cdimport-rename-{i}{Path(entry['file']).suffix}", done)
+            _move(folder / entry["file"], folder / f".cdport-rename-{i}{Path(entry['file']).suffix}", done)
         for i, entry in enumerate(moving):
-            _move(folder / f".cdimport-rename-{i}{Path(entry['file']).suffix}", folder / entry["newFile"], done)
+            _move(folder / f".cdport-rename-{i}{Path(entry['file']).suffix}", folder / entry["newFile"], done)
     except OSError as exc:
         raise TagEditError(f"Renaming the files failed ({exc}); nothing was saved.{_undo(done)}") from exc
     renamed = [[entry["file"], entry["newFile"]] for entry in moving]
@@ -452,7 +452,7 @@ def _rename(source: Path, target: Path, done: list[tuple[Path, Path]]) -> None:
     case-insensitive file systems ignore that, so it goes through a
     temporary name, short so that a name near the limit still fits."""
     if _same(source, target):
-        temporary = source.with_name(f".cdimport-rename-{len(done)}")
+        temporary = source.with_name(f".cdport-rename-{len(done)}")
         _move(source, temporary, done)
         source = temporary
     _move(source, target, done)

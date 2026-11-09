@@ -1,7 +1,7 @@
 """An app-menu entry for Linux and BSD desktops (freedesktop.org), as in lyrembed.
 
-pipx and pip cannot install desktop files, so cdimport writes its own entry
-on request, pointing at the cdimport that wrote it: a pipx launcher, or the
+pipx and pip cannot install desktop files, so cdport writes its own entry
+on request, pointing at the cdport that wrote it: a pipx launcher, or the
 Python and run.py of a checkout. Run it again after moving to another
 installation. The entry starts the page: from the menu there is no terminal
 to answer in.
@@ -17,7 +17,10 @@ import sys
 from pathlib import Path
 
 ICON_SOURCE = Path(__file__).with_name("static") / "icon.svg"
-ENTRY_NAME = "cdimport.desktop"
+ENTRY_NAME = "cdport.desktop"
+# What cdimport (before 1.3.0) wrote: replaced by install, removed by remove.
+OLD_ENTRY_NAME = "cdimport.desktop"
+OLD_ICON_NAME = "cdimport.svg"
 PAGE_ARGUMENTS = ["--web"]
 
 # Characters that make an Exec argument need quotes (Desktop Entry spec,
@@ -43,17 +46,29 @@ def entry_path() -> Path:
     return _data_home() / "applications" / ENTRY_NAME
 
 
-def icon_path() -> Path:
-    return _data_home() / "icons" / "hicolor" / "scalable" / "apps" / "cdimport.svg"
+def icon_path(name: str = "cdport.svg") -> Path:
+    return _data_home() / "icons" / "hicolor" / "scalable" / "apps" / name
+
+
+def old_entry() -> list[Path]:
+    """cdimport's entry and icon, if cdimport wrote them: an entry by that
+    name that someone else wrote is left alone."""
+    entry = _data_home() / "applications" / OLD_ENTRY_NAME
+    try:
+        ours = "Name=cdimport\n" in entry.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    icon = icon_path(OLD_ICON_NAME)
+    return [entry] + ([icon] if icon.exists() else []) if ours else []
 
 
 def launch_command() -> list[str]:
-    """How the running cdimport was started, so the menu starts the same one."""
+    """How the running cdport was started, so the menu starts the same one."""
     started = Path(sys.argv[0]).resolve()
     if started.name == "__main__.py":
-        # python -m cdimport: the module is only found from its checkout.
+        # python -m cdport: the module is only found from its checkout.
         launcher = started.parent.parent / "run.py"
-        return [sys.executable, str(launcher)] if launcher.is_file() else [sys.executable, "-m", "cdimport"]
+        return [sys.executable, str(launcher)] if launcher.is_file() else [sys.executable, "-m", "cdport"]
     if started.suffix == ".py":
         return [sys.executable, str(started)]
     return [str(started)]
@@ -75,14 +90,14 @@ def entry_text(command: list[str], icon: Path) -> str:
     return "\n".join([
         "[Desktop Entry]",
         "Type=Application",
-        "Name=cdimport",
+        "Name=cdport",
         "GenericName=CD ripper",
         "Comment=Rip an audio CD to a tagged FLAC album with lyrics",
         f"Exec={exec_line}",
         f"Icon={icon}",
         # The page opens in the browser; a terminal would only show its address.
         "Terminal=false",
-        # The browser's window is not cdimport's, so a startup spinner would
+        # The browser's window is not cdport's, so a startup spinner would
         # keep turning until it times out.
         "StartupNotify=false",
         "Categories=AudioVideo;Audio;",
@@ -114,14 +129,15 @@ def install() -> tuple[Path, Path, list[str]]:
         entry.write_text(entry_text(command, icon), encoding="utf-8")
     except OSError as exc:
         raise DesktopError(f"Could not write the app-menu entry: {exc}") from exc
+    # Two entries for one program; the old one starts the cdimport alias.
+    _unlink(old_entry())
     _refresh(entry.parent)
     return entry, icon, command
 
 
-def remove() -> list[Path]:
-    """Delete the entry and the icon; returns what was there."""
+def _unlink(paths: list[Path]) -> list[Path]:
     removed = []
-    for path in (entry_path(), icon_path()):
+    for path in paths:
         try:
             path.unlink()
             removed.append(path)
@@ -129,6 +145,12 @@ def remove() -> list[Path]:
             continue
         except OSError as exc:
             raise DesktopError(f"Could not remove '{path}': {exc}") from exc
+    return removed
+
+
+def remove() -> list[Path]:
+    """Delete the entry and the icon, and cdimport's; returns what was there."""
+    removed = _unlink([entry_path(), icon_path(), *old_entry()])
     if removed:
         _refresh(entry_path().parent)
     return removed

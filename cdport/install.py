@@ -176,7 +176,7 @@ def _suse_packages(names: list[str]) -> list[str]:
 
 def dependency_command(os_release: dict[str, str], names: list[str]) -> tuple[str, list[str]] | None:
     """The package manager and the command that installs these build tools
-    and pkg-config libraries; None on a system cdimport has no names for."""
+    and pkg-config libraries; None on a system cdport has no names for."""
     for distro_id in _distro_ids(os_release):
         if distro_id in ("fedora", "rhel", "centos"):
             return "dnf", _sudo(["dnf", "install"] + fedora_packages(names))
@@ -352,7 +352,7 @@ def build_from_source(cfg: dict[str, Any], config_path: Path, os_release: dict[s
         if tag is None:
             ui.error("cyanrip's repository has no release tags.")
             return None
-    ui.info(f"cdimport can build cyanrip {tag or MASTER_BRANCH} from source into ~/.local.")
+    ui.info(f"cdport can build cyanrip {tag or MASTER_BRANCH} from source into ~/.local.")
     if not install_dependencies(os_release):
         return None
     chosen = ask_dirs(cfg)
@@ -401,7 +401,7 @@ def _found_after_install(cfg: dict[str, Any]) -> str | None:
     if found.startswith(local_bin) and not on_path:
         hint = ("fish_add_path ~/.local/bin" if os.environ.get("SHELL", "").endswith("fish")
                 else "add ~/.local/bin to PATH")
-        ui.dim(f"~/.local/bin is not on PATH; cdimport finds it anyway. For the shell: {hint}")
+        ui.dim(f"~/.local/bin is not on PATH; cdport finds it anyway. For the shell: {hint}")
     return found
 
 
@@ -448,7 +448,7 @@ class Remote:
 @dataclass
 class UpdateOffer:
     message: str
-    can_build: bool  # cdimport can rebuild it; else the package manager's job
+    can_build: bool  # cdport can rebuild it; else the package manager's job
     daily: bool      # a news item, shown at most once a day
 
 
@@ -508,9 +508,9 @@ def installed_version(cyanrip: str) -> Installed | None:
 
 def cache_dir() -> Path:
     if sys.platform == "win32" and os.environ.get("LOCALAPPDATA"):
-        return Path(os.environ["LOCALAPPDATA"]) / "cdimport"
+        return Path(os.environ["LOCALAPPDATA"]) / "cdport"
     base = os.environ.get("XDG_CACHE_HOME")
-    return (Path(base) if base else Path.home() / ".cache") / "cdimport"
+    return (Path(base) if base else Path.home() / ".cache") / "cdport"
 
 
 def _cache_path() -> Path:
@@ -535,7 +535,7 @@ def _write_cache(data: dict[str, Any]) -> None:
 
 def remote_info(max_age: float = CHECK_INTERVAL_SECONDS) -> Remote:
     """Latest release tag and master commit, asked from GitHub at most once
-    per max_age seconds; the answer is cached in ~/.cache/cdimport."""
+    per max_age seconds; the answer is cached in ~/.cache/cdport."""
     cache = _read_cache()
     if time.time() - cache.get("checked", 0) < max_age:
         return Remote(cache.get("latest_tag"), cache.get("master"))
@@ -559,7 +559,7 @@ def remote_info(max_age: float = CHECK_INTERVAL_SECONDS) -> Remote:
 
 
 def is_self_built(cyanrip: str) -> bool:
-    """Installed by a source build into ~/.local (by cdimport or by hand)."""
+    """Installed by a source build into ~/.local (by cdport or by hand)."""
     return Path(cyanrip).resolve().parent == (Path.home() / ".local" / "bin").resolve()
 
 

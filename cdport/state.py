@@ -40,20 +40,20 @@ class AlbumState:
         self.save()
 
     def save(self) -> None:
-        data = {"cdimport": 1, "done": self.done, "skipped": self.skipped,
+        data = {"cdport": 1, "done": self.done, "skipped": self.skipped,
                 "updated": datetime.now().isoformat(timespec="seconds")}
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
         tmp.replace(self.path)
 
     def remove(self) -> None:
-        """Delete the state file: a finished album should carry no trace of cdimport."""
+        """Delete the state file: a finished album should carry no trace of cdport."""
         self.path.unlink(missing_ok=True)
 
 
 def load(folder: Path) -> AlbumState:
     """Read a folder's state; a folder without one starts with the rip done
-    (it was ripped before, by cdimport or otherwise)."""
+    (it was ripped before, by cdport or otherwise)."""
     path = folder / STATE_FILE_NAME
     if not path.exists():
         return AlbumState(folder, done=["rip"])

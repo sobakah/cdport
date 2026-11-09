@@ -1,4 +1,4 @@
-# cdimport
+# cdport
 
 Interactive terminal program that turns an audio CD into a tagged,
 lyrics-embedded FLAC album. It is glue: it drives existing tools in order and
@@ -13,19 +13,25 @@ does not rip, tag or fetch lyrics itself.
 5. Finish   offer to move the album into the music library, summary
 ```
 
-Version 1.2.1 · Python 3.10+ · Linux (Windows later)
+Version 1.3.0 · Python 3.10+ · Linux (Windows later)
+
+Called **cdimport** before 1.3.0. The old commands `cdimport` and
+`cdimport-cover` still work and start cdport; lyrembed's **Import a CD** and
+Gatefold use them. On its first start cdport moves the settings from
+`~/.config/cdimport` to `~/.config/cdport` and leaves a link at the old place,
+where Gatefold reads them.
 
 ## Requirements
 
 - [cyanrip](https://github.com/cyanreg/cyanrip) for ripping. Without it,
-  cdimport still continues albums ripped earlier.
+  cdport still continues albums ripped earlier.
 - A tag editor: [Ear Tag](https://flathub.org/apps/app.drey.EarTag) by
   default, Kid3 or Picard as alternatives, or none. Without Ear Tag (it
-  only comes as a Flatpak), cdimport offers an installed Kid3 or Picard.
+  only comes as a Flatpak), cdport offers an installed Kid3 or Picard.
 - [lyrembed](https://github.com/sobakah/lyrembed) for lyrics (optional).
-- `mutagen` for the tag check after editing (installed with cdimport).
+- `mutagen` for the tag check after editing (installed with cdport).
 
-When cyanrip is missing, cdimport offers to install it. It shows every
+When cyanrip is missing, cdport offers to install it. It shows every
 command first and asks before running it. Where the distribution has a
 package, it uses the package manager (`sudo apt install cyanrip`, ...). On
 Fedora and other systems without one, it builds cyanrip from source:
@@ -52,7 +58,7 @@ Which version is controlled by `cyanrip.channel` in the config:
   build against your FFmpeg: v0.9.3.1 does not compile against FFmpeg 9
   (Fedora 45, Arch, openSUSE Tumbleweed).
 
-At start cdimport compares the installed cyanrip (from `cyanrip -h`) with GitHub,
+At start cdport compares the installed cyanrip (from `cyanrip -h`) with GitHub,
 which it asks at most once a day:
 
 - A release installed with `"master"` set: it offers to build master
@@ -61,8 +67,8 @@ which it asks at most once a day:
   to rebuild a cyanrip in `~/.local`. For a distribution package it only
   tells you; the package manager does the update. Shown at most once a day.
 
-`cdimport --install-cyanrip` updates and rebuilds a source build (or
-reinstalls the package). For a missing editor or lyrembed, cdimport only
+`cdport --install-cyanrip` updates and rebuilds a source build (or
+reinstalls the package). For a missing editor or lyrembed, cdport only
 shows how to install it.
 
 On the page (`--web`) all of this works too: the page runs the source build
@@ -76,32 +82,32 @@ installed.
 
 ```bash
 pipx install .            # or run ./run.py from the checkout
-cdimport                  # rip the disc in the drive
-cdimport ~/Temp/Album     # continue with an album ripped earlier
-cdimport --lyrics auto --editor skip
-cdimport --install-cyanrip    # update and rebuild cyanrip first
-cdimport --rip-mode secure      # paranoia for every track (default: fast)
-cdimport --update               # look for a newer cdimport now
-cdimport --install-desktop-entry  # add cdimport (its page) to the app menu
+cdport                  # rip the disc in the drive
+cdport ~/Temp/Album     # continue with an album ripped earlier
+cdport --lyrics auto --editor skip
+cdport --install-cyanrip    # update and rebuild cyanrip first
+cdport --rip-mode secure      # paranoia for every track (default: fast)
+cdport --update               # look for a newer cdport now
+cdport --install-desktop-entry  # add cdport (its page) to the app menu
 ```
 
 ### Updates
 
-At every start cdimport looks for a newer release on GitHub, in the
+At every start cdport looks for a newer release on GitHub, in the
 background, so the start doesn't wait (`git ls-remote`, with the same access
 as `pipx install`; it never asks for a password). When an earlier start found
-one, step 0 says so with a link to what is new; one found while cdimport
-runs is named at the end of the run. Installed with pipx, cdimport offers to
-update right away, in the terminal and on the page (`pipx upgrade cdimport`,
+one, step 0 says so with a link to what is new; one found while cdport
+runs is named at the end of the run. Installed with pipx, cdport offers to
+update right away, in the terminal and on the page (`pipx upgrade cdport`,
 or `pipx install --force ...@<new tag>` for an install pinned to a release,
 which stays pinned). From step 0 it then starts again with the same
 arguments, and the page reloads by itself; at the end of a run the next start
 uses the new version. It never updates during a rip. Other installs get the
 command to run.
-`cdimport --update` looks right away and waits for the answer;
+`cdport --update` looks right away and waits for the answer;
 `"check_for_updates": false` in the config turns the check off.
 
-On first use cdimport asks for two folders and saves them in the config: the
+On first use cdport asks for two folders and saves them in the config: the
 working folder, where rips land first (suggested: `~/Temp`), and the music
 library (suggested: your desktop's music folder, e.g. `~/Music` or
 `~/Musik`). `-w DIR` and `-l DIR` use other folders for one run.
@@ -109,20 +115,20 @@ library (suggested: your desktop's music folder, e.g. `~/Music` or
 ### On a page in the browser (preview)
 
 ```bash
-cdimport --web               # the same run on a page in your default browser
-cdimport --web --no-browser  # print the page's address instead of opening it
+cdport --web               # the same run on a page in your default browser
+cdport --web --no-browser  # print the page's address instead of opening it
 ```
 
 `--web` runs exactly the terminal's steps, with a page as their front end:
 a step bar, each step's messages, cyanrip's output live (with **Stop
 cyanrip**, which ends it like Ctrl+C, so it finishes its log), and each
 question as buttons or a field; the terminal's keys work there too. Only
-this computer can open the page, and only with the address cdimport
-prints. Closing the tab stops cdimport at its next question, never during
+this computer can open the page, and only with the address cdport
+prints. Closing the tab stops cdport at its next question, never during
 a rip. On the page:
 
 - **Releases, albums and covers show their pictures** (from the Cover Art
-  Archive; cdimport fetches only the pictures its questions name).
+  Archive; cdport fetches only the pictures its questions name).
 - **The tags step has its own editor**, offered first; Ear Tag and co.
   stay as alternatives. It edits album, album artist, date, genre and each
   track's title, artist, disc and track number, and lists every other tag
@@ -135,30 +141,30 @@ a rip. On the page:
   title, and the folder a changed album, where cyanrip built them; the cue
   sheet follows, the rip log is never changed.
 - **The lyrics step hands the tab to lyrembed's page** (lyrembed 0.9.0 or
-  newer): **Done – back to cdimport** there brings it back, and the run
+  newer): **Done – back to cdport** there brings it back, and the run
   goes on.
 
-lyrembed's **Import a CD** starts cdimport this way, with
+lyrembed's **Import a CD** starts cdport this way, with
 `--return-url`/`--return-name`: at the end, **Done – back to lyrembed**
 returns there with the imported album open.
 
 ### App menu
 
 ```bash
-cdimport --install-desktop-entry
+cdport --install-desktop-entry
 ```
 
-adds cdimport to the app menu of GNOME, KDE and other freedesktop.org
-desktops: `~/.local/share/applications/cdimport.desktop` and an icon under
-`~/.local/share/icons/`. Started from the menu, cdimport opens its page in
-your default browser (`--web`). The entry starts the cdimport that wrote it
+adds cdport to the app menu of GNOME, KDE and other freedesktop.org
+desktops: `~/.local/share/applications/cdport.desktop` and an icon under
+`~/.local/share/icons/`, replacing the entry cdimport wrote. Started from the menu, cdport opens its page in
+your default browser (`--web`). The entry starts the cdport that wrote it
 (a pipx installation, or the Python and `run.py` of a checkout), so run the
-command again after installing cdimport somewhere else.
+command again after installing cdport somewhere else.
 `--remove-desktop-entry` removes both files.
 
 ### Fast and secure rips
 
-By default cdimport rips **fast**: cyanrip reads without paranoia
+By default cdport rips **fast**: cyanrip reads without paranoia
 (`-P none`), and afterwards every track is checked against the AccurateRip
 database. Tracks it does not confirm are ripped again with full paranoia
 (`-P max`) and replace the fast ones; that log is kept as
@@ -175,13 +181,13 @@ for one run, or press `p` in the disc menu for one disc.
 ### Several releases for one disc
 
 When several MusicBrainz releases have the disc's ID (editions, reissues),
-cyanrip lists them and waits for a choice. cdimport shows them as numbered
+cyanrip lists them and waits for a choice. cdport shows them as numbered
 options with a link to each release page; pick one to see its tags, then rip.
 
 ### Discs MusicBrainz does not know
 
 cyanrip looks the disc up by its disc ID. When MusicBrainz has no release with
-that ID, cyanrip will not rip without tags, and cdimport offers:
+that ID, cyanrip will not rip without tags, and cdport offers:
 
 - `s` search MusicBrainz for the release by album and artist. Each hit shows
   its media and track counts (the disc's count is marked) and a link.
@@ -190,7 +196,7 @@ that ID, cyanrip will not rip without tags, and cdimport offers:
 
   `s` and `m` need cyanrip 0.9.4-rc3 or newer for such a disc. The
   distributions' packages (0.9.3.1 and older) take a release only for discs
-  MusicBrainz knows, so with them cdimport offers `t` instead.
+  MusicBrainz knows, so with them cdport offers `t` instead.
 - `t` type in the tags: album, album artist, year, track titles (cyanrip's
   `-a`/`-t`). The tag step can refine them.
 - `n` rip without MusicBrainz metadata.
@@ -203,7 +209,7 @@ is applied (it may wait up to 7 days for votes), cyanrip finds the disc by
 itself, for you and everyone else.
 
 If the tracks have no embedded cover (cyanrip only takes an image the Cover
-Art Archive marks as front cover), cdimport offers what the archive has for
+Art Archive marks as front cover), cdport offers what the archive has for
 the release or another edition of the album, or a picture file of your own.
 It embeds the choice in every FLAC without a front cover and saves it as
 `cover.jpg`. When every track has a cover, it asks whether to keep it
@@ -211,31 +217,31 @@ It embeds the choice in every FLAC without a front cover and saves it as
 offered cover, and every album a MusicBrainz search finds, comes with a link.
 
 Every album folder in the working folder gets a
-small `.cdimport.json` recording the finished steps. When a run is stopped
+small `.cdimport.json` (still the old name, which Gatefold looks for) recording the finished steps. When a run is stopped
 (Ctrl+C, or `q` at a prompt), the next run offers to continue it. The file is
 deleted when the album is finished.
 
-At the end cdimport offers to move the album to
+At the end cdport offers to move the album to
 `<library>/<album artist>/<album folder>`. It never overwrites an existing
 folder. The one exception to "never merges": the other disc of a multi-disc
 album. cyanrip names every disc's folder after the album, so disc 2 finds
 disc 1's folder in the library. When that folder holds the same release
 (MusicBrainz release ID, else album and album artist) with other disc
-numbers, cdimport offers to add the disc to it (without release IDs, every
+numbers, cdport offers to add the disc to it (without release IDs, every
 track must have the same album title, and the album artists must match or
 the discs share an artist). Its files are named apart
 (`2.01 - …`, `<album> CD2.cue`); identical copies such as `cover.jpg` are
 dropped, and any other file of the same name stops the merge. The rip log (`*.log`, cyanrip's AccurateRip record) does
 not go into the library: it is kept in `logs/` in the working folder, under a
 new name if an older log has the same one. The cue sheet stays with the
-album. After the summary cdimport asks whether to start another run (next
+album. After the summary cdport asks whether to start another run (next
 disc or album); Enter ends it.
 
-In automatic lyrics mode cdimport asks whether to romanize the lyrics
+In automatic lyrics mode cdport asks whether to romanize the lyrics
 (Hangul, Kana, Hanzi to Latin letters). Enter keeps lyrembed's own setting
 (`settings.auto_romanize`); `y`/`n` pass `--romanize`/`--no-romanize`. This
 needs lyrembed 0.6.0 or newer; older versions are not asked. After an
-automatic run cdimport reads the tracks to see which ones still have no
+automatic run cdport reads the tracks to see which ones still have no
 lyrics (lyrembed skips a track without a confident match). It lists them and
 offers lyrembed's interactive mode for them (Enter) or to continue without
 them; instrumental tracks stay without lyrics either way. When every track
@@ -244,20 +250,20 @@ and Enter continues with the next step. lyrembed tags FLAC, MP3, Ogg, Opus
 and M4A; an album in other formats skips the lyrics step.
 
 From lyrembed 0.8.0 on, its interactive mode is a page in your browser
-instead of terminal menus; cdimport finds out from `lyrembed --version` and
-says so in its choices. lyrembed opens the page with the album and cdimport
-waits: quit lyrembed on the page, or close the tab, and cdimport continues
+instead of terminal menus; cdport finds out from `lyrembed --version` and
+says so in its choices. lyrembed opens the page with the album and cdport
+waits: quit lyrembed on the page, or close the tab, and cdport continues
 with the next step. Older lyrembed versions keep their terminal menus and
 work as before.
 
-## Cover art on its own: cdimport-cover
+## Cover art on its own: cdport-cover
 
 The cover step also works as a separate command, for any FLAC album:
 
 ```bash
-cdimport-cover ~/Temp/Album           # or ./cover.py ... in a checkout
-cdimport-cover -r ~/Musik             # every album folder below ~/Musik
-cdimport-cover ~/Temp/Album --release 5c580fb1-7c31-4785-afde-68098dc5caa2
+cdport-cover ~/Temp/Album           # or ./cover.py ... in a checkout
+cdport-cover -r ~/Musik             # every album folder below ~/Musik
+cdport-cover ~/Temp/Album --release 5c580fb1-7c31-4785-afde-68098dc5caa2
 ```
 
 For each album with tracks lacking a picture, it offers covers right away;
@@ -271,7 +277,7 @@ MusicBrainz is asked at most once a second.
 
 ## Configuration
 
-`~/.config/cdimport/config.json`, holding only the keys you want to change.
+`~/.config/cdport/config.json`, holding only the keys you want to change.
 Unknown keys and wrong values are reported; those settings keep their
 defaults, the others apply. [config.example.json](config.example.json)
 lists every setting with its default and an explanation; a copy works as a
@@ -320,8 +326,8 @@ config as it is (the `_` keys are comments). The most common settings:
 
 Ear Tag runs as a Flatpak and can only see `~/Downloads` and `~/Music`, so
 its files are passed with `flatpak run --file-forwarding ... @@ FILES @@`.
-Editors usually keep running after cdimport starts them, and Ear Tag returns
-right away when its window is already open. So cdimport asks you to press
+Editors usually keep running after cdport starts them, and Ear Tag returns
+right away when its window is already open. So cdport asks you to press
 Enter once you have saved your edits.
 
 ## Development
@@ -329,7 +335,7 @@ Enter once you have saved your edits.
 ```bash
 pip install -e ".[dev]"
 pytest
-pyflakes cdimport tests
+pyflakes cdport tests
 ```
 
 The tests never touch the network, the drive or the real tools.

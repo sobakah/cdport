@@ -1,4 +1,4 @@
-"""A newer cdimport: found by the release tags on GitHub, installed by pipx.
+"""A newer cdport: found by the release tags on GitHub, installed by pipx.
 
 Built after picktag's update check (core/selfupdate.py there, 2026-10-27).
 The repository is private, so the check asks git (``git ls-remote``), which
@@ -22,11 +22,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import __version__
+from .config import NAME, OLD_NAME, __version__
 
-NAME = "cdimport"
-REPO = "https://github.com/sobakah/cdimport.git"
-RELEASES = "https://github.com/sobakah/cdimport/releases"
+REPO = "https://github.com/sobakah/cdport.git"
+RELEASES = "https://github.com/sobakah/cdport/releases"
 _TAG = re.compile(r"refs/tags/(\d+)\.(\d+)\.(\d+)$")
 
 
@@ -47,7 +46,7 @@ def _git_env() -> dict[str, str]:
 
 
 def latest(timeout: float = 30) -> str:
-    """The newest release tag (x.y.z) of cdimport's repository."""
+    """The newest release tag (x.y.z) of cdport's repository."""
     git = shutil.which("git")
     if git is None:
         raise UpdateError("git isn't installed")
@@ -75,8 +74,8 @@ def newer(version: str, than: str = __version__) -> bool:
 
 @dataclass
 class Install:
-    """How this cdimport was installed and how to update it: argv is run by
-    cdimport (a pipx install), command is shown either way."""
+    """How this cdport was installed and how to update it: argv is run by
+    cdport (a pipx install), command is shown either way."""
     kind: str                     # "pipx", "checkout" or "other"
     command: str
     argv: list[str] | None = None
@@ -136,12 +135,12 @@ def known(state_file: Path) -> str | None:
 
 
 def restart_argv() -> list[str]:
-    """The command cdimport was started with, to start it again after an update."""
+    """The command cdport was started with, to start it again after an update."""
     first = Path(sys.argv[0])
     # shutil.which: on Windows the launcher sets sys.argv[0] without its .exe.
-    launcher = shutil.which(str(first)) if first.name == NAME else None
+    launcher = shutil.which(str(first)) if first.name in (NAME, OLD_NAME) else None
     if launcher:
         return [launcher, *sys.argv[1:]]
-    if first.name == "__main__.py":  # python -m cdimport
+    if first.name == "__main__.py":  # python -m cdport
         return [sys.executable, "-m", NAME, *sys.argv[1:]]
     return [sys.executable, *sys.argv]

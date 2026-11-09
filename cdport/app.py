@@ -35,7 +35,7 @@ class Options:
     editor: str = ""
     install_cyanrip: bool = False
     rip_mode: str = ""  # "fast" or "secure"; empty: config cyanrip.mode
-    # A newer cdimport: "start" (config check_for_updates: at every start,
+    # A newer cdport: "start" (config check_for_updates: at every start,
     # without waiting), "now" (--update: waits for GitHub's answer) or "never"
     # (switched off, or started by another program's page).
     self_update: str = "never"
@@ -54,15 +54,15 @@ class Session:
     lyrembed_problem: str = ""  # found, but does not start
     lyrembed_romanize: bool = False  # lyrembed has --romanize for batch mode
     lyrembed_page: bool = False  # lyrembed 0.8+: the interactive mode is a page in the browser
-    lyrembed_return: bool = False  # lyrembed 0.9+: its page can lead back to cdimport's (--return-url)
-    page_url: str = ""  # cdimport's own page, when it runs on one (web.serve)
+    lyrembed_return: bool = False  # lyrembed 0.9+: its page can lead back to cdport's (--return-url)
+    page_url: str = ""  # cdport's own page, when it runs on one (web.serve)
     album: AlbumState | None = None  # the album being worked on, for the Ctrl+C message
     # The newest album of any run that got through its steps, so the page's
-    # "cdimport finished" line names it: a stopped one is not finished, and
+    # "cdport finished" line names it: a stopped one is not finished, and
     # lyrembed would announce its working folder as imported.
     last_album: AlbumState | None = None
     update_check: UpdateCheck | None = None  # GitHub asked in the background since the start
-    update_offered: str | None = None  # the newer cdimport offered in step 0
+    update_offered: str | None = None  # the newer cdport offered in step 0
     failed: bool = False
     logs: list[Path] = field(default_factory=list)  # rip logs moved out of the library
     one_time_offset: bool = False  # cfg's offset is "0 for this rip only", not saved
@@ -129,7 +129,7 @@ def ask_missing_folders(session: Session) -> None:
     if not questions:
         return
     ui.gap()
-    ui.info("cdimport needs to know where to work. The answers are saved in "
+    ui.info("cdport needs to know where to work. The answers are saved in "
             f"{ui.tilde(session.config_path)}; change them there later.")
     ui.dim("Edit the suggestion or press Enter to accept it.")
     answers = {}
@@ -143,7 +143,7 @@ def ask_missing_folders(session: Session) -> None:
         if not path.exists():
             ui.dim(f"{ui.tilde(path)} does not exist yet; it is created when needed.")
         elif not path.is_dir():
-            ui.warn(f"{ui.tilde(path)} is a file; cdimport will fail to use it. Change it in the config.")
+            ui.warn(f"{ui.tilde(path)} is a file; cdport will fail to use it. Change it in the config.")
         answers[key] = ui.tilde(path)
         session.cfg[key] = answers[key]
         setattr(session, key, path)
@@ -211,7 +211,7 @@ def check_tools(session: Session) -> None:
 
 
 class Restart(Exception):
-    """A newer cdimport is installed: start it in this process's place.
+    """A newer cdport is installed: start it in this process's place.
     *address*: "PORT:TOKEN" of the page it takes over (cli.RESTART_ENV)."""
 
     def __init__(self, argv: list[str], address: str = "") -> None:
@@ -231,13 +231,13 @@ LATE_UPDATE_WAIT_S = 3
 
 
 class UpdateCheck:
-    """GitHub asked for the newest cdimport in a thread, from the start on, so
+    """GitHub asked for the newest cdport in a thread, from the start on, so
     nothing waits for it; the answer is remembered for the next start."""
 
     def __init__(self) -> None:
         self.found: str | None = None
         self.error: str | None = None
-        self.thread = threading.Thread(target=self._ask, name="cdimport-update-check", daemon=True)
+        self.thread = threading.Thread(target=self._ask, name="cdport-update-check", daemon=True)
         self.thread.start()
 
     def _ask(self) -> None:
@@ -254,10 +254,10 @@ class UpdateCheck:
 
 
 def offer_self_update(session: Session) -> None:
-    """A newer cdimport, as picktag does it: the release tags on GitHub, asked
+    """A newer cdport, as picktag does it: the release tags on GitHub, asked
     at every start in the background; step 0 offers what an earlier check found
     (or this one, if it has answered already) and doesn't wait. --update waits
-    for the answer. pipx updates it and cdimport starts again, on the page at
+    for the answer. pipx updates it and cdport starts again, on the page at
     the same address. Only here and at the end of a run, where nothing runs
     yet: pipx replaces files a running rip still imports from."""
     mode = session.options.self_update
@@ -268,7 +268,7 @@ def offer_self_update(session: Session) -> None:
         if not check.answered(UPDATE_TIMEOUT_S):
             check.error = "GitHub didn't answer"
         if check.error is not None:
-            ui.check("cdimport", f"{config.__version__}; could not look for a newer one: {check.error}", False)
+            ui.check("cdport", f"{config.__version__}; could not look for a newer one: {check.error}", False)
             return
         found = check.found
     else:
@@ -279,21 +279,21 @@ def offer_self_update(session: Session) -> None:
             # maintainer, 2026-11-08: nothing at all read as a check that
             # didn't run). It doesn't wait: a late answer comes at the end.
             if not answered:
-                ui.check("cdimport", f"{config.__version__}; still asking GitHub for a newer one", None)
+                ui.check("cdport", f"{config.__version__}; still asking GitHub for a newer one", None)
             elif check.error is not None:
-                ui.check("cdimport", f"{config.__version__}; could not look for a newer one: {check.error}", False)
+                ui.check("cdport", f"{config.__version__}; could not look for a newer one: {check.error}", False)
             else:
-                ui.check("cdimport", f"{config.__version__}, the newest version", True)
+                ui.check("cdport", f"{config.__version__}, the newest version", True)
             return
     if found is None or not selfupdate.newer(found):
-        ui.check("cdimport", f"{config.__version__}, the newest version", True)
+        ui.check("cdport", f"{config.__version__}, the newest version", True)
         return
     session.update_offered = found
     how = selfupdate.how_installed(found)
-    ui.check("cdimport", f"{found} is available (this is {config.__version__})", False,
+    ui.check("cdport", f"{found} is available (this is {config.__version__})", False,
              f"What's new: {selfupdate.RELEASES}/tag/{found}")
     if _update_now(found, how):
-        ui.success(f"cdimport {found} is installed; starting it again.")
+        ui.success(f"cdport {found} is installed; starting it again.")
         raise Restart([arg for arg in selfupdate.restart_argv() if arg != "--update"])
 
 
@@ -303,22 +303,22 @@ def _update_now(found: str, how: selfupdate.Install) -> bool:
     if how.argv is None or not (ui.in_terminal() or ui.supports("self_update")):
         ui.dim(f"{INDENT}To update: {how.command}")
         if how.argv is not None:
-            ui.dim(f"{INDENT}Run it in a terminal, then start cdimport again.")
+            ui.dim(f"{INDENT}Run it in a terminal, then start cdport again.")
         return False
-    if not ui.confirm(f"Update cdimport to {found} now?", default=True):
+    if not ui.confirm(f"Update cdport to {found} now?", default=True):
         return False
     ui.tool_start("pipx", how.command)
     code = proc.run_shown(how.argv)
     ui.tool_end("pipx", code)
     if code != 0:
-        ui.error(f"The update did not work (exit code {code}); cdimport stays at {config.__version__}. "
+        ui.error(f"The update did not work (exit code {code}); cdport stays at {config.__version__}. "
                  f"To try again: {how.command}")
         return False
     return True
 
 
 def late_self_update(session: Session) -> None:
-    """A newer cdimport the background check found after step 0: offered at
+    """A newer cdport the background check found after step 0: offered at
     the end of the run. No restart: the same arguments would begin a run
     nobody asked for, so the next start uses it."""
     check = session.update_check
@@ -326,10 +326,10 @@ def late_self_update(session: Session) -> None:
         return
     if check.found and selfupdate.newer(check.found) and check.found != session.update_offered:
         ui.gap()
-        ui.info(f"cdimport {check.found} is available (this is {config.__version__}). "
+        ui.info(f"cdport {check.found} is available (this is {config.__version__}). "
                 f"What's new: {selfupdate.RELEASES}/tag/{check.found}")
         if _update_now(check.found, selfupdate.how_installed(check.found)):
-            ui.success(f"cdimport {check.found} is installed; the next start uses it.")
+            ui.success(f"cdport {check.found} is installed; the next start uses it.")
 
 
 def offer_cyanrip_install(session: Session) -> None:
@@ -378,7 +378,7 @@ def offer_staging_cleanup(session: Session) -> None:
     for staging in state.leftover_staging(session.work_dir):
         busy = rip.in_use(staging)
         if busy:
-            ui.dim(f"A rip is running in another cdimport ({staging.name}); leaving it alone.")
+            ui.dim(f"A rip is running in another cdport ({staging.name}); leaving it alone.")
             continue
         if busy is None:  # pragma: no cover - Windows
             ui.dim(f"Found {staging.name}; cannot tell whether a rip still uses it, so it stays.")
@@ -867,7 +867,7 @@ def measure_offset(session: Session, device: str) -> int | None:
     ui.tool_start("cyanrip", proc.format_command(cmd))
     # cyanrip writes nothing here as far as seen, but runs in a throwaway
     # folder in case a version does.
-    with tempfile.TemporaryDirectory(prefix="cdimport-offset-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="cdport-offset-") as scratch:
         code, tail = proc.run_tail(cmd, cwd=Path(scratch), lines=10)
     ui.tool_end("cyanrip", code)
     found = parse_offset(tail)
@@ -882,7 +882,7 @@ def measure_offset(session: Session, device: str) -> int | None:
     if confidence >= MIN_OFFSET_CONFIDENCE:
         ui.success(f"Drive offset {offset:+d} confirmed by {confidence} tracks.")
         return offset
-    ui.warn(f"cyanrip found {offset:+d}, but only {confidence} track(s) confirm it; cdimport saves "
+    ui.warn(f"cyanrip found {offset:+d}, but only {confidence} track(s) confirm it; cdport saves "
             f"an offset on its own from {MIN_OFFSET_CONFIDENCE} on. Another disc with more tracks in "
             "the AccurateRip database gives more certainty.")
     answer = ui.choose("Then", [("u", f"use {offset:+d} and save it"),
@@ -1030,7 +1030,7 @@ def lyrics_step(session: Session, album: AlbumState) -> bool:
     ui.step(4, "Lyrics")
     if not session.lyrembed and session.lyrembed_problem:
         ui.error(f"lyrembed does not start: {session.lyrembed_problem}")
-        answer = ui.choose("Then", [("q", "stop here; repair lyrembed and run cdimport again to continue"),
+        answer = ui.choose("Then", [("q", "stop here; repair lyrembed and run cdport again to continue"),
                                     ("s", "skip lyrics for this album")], default="q")
         if answer == "q":
             raise Quit(1)
@@ -1100,7 +1100,7 @@ def after_automatic_lyrics(session: Session, album: AlbumState, files: list[Path
     """After lyrembed --auto: say which tracks are still without lyrics.
 
     lyrembed's batch mode exits 0 also when it found nothing for a track
-    (that counts as skipped there), so cdimport reads the tracks itself.
+    (that counts as skipped there), so cdport reads the tracks itself.
     True when the step is done; False to go through the album interactively.
     """
     try:
@@ -1160,7 +1160,7 @@ def offer_lyrics_check(session: Session, album: AlbumState) -> None:
 
 
 NO_INTERACTIVE_LYRICS = ("Going through tracks interactively needs lyrembed 0.8.0 or newer on this page, "
-                         "or cdimport in a terminal.")
+                         "or cdport in a terminal.")
 
 
 def interactive_lyrics(session: Session) -> bool:
@@ -1170,17 +1170,17 @@ def interactive_lyrics(session: Session) -> bool:
 
 
 def handoff_url(session: Session) -> str:
-    """cdimport's page, for lyrembed's to lead back to: only when cdimport
+    """cdport's page, for lyrembed's to lead back to: only when cdport
     runs on a page and lyrembed can do it."""
     return session.page_url if session.page_url and session.lyrembed_return else ""
 
 
 def page_hint(session: Session) -> None:
     """lyrembed 0.8.0 and newer open a page and waits; without this the terminal only
-    shows an address, and it is not obvious how to get back to cdimport."""
+    shows an address, and it is not obvious how to get back to cdport."""
     if handoff_url(session):
         ui.dim("This tab now switches to lyrembed's page with the album. "
-               "When you're done there, \"Done – back to cdimport\" brings you back here.")
+               "When you're done there, \"Done – back to cdport\" brings you back here.")
     elif session.lyrembed_page:
         ui.dim("lyrembed opens the album on its page in your browser. "
                "Quit it there, or close the tab, to continue here.")
@@ -1235,7 +1235,7 @@ def finish_step(session: Session, album: AlbumState) -> bool:
                 ui.info(f"It holds disc {', '.join(merge.discs_there)} of this album; this is disc "
                         f"{', '.join(merge.discs_here)}.")
             else:
-                ui.warn("That folder already exists; cdimport will not overwrite it.")
+                ui.warn("That folder already exists; cdport will not overwrite it.")
         if merge:
             options = [("a", f"add disc {', '.join(merge.discs_here)} to that folder")]
         else:
@@ -1293,7 +1293,7 @@ def summary(session: Session, album: AlbumState) -> None:
         elif name in album.skipped:
             ui.check(name.capitalize(), "skipped", None)
         else:
-            ui.check(name.capitalize(), "open: run cdimport again to continue", False)
+            ui.check(name.capitalize(), "open: run cdport again to continue", False)
     logs = session.logs or sorted(album.folder.glob("*.log"))
     if logs:
         ui.field("Log", ui.tilde(logs[0]))

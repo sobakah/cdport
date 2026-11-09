@@ -3,7 +3,7 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cdimport"
+name = "cdport"
 dynamic = ["version"]
 description = "Interactive CLI that rips an audio CD with cyanrip, hands it to a tag editor and embeds lyrics with lyrembed"
 readme = "README.md"
@@ -16,14 +16,17 @@ dependencies = ["mutagen>=1.45"]
 dev = ["pytest>=7", "pyflakes>=3"]
 
 [project.scripts]
-cdimport = "cdimport.cli:main"
-cdimport-cover = "cdimport.covertool:main"
+cdport = "cdport.cli:main"
+cdport-cover = "cdport.covertool:main"
+# The names before 1.3.0: lyrembed and Gatefold start cdimport.
+cdimport = "cdport.cli:main"
+cdimport-cover = "cdport.covertool:main"
 
 [tool.setuptools]
-packages = ["cdimport"]
+packages = ["cdport"]
 
 [tool.setuptools.package-data]
-cdimport = ["static/*.html", "static/*.js", "static/*.css", "static/*.svg", "static/vendor/*"]
+cdport = ["static/*.html", "static/*.js", "static/*.css", "static/*.svg", "static/vendor/*"]
 
 [tool.setuptools.dynamic]
-version = { attr = "cdimport.config.__version__" }
+version = { attr = "cdport.config.__version__" }

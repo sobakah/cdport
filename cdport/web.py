@@ -1,10 +1,10 @@
-"""The browser page: cdimport's flow, unchanged, with a page as its front end.
+"""The browser page: cdport's flow, unchanged, with a page as its front end.
 
 The flow in app.py runs in a thread of its own with WebFront as ui's front
 end: messages and tool output collect here, and a question waits until the
 page answers it. The page asks for what is new a few times a second. Only
 this machine can connect, and only with the token from the address
-cdimport prints, which the first visit turns into a cookie (as in
+cdport prints, which the first visit turns into a cookie (as in
 lyrembed).
 """
 
@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import parse_qs, urlsplit
 
-from . import app, cover, proc, tageditor, ui
+from . import app, config, cover, proc, tageditor, ui
 
 log = logging.getLogger(__name__)
 
@@ -37,14 +37,14 @@ _CONTENT_TYPES = {
     ".js": "text/javascript; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".txt": "text/plain; charset=utf-8",
-    ".svg": "image/svg+xml",  # cdimport's own icons only
+    ".svg": "image/svg+xml",  # cdport's own icons only
 }
 _CSP = ("default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; "
         "frame-ancestors 'none'; form-action 'none'")
 # Cookies belong to a host, not a port: two pages on 127.0.0.1 (a second
-# cdimport, lyrembed and cdimport handing a tab to each other) would overwrite
+# cdport, lyrembed and cdport handing a tab to each other) would overwrite
 # each other's token under one name. The port goes into the name.
-COOKIE = "cdimport_token"
+COOKIE = "cdport_token"
 
 
 def cookie_name(port: int) -> str:
@@ -61,7 +61,7 @@ _ANSI = proc.ANSI_ESCAPE
 _LINE_BREAK = re.compile(r"\r\n|\n|\r")
 # lyrembed prints its page's address like this (lyrembed/web.py, serve).
 _HANDOFF = re.compile(r"is running at (http://(?:127\.0\.0\.1|localhost):\d+/\?token=[A-Za-z0-9_-]+)")
-# After the other page sends the tab back, cdimport's page needs a moment to
+# After the other page sends the tab back, cdport's page needs a moment to
 # load: until then its "closing" from leaving does not count.
 HANDOFF_GRACE = 30.0
 
@@ -97,7 +97,7 @@ class WebFront(ui.Front):
         self._tool: dict | None = None
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         # Pictures the flow handed over with a question, by id: the only ones
-        # /api/image serves, so the page cannot make cdimport fetch anything else.
+        # /api/image serves, so the page cannot make cdport fetch anything else.
         self._images: dict[str, tuple[str, str]] = {}
         self._image_cache: dict[str, tuple[bytes, str] | Exception] = {}
         self._pending = ""  # output after the last line break: a line still being written
@@ -251,7 +251,7 @@ class WebFront(ui.Front):
             self._cond.notify_all()
 
     def restart(self) -> None:
-        """The run ends for the updated cdimport, which takes over the page."""
+        """The run ends for the updated cdport, which takes over the page."""
         with self._cond:
             self.restarting = True
             self._rev += 1
@@ -419,16 +419,18 @@ class Run:
     """The flow (cli.run_session) in a thread, with the page as front end."""
 
     def __init__(self, session: app.Session, back: tuple[str, str] | None = None,
-                 warnings: list[str] | None = None) -> None:
+                 warnings: list[str] | None = None, notes: list[str] | None = None) -> None:
         self.session = session
-        # Said in the terminal before the page existed (the config's); the
-        # page repeats them, as nobody may look at that terminal.
+        # Said in the terminal before the page existed (the config's, the
+        # settings moved from cdimport's folder); the page repeats them, as
+        # nobody may look at that terminal (none, started from the app menu).
+        self.notes = list(notes or [])
         self.warnings = list(warnings or [])
         self.front = WebFront()
-        # Another program's page that started cdimport (--return-url): the
+        # Another program's page that started cdport (--return-url): the
         # finished run's button leads back there.
         self.back_url, self.back_name = back if back else ("", "")
-        self.thread = threading.Thread(target=self._run, name="cdimport-flow", daemon=True)
+        self.thread = threading.Thread(target=self._run, name="cdport-flow", daemon=True)
         self._started = threading.Lock()
         self._prevented = False
         # Set when an update needs this process replaced. The page tells the
@@ -460,6 +462,8 @@ class Run:
         from .cli import run_session
 
         code = 1
+        for message in self.notes:
+            ui.info(message)
         for message in self.warnings:
             ui.warn(message)
         try:
@@ -469,7 +473,7 @@ class Run:
             self.front.restart()
         except Exception as exc:  # shown on the page, not lost in the thread
             log.exception("the run failed")
-            self.front.message("error", f"cdimport stopped on an error: {exc}")
+            self.front.message("error", f"cdport stopped on an error: {exc}")
         finally:
             if self.restart is None:
                 self.front.finish(code)
@@ -511,7 +515,7 @@ class _Server(ThreadingHTTPServer):
 
 class _Handler(BaseHTTPRequestHandler):
     server: _Server
-    server_version = "cdimport"
+    server_version = "cdport"
 
     def log_message(self, format: str, *args) -> None:  # noqa: A002 - the base class's name
         log.debug("web: " + format, *args)
@@ -539,7 +543,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _body(self, json_required: bool) -> dict:
         if self.headers.get("Origin", "") != f"http://{self.headers.get('Host', '')}":
-            raise ApiError(403, "Requests must come from cdimport's own page.")
+            raise ApiError(403, "Requests must come from cdport's own page.")
         length = int(self.headers.get("Content-Length") or 0)
         if length > MAX_BODY:
             raise ApiError(413, "Request too large.")
@@ -581,7 +585,7 @@ class _Handler(BaseHTTPRequestHandler):
                 self._index(url.query)
                 return
             if not self._authorized():
-                raise ApiError(403, "Open cdimport through the address it printed in the terminal.")
+                raise ApiError(403, "Open cdport through the address it printed in the terminal.")
             if method == "GET" and url.path.startswith("/static/"):
                 self._static(url.path[len("/static/"):])
                 return
@@ -623,7 +627,7 @@ class _Handler(BaseHTTPRequestHandler):
             })
             return
         if not self._authorized():
-            raise ApiError(403, "Open cdimport through the address it printed in the terminal.")
+            raise ApiError(403, "Open cdport through the address it printed in the terminal.")
         self._static("index.html")
 
     def _static(self, name: str) -> None:
@@ -678,7 +682,7 @@ class _Handler(BaseHTTPRequestHandler):
             if front.finished is not None:
                 return {"ok": True}
             if front.tool_running:
-                raise ApiError(409, "A tool is running. Stop it first; cdimport then asks what to do.")
+                raise ApiError(409, "A tool is running. Stop it first; cdport then asks what to do.")
             run.stop()
             return {"ok": True}
         if method == "POST" and path in ("/api/ping", "/api/closing", "/api/close"):
@@ -687,8 +691,8 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def _say(message: str) -> None:
-    """A line for the terminal cdimport was started in, which the page's
-    front end does not reach. lyrembed reads it when it started cdimport;
+    """A line for the terminal cdport was started in, which the page's
+    front end does not reach. lyrembed reads it when it started cdport;
     gone by now, it is no reason to fail after a finished run."""
     try:
         print(message, flush=True)
@@ -697,15 +701,17 @@ def _say(message: str) -> None:
 
 
 # The last line serve prints when the run ends, read by lyrembed's "Import a
-# CD" to open the imported album: keep the wording.
-FINISHED_LINE = "cdimport finished: {folder}"
+# CD" to open the imported album: keep the wording. {name} is the name it was
+# started under (config.program_name): lyrembed starts and looks for cdimport.
+FINISHED_LINE = "{name} finished: {folder}"
 
 
 def serve(session: app.Session, open_browser: bool = True, port: int = 0,
-          back: tuple[str, str] | None = None, warnings: list[str] | None = None, token: str = "") -> int:
+          back: tuple[str, str] | None = None, warnings: list[str] | None = None, token: str = "",
+          notes: list[str] | None = None) -> int:
     """Run the flow with the page as its front end; returns its exit code.
 
-    port and token come from the cdimport this one replaced after an update
+    port and token come from the cdport this one replaced after an update
     (cli.RESTART_ENV): the same address and cookie, so its open tab only
     needs to reload. When the port is taken meanwhile, a new one is printed.
     Raises app.Restart when an update on the page needs a new process.
@@ -713,7 +719,7 @@ def serve(session: app.Session, open_browser: bool = True, port: int = 0,
     restarted = bool(token)
     open_browser = open_browser and not restarted
     token = token or secrets.token_urlsafe(24)
-    run = Run(session, back, warnings)
+    run = Run(session, back, warnings, notes)
     try:
         server = _Server(run, token, port)
     except OSError as exc:
@@ -726,9 +732,9 @@ def serve(session: app.Session, open_browser: bool = True, port: int = 0,
     url = f"http://127.0.0.1:{server.port}/?token={token}"
     # Where lyrembed's page sends the tab back; the cookie is already set.
     session.page_url = f"http://127.0.0.1:{server.port}/"
-    thread = threading.Thread(target=server.serve_forever, name="cdimport-web", daemon=True)
+    thread = threading.Thread(target=server.serve_forever, name="cdport-web", daemon=True)
     thread.start()
-    _say(f"cdimport is running at {url}")
+    _say(f"{config.program_name()} is running at {url}")
     opened = open_browser and webbrowser.open(url)
     if back:
         _say(f"When the run is done, its page leads back to {back[1] or 'the previous page'}.")
@@ -772,6 +778,6 @@ def serve(session: app.Session, open_browser: bool = True, port: int = 0,
         raise app.Restart(run.restart.argv, f"{server.port}:{token}")
     album = session.last_album
     if album is not None and album.folder.is_dir():
-        _say(FINISHED_LINE.format(folder=album.folder))
+        _say(FINISHED_LINE.format(name=config.program_name(), folder=album.folder))
     code = run.front.finished
     return 130 if code is None else code

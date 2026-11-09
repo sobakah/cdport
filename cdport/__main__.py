@@ -1,4 +1,4 @@
-"""Allows `python -m cdimport`."""
+"""Allows `python -m cdport`."""
 
 import sys
 

@@ -1,4 +1,4 @@
-"""Tests for cdimport. No network, no drive, no real external tools."""
+"""Tests for cdport. No network, no drive, no real external tools."""
 
 import copy
 import os
@@ -12,8 +12,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from cdimport import app, cli, config, cover, covertool, disc, install, library, lyrics, musicbrainz, proc, rip, selfupdate, state, tags, tools, ui  # noqa: E402
-from cdimport.config import STAGING_PREFIX, STATE_FILE_NAME  # noqa: E402
+from cdport import app, cli, config, cover, covertool, disc, install, library, lyrics, musicbrainz, proc, rip, selfupdate, state, tags, tools, ui  # noqa: E402
+from cdport.config import STAGING_PREFIX, STATE_FILE_NAME  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -50,7 +50,7 @@ def no_real_tools(monkeypatch, tmp_path_factory):
 
 @pytest.fixture(autouse=True)
 def no_update_check(monkeypatch):
-    """The check for a newer cdimport asks GitHub: never in tests, unless a
+    """The check for a newer cdport asks GitHub: never in tests, unless a
     test fakes its answer itself (the cache is private_dirs' business)."""
     def offline(timeout=30):
         raise selfupdate.UpdateError("no network in tests")
@@ -292,10 +292,10 @@ def test_ioctl_status_maps_codes(monkeypatch):
     assert disc._ioctl_status("/dev/sr0") == "unknown"
 
 
-def test_drive_lock_keeps_a_second_cdimport_off_the_drive(tmp_path):
+def test_drive_lock_keeps_a_second_cdport_off_the_drive(tmp_path):
     assert disc.busy("/dev/sr0") is None
     with disc.hold("/dev/sr0"):
-        assert disc.busy("/dev/sr0") == f"/dev/sr0 is in use by another cdimport (process {os.getpid()})"
+        assert disc.busy("/dev/sr0") == f"/dev/sr0 is in use by another cdport (process {os.getpid()})"
         assert disc.busy("/dev/sr1") is None
         with pytest.raises(disc.DriveBusy):
             with disc.hold("/dev/sr0"):
@@ -310,7 +310,7 @@ def test_drive_lock_keeps_a_second_cdimport_off_the_drive(tmp_path):
 
 def test_drive_lock_held_by_another_process(tmp_path):
     import subprocess
-    child = ("import sys, time; from cdimport import disc\n"
+    child = ("import sys, time; from cdport import disc\n"
              "with disc.hold('/dev/sr0'):\n    print('locked', flush=True); time.sleep(30)\n")
     proc_ = subprocess.Popen([sys.executable, "-c", child], stdout=subprocess.PIPE, text=True,
                              cwd=Path(__file__).resolve().parent.parent)
@@ -334,7 +334,7 @@ def test_find_disc_leaves_a_busy_drive_alone(tmp_path, monkeypatch, capsys):
         with pytest.raises(app.Quit):
             app.find_disc(session)
     out = capsys.readouterr().out
-    assert "/dev/sr0 is in use by another cdimport" in out and "wait for a disc or a free drive" in out
+    assert "/dev/sr0 is in use by another cdport" in out and "wait for a disc or a free drive" in out
 
 
 def test_disc_step_holds_the_drive_until_the_rip_is_done(tmp_path, monkeypatch):
@@ -347,7 +347,7 @@ def test_disc_step_holds_the_drive_until_the_rip_is_done(tmp_path, monkeypatch):
         return state.AlbumState(tmp_path)
     monkeypatch.setattr(app, "preview_and_rip", preview_and_rip)
     app.disc_and_rip(session)
-    assert seen[0] and "another cdimport" in seen[0]
+    assert seen[0] and "another cdport" in seen[0]
     assert disc.busy("/dev/sr0") is None
 
 
@@ -1073,7 +1073,7 @@ def test_step_0_offers_install_when_cyanrip_is_missing(tmp_path, monkeypatch):
 
 
 
-# --- a newer cdimport ----------------------------------------------------------
+# --- a newer cdport ----------------------------------------------------------
 REAL_LATEST = selfupdate.latest  # before no_update_check replaces it
 
 
@@ -1115,27 +1115,27 @@ def pipx_venv(tmp_path, url, pip_args=()):
     venv = tmp_path / "venv"
     venv.mkdir()
     (venv / "pipx_metadata.json").write_text(json.dumps({
-        "main_package": {"package": "cdimport", "package_or_url": url, "pip_args": list(pip_args)},
+        "main_package": {"package": "cdport", "package_or_url": url, "pip_args": list(pip_args)},
         "venv_args": []}), encoding="utf-8")
     return venv
 
 
 def test_a_pipx_install_is_upgraded_or_stays_pinned(tmp_path):
-    how = selfupdate.how_installed("1.1.0", pipx_venv(tmp_path, "git+https://github.com/sobakah/cdimport.git"))
-    assert how.kind == "pipx" and how.argv[1:] == ["upgrade", "cdimport"] and how.command == "pipx upgrade cdimport"
+    how = selfupdate.how_installed("1.1.0", pipx_venv(tmp_path, "git+https://github.com/sobakah/cdport.git"))
+    assert how.kind == "pipx" and how.argv[1:] == ["upgrade", "cdport"] and how.command == "pipx upgrade cdport"
     (tmp_path / "venv" / "pipx_metadata.json").unlink()
     (tmp_path / "venv").rmdir()
-    how = selfupdate.how_installed("1.1.0", pipx_venv(tmp_path, "git+https://github.com/sobakah/cdimport.git@0.6.3"))
-    assert how.command == "pipx install --force git+https://github.com/sobakah/cdimport.git@1.1.0"
+    how = selfupdate.how_installed("1.1.0", pipx_venv(tmp_path, "git+https://github.com/sobakah/cdport.git@0.6.3"))
+    assert how.command == "pipx install --force git+https://github.com/sobakah/cdport.git@1.1.0"
 
 
 def test_a_checkout_or_another_install_gets_a_command(tmp_path):
     top = tmp_path / "checkout"
     (top / ".git").mkdir(parents=True)
-    how = selfupdate.how_installed("1.1.0", tmp_path / "no-venv", top / "cdimport")
+    how = selfupdate.how_installed("1.1.0", tmp_path / "no-venv", top / "cdport")
     assert how.kind == "checkout" and how.argv is None and how.command == f"git -C {top} pull"
-    how = selfupdate.how_installed("1.1.0", tmp_path / "no-venv", tmp_path / "site" / "cdimport")
-    assert how.kind == "other" and how.argv is None and how.command.endswith("cdimport.git@1.1.0")
+    how = selfupdate.how_installed("1.1.0", tmp_path / "no-venv", tmp_path / "site" / "cdport")
+    assert how.kind == "other" and how.argv is None and how.command.endswith("cdport.git@1.1.0")
 
 
 def test_the_answer_is_remembered_for_the_next_start(tmp_path):
@@ -1146,39 +1146,39 @@ def test_the_answer_is_remembered_for_the_next_start(tmp_path):
     assert selfupdate.remember(state_file, "9.0.0") is None
     assert selfupdate.known(state_file) == "9.0.0"
     assert selfupdate.remember(state_file, config.__version__) is None
-    assert selfupdate.known(state_file) is None  # not newer than this cdimport
+    assert selfupdate.known(state_file) is None  # not newer than this cdport
 
 
 def test_restart_command(monkeypatch, tmp_path):
-    script = tmp_path / "cdimport"
+    script = tmp_path / "cdport"
     script.write_text("#!/bin/sh\n")
     script.chmod(0o755)
     monkeypatch.setattr(sys, "argv", [str(script), "--web"])
     assert selfupdate.restart_argv() == [str(script), "--web"]
-    monkeypatch.setattr(sys, "argv", ["/somewhere/cdimport/__main__.py"])
-    assert selfupdate.restart_argv() == [sys.executable, "-m", "cdimport"]
+    monkeypatch.setattr(sys, "argv", ["/somewhere/cdport/__main__.py"])
+    assert selfupdate.restart_argv() == [sys.executable, "-m", "cdport"]
     monkeypatch.setattr(sys, "argv", ["run.py"])
     assert selfupdate.restart_argv() == [sys.executable, "run.py"]
 
 
-def update_session(tmp_path, monkeypatch, mode, found="9.0.0", argv=("/usr/bin/pipx", "upgrade", "cdimport")):
+def update_session(tmp_path, monkeypatch, mode, found="9.0.0", argv=("/usr/bin/pipx", "upgrade", "cdport")):
     monkeypatch.setattr(selfupdate, "latest", lambda timeout=30: found)
     monkeypatch.setattr(selfupdate, "how_installed", lambda version: selfupdate.Install(
-        "pipx", "pipx upgrade cdimport", list(argv) if argv else None))
+        "pipx", "pipx upgrade cdport", list(argv) if argv else None))
     return app.new_session(default_cfg(), app.Options(self_update=mode), tmp_path / "config.json")
 
 
-def test_a_newer_cdimport_is_installed_and_started_again(tmp_path, monkeypatch, capsys):
+def test_a_newer_cdport_is_installed_and_started_again(tmp_path, monkeypatch, capsys):
     session = update_session(tmp_path, monkeypatch, "now")
     ran = []
     monkeypatch.setattr(app.proc, "run", lambda cmd, cwd=None: ran.append(cmd) or 0)
-    monkeypatch.setattr(sys, "argv", ["/home/u/.local/bin/cdimport", "--update", "-w", "x"])
+    monkeypatch.setattr(sys, "argv", ["/home/u/.local/bin/cdport", "--update", "-w", "x"])
     monkeypatch.setattr(selfupdate.shutil, "which", lambda name: name)
     feed_input(monkeypatch, [""])  # update now? yes
     with pytest.raises(app.Restart) as restart:
         app.offer_self_update(session)
-    assert ran == [["/usr/bin/pipx", "upgrade", "cdimport"]]
-    assert restart.value.argv == ["/home/u/.local/bin/cdimport", "-w", "x"]  # without --update
+    assert ran == [["/usr/bin/pipx", "upgrade", "cdport"]]
+    assert restart.value.argv == ["/home/u/.local/bin/cdport", "-w", "x"]  # without --update
     out = capsys.readouterr().out
     assert "9.0.0 is available" in out and "releases/tag/9.0.0" in out
 
@@ -1212,7 +1212,7 @@ def test_every_start_asks_without_waiting(tmp_path, monkeypatch, capsys):
     answer.set()
     feed_input(monkeypatch, ["n"])  # update now? no
     app.late_self_update(session)
-    assert "cdimport 9.0.0 is available" in capsys.readouterr().out   # at the end of the run
+    assert "cdport 9.0.0 is available" in capsys.readouterr().out   # at the end of the run
     asked = []
     session = update_session(tmp_path, monkeypatch, "start", found=config.__version__)
     monkeypatch.setattr(selfupdate, "latest", lambda timeout=30: asked.append(1) or config.__version__)
@@ -1255,7 +1255,7 @@ def test_other_front_ends_and_installs_get_the_command(tmp_path, monkeypatch, fr
     monkeypatch.setattr(app.proc, "run", lambda cmd, cwd=None: pytest.fail("updated without a way to restart"))
     recorder = front()
     app.offer_self_update(session)
-    assert any("To update: pipx upgrade cdimport" in text for _, text, _ in recorder.messages)
+    assert any("To update: pipx upgrade cdport" in text for _, text, _ in recorder.messages)
     assert recorder.questions == []
     ui.use(None)
     session = update_session(tmp_path, monkeypatch, "now", argv=None)
@@ -1277,16 +1277,16 @@ def test_update_options_on_the_command_line(tmp_path, monkeypatch):
         cli.main(["--config", str(cfg_path), "--web", "--update", "--return-url", "http://127.0.0.1:5/"])
 
 
-def test_after_an_update_cdimport_starts_again(tmp_path, monkeypatch):
+def test_after_an_update_cdport_starts_again(tmp_path, monkeypatch):
     def restart(session):
-        raise app.Restart(["/home/u/.local/bin/cdimport", "-w", "x"])
+        raise app.Restart(["/home/u/.local/bin/cdport", "-w", "x"])
     monkeypatch.setattr(cli, "run_session", restart)
     started = []
     monkeypatch.setattr(cli.os, "execvp", lambda file, argv: started.append((file, argv)))
     cfg_path = tmp_path / "config.json"
     cfg_path.write_text("{}", encoding="utf-8")
     cli.main(["--config", str(cfg_path)])
-    assert started == [("/home/u/.local/bin/cdimport", ["/home/u/.local/bin/cdimport", "-w", "x"])]
+    assert started == [("/home/u/.local/bin/cdport", ["/home/u/.local/bin/cdport", "-w", "x"])]
 
 # --- drive offset ------------------------------------------------------------
 def offset_session(tmp_path, offset=None):
@@ -1407,7 +1407,7 @@ def test_run_tail_keeps_reading_while_the_tool_cleans_up(monkeypatch, capsys):
     interrupted = []
 
     def write(data):
-        # Ctrl+C reaches the tool and cdimport together, as from the terminal.
+        # Ctrl+C reaches the tool and cdport together, as from the terminal.
         if b"ready" in data and not interrupted:
             interrupted.append(1)
             real_copy[0].send_signal(2)
@@ -2002,7 +2002,7 @@ def test_music_dir_suggestion_falls_back_to_music():
     assert config.music_dir_suggestion() == "~/Music"
 
 
-# --- a rip running in another cdimport ---------------------------------------
+# --- a rip running in another cdport ---------------------------------------
 @pytest.mark.skipif(sys.platform == "win32", reason="the lock uses flock")
 def test_running_rip_is_locked_and_left_alone(tmp_path, monkeypatch, capsys):
     session = offset_session(tmp_path)
@@ -2028,7 +2028,7 @@ def test_staging_folder_is_locked_before_it_exists(tmp_path, monkeypatch):
 
     def mkdir(self, *args, **kwargs):
         if self.name.startswith(STAGING_PREFIX):
-            seen.append(rip.in_use(self))                 # what another cdimport would see
+            seen.append(rip.in_use(self))                 # what another cdport would see
         return real_mkdir(self, *args, **kwargs)
     monkeypatch.setattr(Path, "mkdir", mkdir)
     with rip.staging_dir(tmp_path) as first, rip.staging_dir(tmp_path) as second:
@@ -2186,7 +2186,7 @@ def test_cover_from_own_file_and_bad_files(tmp_path, monkeypatch):
     assert (folder / "cover.jpg").read_bytes() == b"theirs"
 
 
-# --- cdimport-cover ----------------------------------------------------------
+# --- cdport-cover ----------------------------------------------------------
 def test_search_by_tags_when_there_is_no_release_id(tmp_path, monkeypatch, capsys):
     folder = tmp_path / "Floral Shoppe"
     folder.mkdir()
@@ -2424,7 +2424,7 @@ def test_old_lyrembed_is_not_asked_and_gets_no_flag(tmp_path, monkeypatch, album
 @pytest.mark.parametrize("batch_code, found, answers, modes, says", [
     # Every track got lyrics: offer to check them.
     (lyrics.EXIT_OK, True, ["l"], ["auto", "interactive"], "Every track has lyrics (1)"),
-    # lyrembed exits 0 although it found nothing: cdimport sees it in the tags.
+    # lyrembed exits 0 although it found nothing: cdport sees it in the tags.
     (lyrics.EXIT_OK, False, [""], ["auto", "interactive"], "1 of 1 tracks have no lyrics"),
     # Exit 1 means files it could not write; continuing keeps what it embedded.
     (lyrics.EXIT_BATCH_FAILURES, False, ["c"], ["auto"], "could not read or write some files"),
@@ -2552,7 +2552,7 @@ import http.client  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
 
-from cdimport import web  # noqa: E402
+from cdport import web  # noqa: E402
 
 
 def _wait_for_question(front, timeout=5.0):
@@ -2616,7 +2616,7 @@ def test_waiting_for_a_disc_on_the_page_ends_on_stop(monkeypatch):
         thread, result = _in_thread(lambda: app.wait_for_disc(""))
         time.sleep(0.05)
         stopped = time.monotonic()
-        front.stop()                                      # the page's "Stop cdimport"
+        front.stop()                                      # the page's "Stop cdport"
         thread.join(2)
         assert result == [None] and time.monotonic() - stopped < 1   # not after the next poll
     finally:
@@ -2705,7 +2705,7 @@ def test_web_run_goes_through_the_flow_and_ends_with_its_code(monkeypatch, tmp_p
         run = web.Run(app.new_session(default_cfg(), app.Options(), tmp_path / "config.json"))
         run.start()
         _wait_for_question(run.front)
-        run.stop()                                         # the page's "Stop cdimport"
+        run.stop()                                         # the page's "Stop cdport"
         run.thread.join(2)
         assert run.front.finished == 130 and run.front.events[-1]["text"] == "Stopped."
     finally:
@@ -2783,18 +2783,18 @@ def test_web_flags(capsys):
 
 
 # --- app-menu entry (1.1.0) ------------------------------------------------------
-from cdimport import desktop  # noqa: E402
+from cdport import desktop  # noqa: E402
 
 
 def test_desktop_exec_arguments_are_quoted_and_escaped():
-    assert desktop.exec_argument("/usr/bin/cdimport") == "/usr/bin/cdimport"
+    assert desktop.exec_argument("/usr/bin/cdport") == "/usr/bin/cdport"
     assert desktop.exec_argument("/home/a b/run.py") == '"/home/a b/run.py"'
     assert desktop.exec_argument("/m/100%") == "/m/100%%"
     # A literal $ is escaped inside the quotes; the string escape then doubles the backslash.
     assert desktop.exec_argument("/x/$y") == '"/x/\\\\$y"'
 
 
-def test_desktop_entry_starts_the_page_of_the_cdimport_that_wrote_it(tmp_path, monkeypatch, capsys):
+def test_desktop_entry_starts_the_page_of_the_cdport_that_wrote_it(tmp_path, monkeypatch, capsys):
     import shutil
 
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -2817,7 +2817,7 @@ def test_desktop_entry_starts_the_page_of_the_cdimport_that_wrote_it(tmp_path, m
 
 
 def test_desktop_entry_for_an_installed_launcher(tmp_path, monkeypatch):
-    shim = tmp_path / "bin" / "cdimport"
+    shim = tmp_path / "bin" / "cdport"
     shim.parent.mkdir()
     shim.write_text("", encoding="utf-8")
     monkeypatch.setattr(sys, "argv", [str(shim)])
@@ -2838,7 +2838,7 @@ def test_a_running_tool_can_be_stopped_like_ctrl_c(front):
 
 
 # --- the page's tag editor and pictures ------------------------------------------
-from cdimport import tageditor  # noqa: E402
+from cdport import tageditor  # noqa: E402
 
 
 def _ripped_album(tmp_path, titles=("Opening", "Paper Moon (feat. Guest)"), album="Night: Lines"):
@@ -2994,7 +2994,7 @@ def test_on_the_page_the_tags_step_offers_its_own_editor_first(tmp_path, monkeyp
 def test_lyrembed_is_told_where_its_page_leads_back(tmp_path, monkeypatch):
     cfg = default_cfg()
     cmd = lyrics.lyrembed_command("lyrembed", cfg, tmp_path, "interactive", return_url="http://127.0.0.1:41877/")
-    assert cmd[2:] == ["--no-browser", "--return-url", "http://127.0.0.1:41877/", "--return-name", "cdimport"]
+    assert cmd[2:] == ["--no-browser", "--return-url", "http://127.0.0.1:41877/", "--return-name", "cdport"]
     assert lyrics.lyrembed_command("lyrembed", cfg, tmp_path, "auto", None, "http://127.0.0.1:1/")[2:] == ["--auto"]
 
     with_return = "  --no-browser\n  --return-url URL  a 'Done' button ..."
@@ -3044,7 +3044,7 @@ def test_the_lyrics_step_hands_over_when_both_can(tmp_path, monkeypatch, capsys,
     album = state.load(album_dir)
     album.mark("tags")
     assert app.lyrics_step(session, album) and passed == ["http://127.0.0.1:41877/"]
-    assert "Done – back to cdimport" in capsys.readouterr().out
+    assert "Done – back to cdport" in capsys.readouterr().out
     session.page_url = ""                              # in the terminal: nothing to come back to
     album.done.remove("lyrics")
     assert app.lyrics_step(session, album) and passed[-1] == ""
@@ -3249,7 +3249,7 @@ def test_tag_editor_puts_names_back_when_a_rename_fails(tmp_path, monkeypatch):
     with pytest.raises(tageditor.TagEditError, match="nothing was saved"):
         tageditor.save(folder, album)
     assert sorted(p.name for p in folder.glob("*.flac")) == ["01 - A.flac", "02 - B.flac"]
-    assert not list(folder.glob(".cdimport-rename-*"))
+    assert not list(folder.glob(".cdport-rename-*"))
     assert mutagen.flac.FLAC(folder / "01 - A.flac")["title"] == ["A"]
     # So the same save can be tried again, and renames this time.
     monkeypatch.setattr(Path, "rename", real_rename)
@@ -3612,11 +3612,11 @@ def test_a_look_at_a_free_drive_leaves_its_lock_file_alone(tmp_path, monkeypatch
 
 
 def test_a_closed_pipe_does_not_fail_a_finished_run(tmp_path):
-    # lyrembed started cdimport and has ended: nobody reads the last line.
+    # lyrembed started cdport and has ended: nobody reads the last line.
     read_end, write_end = os.pipe()
     os.close(read_end)
     root = Path(__file__).resolve().parent.parent
-    code = f"import sys; sys.path.insert(0, {str(root)!r})\nfrom cdimport import web\nweb._say('cdimport finished: /album')"
+    code = f"import sys; sys.path.insert(0, {str(root)!r})\nfrom cdport import web\nweb._say('cdport finished: /album')"
     done = subprocess.run([sys.executable, "-c", code], stdout=write_end, stderr=subprocess.PIPE, text=True, timeout=20)
     os.close(write_end)
     assert done.returncode == 0 and done.stderr == ""
@@ -3706,10 +3706,10 @@ def test_restart_finds_the_launcher_as_windows_starts_it(monkeypatch):
     # The launcher's sys.argv[0] has lost its .exe, so only which() finds the file.
     from pathlib import PureWindowsPath
 
-    monkeypatch.setattr(sys, "argv", [r"C:\pipx\venvs\cdimport\Scripts\cdimport", "--flag"])
+    monkeypatch.setattr(sys, "argv", [r"C:\pipx\venvs\cdport\Scripts\cdport", "--flag"])
     monkeypatch.setattr(selfupdate.shutil, "which", lambda name: name + ".exe")
     monkeypatch.setattr(selfupdate, "Path", PureWindowsPath)
-    assert selfupdate.restart_argv() == [r"C:\pipx\venvs\cdimport\Scripts\cdimport.exe", "--flag"]
+    assert selfupdate.restart_argv() == [r"C:\pipx\venvs\cdport\Scripts\cdport.exe", "--flag"]
 
 
 def test_on_the_page_an_empty_prefilled_answer_stays_empty():
@@ -3730,7 +3730,7 @@ def test_on_the_page_an_empty_prefilled_answer_stays_empty():
 # --- updating on the page ---------------------------------------------------------
 def test_the_page_installs_an_update_at_step_0_and_starts_again(tmp_path, monkeypatch, front):
     session = update_session(tmp_path, monkeypatch, "now")
-    monkeypatch.setattr(sys, "argv", ["/home/u/.local/bin/cdimport", "--web", "--update"])
+    monkeypatch.setattr(sys, "argv", ["/home/u/.local/bin/cdport", "--web", "--update"])
     monkeypatch.setattr(selfupdate.shutil, "which", lambda name: name)
     shown = []
     monkeypatch.setattr(app.proc, "run_tail", lambda cmd, cwd=None: shown.append(cmd) or (0, []))
@@ -3738,9 +3738,9 @@ def test_the_page_installs_an_update_at_step_0_and_starts_again(tmp_path, monkey
     monkeypatch.setattr(recorder, "supports", lambda feature: feature == "self_update")
     with pytest.raises(app.Restart) as restart:
         app.offer_self_update(session)
-    assert recorder.questions[0][1] == "Update cdimport to 9.0.0 now?"
-    assert shown == [["/usr/bin/pipx", "upgrade", "cdimport"]]               # its output goes to the page
-    assert restart.value.argv == ["/home/u/.local/bin/cdimport", "--web"]    # without --update
+    assert recorder.questions[0][1] == "Update cdport to 9.0.0 now?"
+    assert shown == [["/usr/bin/pipx", "upgrade", "cdport"]]               # its output goes to the page
+    assert restart.value.argv == ["/home/u/.local/bin/cdport", "--web"]    # without --update
 
 
 def test_no_on_the_page_goes_on_without_updating(tmp_path, monkeypatch, front):
@@ -3760,13 +3760,13 @@ def test_an_update_found_late_is_offered_at_the_end_without_a_restart(tmp_path, 
     monkeypatch.setattr(app.proc, "run", lambda cmd, cwd=None: ran.append(cmd) or 0)
     feed_input(monkeypatch, [""])                                               # update now? yes
     app.late_self_update(session)                                               # raises no Restart
-    assert ran == [["/usr/bin/pipx", "upgrade", "cdimport"]]
+    assert ran == [["/usr/bin/pipx", "upgrade", "cdport"]]
     assert "the next start uses it" in capsys.readouterr().out
 
 
 def _serving(monkeypatch, flow):
     """web.serve with *flow* as the run; what it printed and its server."""
-    from cdimport import cli
+    from cdport import cli
 
     monkeypatch.setattr(cli, "run_session", flow)
     said, made = [], []
@@ -3790,7 +3790,7 @@ def _serving(monkeypatch, flow):
 
 
 def _restarting_flow(session):
-    raise app.Restart(["cdimport", "--web"])
+    raise app.Restart(["cdport", "--web"])
 
 
 def test_an_update_on_the_page_hands_its_address_to_the_new_process(tmp_path, monkeypatch):
@@ -3801,7 +3801,7 @@ def test_an_update_on_the_page_hands_its_address_to_the_new_process(tmp_path, mo
     ui.use(None)
     url = said[0].split()[-1]
     port, token = url.removeprefix("http://127.0.0.1:").split("/?token=")
-    assert restart.value.argv == ["cdimport", "--web"] and restart.value.address == f"{port}:{token}"
+    assert restart.value.argv == ["cdport", "--web"] and restart.value.address == f"{port}:{token}"
     assert made[0].front.restarting and made[0].front.finished is None
     assert made[0].front.snapshot(0)["restarting"]
 
@@ -3859,15 +3859,130 @@ def test_the_restart_address_stays_away_from_tools(monkeypatch):
 def test_a_restart_passes_the_address_on(monkeypatch):
     started = []
     monkeypatch.setattr(cli.os, "execvp", lambda file, argv: started.append((argv, os.environ[cli.RESTART_ENV])))
-    cli._restart(app.Restart(["/home/u/.local/bin/cdimport", "--web"], "8123:abc"))
-    assert started == [(["/home/u/.local/bin/cdimport", "--web"], "8123:abc")]
+    cli._restart(app.Restart(["/home/u/.local/bin/cdport", "--web"], "8123:abc"))
+    assert started == [(["/home/u/.local/bin/cdport", "--web"], "8123:abc")]
     monkeypatch.delenv(cli.RESTART_ENV)
 
 
-def test_a_new_cdimport_that_cannot_start_is_reported(monkeypatch, capsys):
+def test_a_new_cdport_that_cannot_start_is_reported(monkeypatch, capsys):
     def refuse(file, argv):
         raise OSError(2, "No such file")
     monkeypatch.setattr(cli.os, "execvp", refuse)
-    assert cli._restart(app.Restart(["/gone/cdimport"], "8123:abc")) == 1
+    assert cli._restart(app.Restart(["/gone/cdport"], "8123:abc")) == 1
     assert "start it again yourself" in "".join(capsys.readouterr())
     assert cli.RESTART_ENV not in os.environ
+
+
+# --- the new name (1.3.0): cdimport is now cdport ------------------------------
+def test_cdimports_settings_move_to_cdport_and_the_old_place_links_there(tmp_path, monkeypatch):
+    home = tmp_path / "config-home"
+    old = home / "cdimport"
+    old.mkdir(parents=True)
+    (old / "config.json").write_text('{"cyanrip": {"offset": 6}}', encoding="utf-8")
+    assert config.default_config_path() == old / "config.json"   # read where they are until moved
+    worked, message = config.move_old_config()
+    assert worked and "cdport" in message
+    assert config.default_config_path() == home / "cdport" / "config.json"
+    assert old.is_symlink() and json.loads((old / "config.json").read_text())["cyanrip"]["offset"] == 6
+    assert config.load_config()[0]["cyanrip"]["offset"] == 6
+    assert config.move_old_config() is None                        # once only
+
+
+def test_nothing_moves_without_cdimports_settings_or_with_cdports_already_there(tmp_path):
+    home = tmp_path / "config-home"
+    assert config.move_old_config() is None and not home.exists()
+    (home / "cdimport").mkdir(parents=True)
+    (home / "cdport").mkdir()
+    assert config.move_old_config() is None
+    assert not (home / "cdimport").is_symlink() and config.config_dir() == home / "cdport"
+
+
+def test_a_failed_move_keeps_using_the_settings_where_they_are(tmp_path, monkeypatch):
+    old = tmp_path / "config-home" / "cdimport"
+    old.mkdir(parents=True)
+
+    def refuse(self, target):
+        raise OSError(13, "Permission denied")
+    monkeypatch.setattr(Path, "rename", refuse)
+    worked, message = config.move_old_config()
+    assert not worked and "Permission denied" in message
+    assert config.config_dir() == old
+
+
+def test_the_move_is_reported_at_start(tmp_path, monkeypatch, capsys):
+    (tmp_path / "config-home" / "cdimport").mkdir(parents=True)
+    monkeypatch.setattr(app, "new_session", lambda *a: (_ for _ in ()).throw(SystemExit(0)))
+    with pytest.raises(SystemExit):
+        cli.main([])
+    assert "cdimport is now cdport" in capsys.readouterr().out
+
+
+def test_started_as_cdimport_the_lines_other_programs_read_keep_the_old_name(tmp_path, monkeypatch):
+    # lyrembed starts `cdimport` and looks for "cdimport is running at" and
+    # "cdimport finished:"; Gatefold also starts `cdimport`.
+    monkeypatch.setattr(sys, "argv", ["/home/u/.local/bin/cdimport", "--web"])
+    assert config.program_name() == "cdimport"
+    assert web.FINISHED_LINE.format(name=config.program_name(), folder="/a") == "cdimport finished: /a"
+    said = []
+    monkeypatch.setattr(web, "_say", said.append)
+
+    class Stopped(web._Server):
+        def __init__(self, *args):
+            super().__init__(*args)
+            self.stop.set()
+
+    monkeypatch.setattr(web, "_Server", Stopped)
+    session = app.new_session(default_cfg(), app.Options(), tmp_path / "config.json")
+    web.serve(session, open_browser=False)
+    assert said[0].startswith("cdimport is running at http://127.0.0.1:")
+    monkeypatch.setattr(sys, "argv", ["/home/u/.local/bin/cdport", "--web"])
+    said.clear()
+    web.serve(session, open_browser=False)
+    assert config.program_name() == "cdport" and said[0].startswith("cdport is running at ")
+
+
+def test_the_restart_address_of_a_cdimport_that_updated_itself_is_taken(monkeypatch):
+    monkeypatch.setenv(cli.OLD_RESTART_ENV, "8123:abc")
+    assert cli._take_restart() == (8123, "abc")
+    assert cli.OLD_RESTART_ENV not in os.environ
+
+
+def test_restart_through_the_cdimport_alias(monkeypatch, tmp_path):
+    script = tmp_path / "cdimport"
+    script.write_text("#!/bin/sh\n")
+    script.chmod(0o755)
+    monkeypatch.setattr(sys, "argv", [str(script), "--web"])
+    assert selfupdate.restart_argv() == [str(script), "--web"]
+
+
+def test_the_new_menu_entry_replaces_cdimports(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setattr(desktop, "_refresh", lambda folder: None)
+    monkeypatch.setattr(sys, "argv", [str(tmp_path / "cdport")])
+    old_entry = tmp_path / "data" / "applications" / "cdimport.desktop"
+    old_icon = desktop.icon_path("cdimport.svg")
+    for path, text in ((old_entry, "[Desktop Entry]\nName=cdimport\n"), (old_icon, "<svg/>")):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    desktop.install()
+    assert desktop.entry_path().exists() and not old_entry.exists() and not old_icon.exists()
+    # One by that name that cdimport did not write stays.
+    old_entry.write_text("[Desktop Entry]\nName=Something else\n", encoding="utf-8")
+    desktop.remove()
+    assert old_entry.exists() and not desktop.entry_path().exists()
+
+
+def test_the_old_commands_stay_as_aliases():
+    # Read as text: tomllib needs Python 3.11, cdport runs on 3.10.
+    lines = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(encoding="utf-8").splitlines()
+    for line in ('cdport = "cdport.cli:main"', 'cdimport = "cdport.cli:main"',
+                 'cdport-cover = "cdport.covertool:main"', 'cdimport-cover = "cdport.covertool:main"'):
+        assert line in lines
+
+
+def test_the_page_repeats_the_move_for_a_start_without_a_terminal(tmp_path, monkeypatch):
+    (tmp_path / "config-home" / "cdimport").mkdir(parents=True)
+    passed = {}
+    monkeypatch.setattr(web, "serve", lambda session, **kwargs: passed.update(kwargs) or 0)
+    assert cli.main(["--web", "--no-browser"]) == 0
+    assert passed["notes"] and "cdimport is now cdport" in passed["notes"][0] and passed["warnings"] == []
