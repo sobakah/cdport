@@ -50,6 +50,13 @@ def build_parser() -> argparse.ArgumentParser:
     entry.add_argument("--install-desktop-entry", action="store_true",
                        help="add cdport to the app menu (Linux/BSD), starting this cdport's page, then exit")
     entry.add_argument("--remove-desktop-entry", action="store_true", help="remove cdport from the app menu, then exit")
+    bus = parser.add_argument_group("D-Bus (for Gatefold and other programs, also from a Flatpak)")
+    service = bus.add_mutually_exclusive_group()
+    service.add_argument("--install-dbus-service", action="store_true",
+                         help="let the session bus start this cdport when a program calls it, then exit")
+    service.add_argument("--remove-dbus-service", action="store_true", help="undo --install-dbus-service, then exit")
+    service.add_argument("--dbus", action="store_true",
+                         help="serve the D-Bus interface until idle (what the bus starts)")
     return parser
 
 
@@ -99,6 +106,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.install_desktop_entry or args.remove_desktop_entry:
         return _desktop_entry(install=args.install_desktop_entry)
+    if args.dbus:
+        from . import dbus_service
+
+        return dbus_service.serve()
+    if args.install_dbus_service or args.remove_dbus_service:
+        return _dbus_service(install=args.install_dbus_service)
 
     moved = config.move_old_config()
     try:
@@ -166,6 +179,26 @@ def _desktop_entry(install: bool) -> int:
             ui.success("Removed: " + ", ".join(str(p) for p in removed) if removed else "There was no app-menu entry.")
     except desktop.DesktopError as exc:
         ui.error(str(exc))
+        return 2
+    return 0
+
+
+def _dbus_service(install: bool) -> int:
+    from . import dbus_service
+
+    try:
+        if install:
+            path, command, unreloaded = dbus_service.install_service_file()
+            ui.success(f"The session bus starts cdport for {dbus_service.BUS_NAME}: {path}")
+            ui.info(f"It starts: {' '.join(command)} --dbus")
+            if unreloaded:
+                ui.warn(f"Could not tell the bus to read it ({unreloaded}); it does at the next login.")
+            ui.info("Run this again after installing cdport elsewhere (pipx, another checkout).")
+        else:
+            removed = dbus_service.remove_service_file()
+            ui.success(f"Removed: {removed}" if removed else "There was no D-Bus service file.")
+    except OSError as exc:
+        ui.error(f"Could not {'write' if install else 'remove'} the D-Bus service file: {exc}")
         return 2
     return 0
 

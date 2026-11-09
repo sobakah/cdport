@@ -77,7 +77,8 @@ the page.
 rip (`rip.drop_r128_gain`, see "Known issues"); step 0 always says what the
 update check found.
 1.3.0 (2026-11-09): renamed from cdimport to cdport, with the old name kept
-where other programs depend on it (see "The name" below).
+where other programs depend on it (see "The name" below), and the D-Bus
+interface for Gatefold (`dbus_service.py`, see "D-Bus interface" below).
 
 1.1.0 (2026-10-29): cyanrip installed and updated on the page
 (`install.run_package_manager`, `proc.run_shown`), the app-menu entry
@@ -89,7 +90,7 @@ Layout: `cdport/` package (`app.py` runs the steps, one module per step:
 `config`, `ui`, `cli`, `install`, `cover` (Cover Art Archive/MusicBrainz,
 no UI), `musicbrainz` (release search for discs MusicBrainz does not know,
 no UI), `covertool` (the cover step and the `cdport-cover` command) and
-`desktop` (the app-menu entry)),
+`desktop` (the app-menu entry), `dbus_service` (the D-Bus interface)),
 `run.py` and `cover.py` launchers, `tests/test_cdport.py`.
 `config.example.json` is generated from `DEFAULT_CONFIG` and `SETTING_HELP`
 in `config.py`. After adding or changing a setting, update both and
@@ -693,6 +694,62 @@ A front end that wants live tool progress keeps the pseudo-terminal
   status pages.
 - `static/vendor/preact-htm.js` is the file lyrembed vendors (htm 3.1.1's
   Preact bundle, checksum and licenses in `LICENSES.txt`).
+
+## D-Bus interface
+
+Asked for by the maintainer on 2026-11-09, for Gatefold, which may become a
+Flatpak: Gatefold's CONCEPT.md (§12, "The companion tools as Flatpaks",
+commit cc371a0 there) has the companion tools stay pipx programs on the
+host, each owning a session-bus name the sandbox may call
+(`--talk-name`), started by the bus through a service file. A sandbox can
+neither start host programs nor read `~/.config/cdport` or the working
+folder, so everything Gatefold did through the command line, the config
+file and `.cdimport.json` (§10.2 there) has a call:
+
+- Bus name `io.github.sobakah.cdport` (the app ID cdport would have as a
+  Flatpak: `io.github.<user>.<repo>`), object `/io/github/sobakah/cdport`,
+  interface `io.github.sobakah.cdport1` (the number is the interface's
+  version, also in `GetInfo`'s `InterfaceVersion`; a change that breaks
+  callers gets a `cdport2` next to it). The calls are in the module's
+  docstring and the README.
+- `Import` starts a page run as a child process (`dbus_service.page_command`:
+  the same cdport, `--web --no-browser`, its own session so the service's
+  end never stops a rip) and answers once the run prints its address (the
+  reply waits, the loop does not). The run's output is read to the end in
+  a thread per run; "… finished: FOLDER" becomes `Finished`'s album. `Stop`
+  sends SIGINT: without a terminal `web.serve` passes it on to a running
+  tool (`proc.terminal_interrupts_tools`), as Gatefold's own SIGINT did.
+- **No way out of a sandbox** (Flathub would treat one like `flatpak-spawn
+  --host`): no command, no free folder. `Folder` must be one of
+  `UnfinishedAlbums`; `Library` must be an existing absolute folder (as
+  `-l`, where the user still confirms the move on the page).
+- `Service` holds the calls and runs without the bus (tests drive it with
+  stand-in processes); `serve` is the jeepney loop: `receive`/`send` only,
+  never `send_and_get_reply` after start-up, which drops every message that
+  is not its reply. Even `RequestName` is waited for by hand
+  (`_request_name`): started by the bus, the call that started cdport
+  arrives as soon as the name is taken, before that reply (seen 2026-11-09:
+  GetInfo went unanswered). An activated service answers on
+  `DBUS_STARTER_ADDRESS`.
+- Ends after `IDLE_EXIT` (60 s) without calls or runs, so an old version
+  does not keep running after a pipx update; the bus starts it again.
+- `--install-dbus-service` writes `~/.local/share/dbus-1/services/
+  io.github.sobakah.cdport.service` (`Exec=` the launcher, as the desktop
+  entry's, plus `--dbus`) and asks the bus to `ReloadConfig` (dbus-daemon
+  watches the folder; dbus-broker, Fedora's, reads it on reload).
+- jeepney (pure Python, MIT) is a dependency in `pyproject.toml`, imported
+  only for `--dbus` and the reload; without it only those say so.
+- Checked 2026-11-09: a private dbus-daemon with the service file starts
+  cdport and every call works (`test_dbus_on_a_real_bus_started_by_the_bus`,
+  skipped without jeepney or dbus-daemon; its bus config needs session.conf's
+  `<allow eavesdrop="true"/>`, else every reply is rejected and the client
+  hangs); on the maintainer's dbus-broker session bus with `--dbus` started
+  by hand (GetInfo, UnfinishedAlbums, Import with the page answering, Runs,
+  Stop → `Finished(…, 130, '')`, `/etc` refused, idle exit). Activation
+  by dbus-broker itself (it starts services as transient systemd units)
+  needs the service file installed and is not checked yet.
+- Gatefold does not use it yet (it still runs `cdimport` and reads the
+  config); that change is in Gatefold's repository.
 
 ## Conventions (shared with lyrembed)
 

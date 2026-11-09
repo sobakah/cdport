@@ -13,6 +13,10 @@ next line's tag.
 
 ## [1.3.0] — 2026-11-09
 
+### Added
+
+- **A D-Bus interface for Gatefold and other programs**, also from inside a Flatpak: `io.github.sobakah.cdport` on the session bus. A program can read the folders and the editor from the settings, list unfinished albums, start an import on its own page (and get its address), stop it, and hear when it ended and which album it finished. `cdport --install-dbus-service` lets the bus start cdport when it is called; idle for a minute, it ends again. It has no call that runs a command or works on any folder the caller names. Needs the Python package jeepney, which pipx now installs with cdport.
+
 ### Changed
 
 - **cdimport is now called cdport.** The command, the package and the repository (github.com/sobakah/cdport) have the new name; GitHub forwards the old address.

@@ -9,8 +9,9 @@ description = "Interactive CLI that rips an audio CD with cyanrip, hands it to a
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-# Only used to check tags after editing; without it that check is skipped.
-dependencies = ["mutagen>=1.45"]
+# mutagen: the tag check after editing; without it that check is skipped.
+# jeepney: the D-Bus interface (--dbus); without it only that is missing.
+dependencies = ["mutagen>=1.45", "jeepney>=0.8"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "pyflakes>=3"]

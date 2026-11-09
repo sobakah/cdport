@@ -162,6 +162,42 @@ your default browser (`--web`). The entry starts the cdport that wrote it
 command again after installing cdport somewhere else.
 `--remove-desktop-entry` removes both files.
 
+### D-Bus: for Gatefold and other programs
+
+```bash
+cdport --install-dbus-service
+```
+
+lets the session bus start cdport when a program calls it on
+`io.github.sobakah.cdport`. That is how a music player such as Gatefold can
+import CDs with cdport, also from inside a Flatpak, which can neither start
+host programs nor read cdport's settings (it needs
+`--talk-name=io.github.sobakah.cdport`). The command writes
+`~/.local/share/dbus-1/services/io.github.sobakah.cdport.service`, starting
+the cdport that wrote it with `--dbus`; run it again after installing cdport
+somewhere else. `--remove-dbus-service` removes it.
+
+The interface (`io.github.sobakah.cdport1` on `/io/github/sobakah/cdport`):
+
+| Call | What it does |
+|---|---|
+| `GetInfo() → a{sv}` | `Version`, `InterfaceVersion` (1), `LibraryDir`, `WorkDir`, `Editor` from the settings |
+| `UnfinishedAlbums() → as` | albums in the working folder with steps still open |
+| `Import(a{sv} options) → (s run, s url)` | starts a run on its own page (as `cdport --web --no-browser`) and answers with the page's address, for the caller to open; options `Library` (as `-l`) and `Folder` (one of `UnfinishedAlbums`, to continue it) |
+| `Runs() → a(ss)` | the runs still going, with their addresses |
+| `Stop(s run)` | as Ctrl+C: a running rip finishes first |
+| signal `Finished(s run, i exit_code, s album)` | a run ended; `album` is the folder it finished, or empty |
+
+It has no call that runs a command or works on any folder the caller names,
+so it gives a sandboxed program no way out. Without calls or runs for a
+minute, the service ends; the bus starts it again at the next call. Needs the
+Python package `jeepney`, which pipx installs with cdport.
+
+```bash
+gdbus call --session -d io.github.sobakah.cdport -o /io/github/sobakah/cdport \
+  -m io.github.sobakah.cdport1.Import "{'Library': <'$HOME/Musik'>}"
+```
+
 ### Fast and secure rips
 
 By default cdport rips **fast**: cyanrip reads without paranoia

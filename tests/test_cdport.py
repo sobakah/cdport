@@ -3986,3 +3986,256 @@ def test_the_page_repeats_the_move_for_a_start_without_a_terminal(tmp_path, monk
     monkeypatch.setattr(web, "serve", lambda session, **kwargs: passed.update(kwargs) or 0)
     assert cli.main(["--web", "--no-browser"]) == 0
     assert passed["notes"] and "cdimport is now cdport" in passed["notes"][0] and passed["warnings"] == []
+
+
+# --- the D-Bus interface (1.3.0) ------------------------------------------------
+import signal  # noqa: E402
+
+from cdport import dbus_service  # noqa: E402
+
+
+class FakePageRun:
+    """A page run's process: prints *lines*, then runs until released (or
+    stopped, as with Ctrl+C: 130)."""
+
+    def __init__(self, lines=(), code=0, hold=True):
+        self.lines, self.code, self.signals = list(lines), code, []
+        self.release = threading.Event()
+        if not hold:
+            self.release.set()
+        self.stdout = self._out()
+
+    def _out(self):
+        yield from (line + "\n" for line in self.lines)
+        self.release.wait(10)
+
+    def wait(self):
+        return self.code
+
+    def send_signal(self, sig):
+        self.signals.append(sig)
+        self.code = 130
+        self.release.set()
+
+
+
+PAGE_LINE = "cdport is running at http://127.0.0.1:43210/?token=abc_DEF-1"
+
+
+def bus_service(tmp_path, *processes, clock=None):
+    started = []
+
+    def spawn(command):
+        started.append(command)
+        return processes[len(started) - 1]
+    service = dbus_service.Service(spawn=spawn, **({"clock": clock} if clock else {}))
+    return service, started
+
+
+def drain(service, count=1, timeout=5.0):
+    """What the service sends, once *count* items came (or the time is up)."""
+    out, deadline = [], time.monotonic() + timeout
+    while len(out) < count and time.monotonic() < deadline:
+        out += service.outgoing()
+        time.sleep(0.01)
+    return out
+
+
+
+
+def write_user_config(tmp_path, **settings):
+    path = tmp_path / "config-home" / "cdport" / "config.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(settings), encoding="utf-8")
+
+
+def unfinished_album(work, name="Album"):
+    folder = work / name
+    folder.mkdir(parents=True)
+    state.AlbumState(folder, done=["rip"]).save()
+    return folder
+
+
+def test_dbus_info_says_what_gatefold_read_from_the_config(tmp_path):
+    write_user_config(tmp_path, work_dir=str(tmp_path / "work"), library_dir="~/Musik", editor="kid3")
+    service, _ = bus_service(tmp_path)
+    signature, (info,) = service.call("GetInfo", "", (), None)
+    assert signature == "a{sv}" and info["Version"] == ("s", config.__version__)
+    assert info["InterfaceVersion"] == ("u", 1) and info["Editor"] == ("s", "kid3")
+    assert info["WorkDir"] == ("s", str(tmp_path / "work"))
+    assert info["LibraryDir"] == ("s", str(Path.home() / "Musik"))
+
+
+def test_dbus_lists_unfinished_albums_without_a_working_folder_too(tmp_path):
+    service, _ = bus_service(tmp_path)
+    assert service.call("UnfinishedAlbums", "", (), None) == ("as", ([],))
+    write_user_config(tmp_path, work_dir=str(tmp_path / "work"))
+    folder = unfinished_album(tmp_path / "work")
+    assert service.call("UnfinishedAlbums", "", (), None) == ("as", ([str(folder)],))
+
+
+def test_dbus_import_answers_with_the_page_and_signals_the_end(tmp_path):
+    process = FakePageRun([PAGE_LINE, "Open that address in your browser."])
+    service, started = bus_service(tmp_path, process)
+    library = tmp_path / "Musik"
+    library.mkdir()
+    assert service.call("Import", "a{sv}", ({"Library": ("s", str(library))},), "the call") is None
+    assert started[0][-4:] == ["--web", "--no-browser", "-l", str(library)]
+    assert drain(service) == [("return", "the call", "ss", ("1", "http://127.0.0.1:43210/?token=abc_DEF-1"))]
+    assert service.call("Runs", "", (), None) == ("a(ss)", ([("1", "http://127.0.0.1:43210/?token=abc_DEF-1")],))
+    process.lines.append("cdport finished: /m/Artist/Album")
+    service.events.put(("album", "1", "/m/Artist/Album"))   # as _read does for that line
+    process.release.set()
+    assert drain(service) == [("signal", "Finished", "sis", ("1", 0, "/m/Artist/Album"))]
+    assert service.runs == {}
+
+
+def test_dbus_stop_is_ctrl_c_for_the_run(tmp_path):
+    process = FakePageRun(["cdimport is running at http://127.0.0.1:1/?token=x"])   # the old name too
+    service, _ = bus_service(tmp_path, process)
+    service.call("Import", "a{sv}", ({},), "call")
+    drain(service)
+    assert service.call("Stop", "s", ("1",), None) == ("", ())
+    assert process.signals == [signal.SIGINT]
+    assert drain(service) == [("signal", "Finished", "sis", ("1", 130, ""))]
+    with pytest.raises(dbus_service.ServiceError) as gone:
+        service.call("Stop", "s", ("1",), None)
+    assert gone.value.name.endswith("UnknownRun")
+
+
+def test_dbus_continues_only_albums_cdport_lists(tmp_path):
+    write_user_config(tmp_path, work_dir=str(tmp_path / "work"))
+    folder = unfinished_album(tmp_path / "work")
+    service, started = bus_service(tmp_path, FakePageRun([PAGE_LINE]))
+    for elsewhere in (str(tmp_path), "/etc", str(folder / "..")):
+        with pytest.raises(dbus_service.ServiceError) as refused:
+            service.call("Import", "a{sv}", ({"Folder": ("s", elsewhere)},), "call")
+        assert refused.value.name.endswith("NotUnfinished")
+    service.call("Import", "a{sv}", ({"Folder": ("s", str(folder))},), "call")
+    assert str(folder) in started[0] and started[0].index(str(folder)) < started[0].index("--web")
+    with pytest.raises(dbus_service.ServiceError) as busy:
+        service.call("Import", "a{sv}", ({"Folder": ("s", str(folder))},), "call")
+    assert busy.value.name.endswith("Busy") and len(started) == 1
+
+
+def test_dbus_import_refuses_what_it_does_not_know(tmp_path):
+    service, started = bus_service(tmp_path)
+    for options, error in (({"Command": ("s", "rm")}, "InvalidArgs"), ({"Library": ("u", 1)}, "InvalidArgs"),
+                           ({"Library": ("s", "relative")}, "InvalidArgs")):
+        with pytest.raises(dbus_service.ServiceError) as refused:
+            service.call("Import", "a{sv}", (options,), "call")
+        assert refused.value.name.endswith(error)
+    with pytest.raises(dbus_service.ServiceError) as wrong:
+        service.call("Stop", "", (), None)
+    assert wrong.value.name.endswith("InvalidArgs")
+    with pytest.raises(dbus_service.ServiceError) as unknown:
+        service.call("Run", "s", ("ls",), None)
+    assert unknown.value.name.endswith("UnknownMethod") and started == []
+
+
+def test_dbus_import_reports_a_run_that_ends_before_its_page(tmp_path):
+    service, _ = bus_service(tmp_path, FakePageRun(["cdport: cannot start ..."], code=2, hold=False))
+    service.call("Import", "a{sv}", ({},), "call")
+    [(kind, caller, name, message)] = drain(service)
+    assert (kind, caller) == ("error", "call") and name.endswith("Failed") and "exit code 2" in message
+
+
+def test_dbus_import_gives_up_on_a_page_that_does_not_come(tmp_path):
+    now = [0.0]
+    process = FakePageRun()
+    service, _ = bus_service(tmp_path, process, clock=lambda: now[0])
+    service.call("Import", "a{sv}", ({},), "call")
+    assert service.outgoing() == []
+    now[0] = dbus_service.URL_TIMEOUT + 1
+    [(kind, caller, name, message)] = service.outgoing()
+    assert kind == "error" and "not up" in message and process.signals == [signal.SIGINT]
+    assert drain(service) == [("signal", "Finished", "sis", ("1", 130, ""))]
+
+
+def test_dbus_service_file_starts_this_cdport(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setattr(dbus_service, "_reload_bus", lambda: None)
+    shim = tmp_path / "my bin" / "cdport"
+    shim.parent.mkdir()
+    shim.write_text("", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", [str(shim)])
+    assert cli.main(["--install-dbus-service"]) == 0
+    path = tmp_path / "data" / "dbus-1" / "services" / "io.github.sobakah.cdport.service"
+    assert path.read_text(encoding="utf-8") == (
+        f"[D-BUS Service]\nName=io.github.sobakah.cdport\nExec='{shim}' --dbus\n")
+    assert cli.main(["--remove-dbus-service"]) == 0 and not path.exists()
+    assert "There was no" not in capsys.readouterr().out
+    assert cli.main(["--remove-dbus-service"]) == 0 and "There was no" in capsys.readouterr().out
+
+
+def test_dbus_page_command_continues_an_album_in_a_checkout(monkeypatch, tmp_path):
+    launcher = tmp_path / "run.py"
+    launcher.write_text("", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", [str(launcher), "--dbus"])
+    assert dbus_service.page_command("/w/Album", "/m") == [
+        sys.executable, str(launcher), "/w/Album", "--web", "--no-browser", "-l", "/m"]
+
+
+def test_dbus_on_a_real_bus_started_by_the_bus(tmp_path, monkeypatch):
+    """A private dbus-daemon with cdport's service file: the bus starts
+    cdport --dbus at the first call, as the session bus does for Gatefold."""
+    import shutil
+
+    pytest.importorskip("jeepney")
+    daemon = shutil.which("dbus-daemon")
+    if daemon is None:
+        pytest.skip("no dbus-daemon")
+    from jeepney import DBusAddress, MatchRule, MessageType, new_method_call
+    from jeepney.bus_messages import message_bus
+    from jeepney.io.blocking import open_dbus_connection
+
+    services = tmp_path / "services"
+    services.mkdir()
+    run_py = Path(__file__).resolve().parent.parent / "run.py"
+    (services / f"{dbus_service.BUS_NAME}.service").write_text(
+        dbus_service.service_file_text([sys.executable, str(run_py)]), encoding="utf-8")
+    (tmp_path / "bus.conf").write_text(f"""<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:tmpdir=/tmp</listen>
+  <servicedir>{services}</servicedir>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/><allow eavesdrop="true"/><allow own="*"/>
+  </policy>
+</busconfig>
+""", encoding="utf-8")
+    write_user_config(tmp_path, work_dir=str(tmp_path / "work"), library_dir=str(tmp_path / "Musik"),
+                      check_for_updates=False)
+    folder = unfinished_album(tmp_path / "work")
+    bus = subprocess.Popen([daemon, f"--config-file={tmp_path / 'bus.conf'}", "--nofork", "--print-address"],
+                           stdout=subprocess.PIPE, text=True)
+    try:
+        address = bus.stdout.readline().strip()
+        cdport_obj = DBusAddress(dbus_service.OBJECT_PATH, dbus_service.BUS_NAME, dbus_service.INTERFACE)
+        with open_dbus_connection(bus=address) as conn:
+            def call(method, signature=None, body=()):
+                reply = conn.send_and_get_reply(new_method_call(cdport_obj, method, signature, body), timeout=30)
+                assert reply.header.message_type == MessageType.method_return, reply.body
+                return reply.body
+
+            info = call("GetInfo")[0]
+            assert info["Version"] == ("s", config.__version__)
+            assert info["WorkDir"] == ("s", str(tmp_path / "work"))
+            assert call("UnfinishedAlbums") == ([str(folder)],)
+            finished = MatchRule(type="signal", interface=dbus_service.INTERFACE, member="Finished")
+            conn.send_and_get_reply(message_bus.AddMatch(finished), timeout=10)
+            with conn.filter(finished) as signals:
+                run, url = call("Import", "a{sv}", ({"Folder": ("s", str(folder))},))
+                assert url.startswith("http://127.0.0.1:") and "/?token=" in url
+                assert call("Runs") == ([(run, url)],)
+                call("Stop", "s", (run,))
+                ended = conn.recv_until_filtered(signals, timeout=30)
+            assert ended.body == (run, 130, "")   # stopped before the page's first visit
+            intro = conn.send_and_get_reply(new_method_call(
+                DBusAddress(dbus_service.OBJECT_PATH, dbus_service.BUS_NAME, "org.freedesktop.DBus.Introspectable"),
+                "Introspect"), timeout=10)
+            assert 'name="Import"' in intro.body[0]
+    finally:
+        bus.terminate()
+        bus.wait(10)
