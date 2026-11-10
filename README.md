@@ -82,14 +82,36 @@ installed.
 
 ```bash
 pipx install .            # or run ./run.py from the checkout
-cdport                  # rip the disc in the drive
+cdport                  # start: rip the disc in the drive, or pick an album
 cdport ~/Temp/Album     # continue with an album ripped earlier
+cdport ~/Temp/Album --step lyrics   # begin with that step (cover, tags, lyrics, finish)
+cdport ~/Musik/IU/Lilac --edit-tags # only edit an album's tags, then end
 cdport --lyrics auto --editor skip
 cdport --install-cyanrip    # update and rebuild cyanrip first
 cdport --rip-mode secure      # paranoia for every track (default: fast)
 cdport --update               # look for a newer cdport now
 cdport --install-desktop-entry  # add cdport (its page) to the app menu
 ```
+
+### Where a run begins
+
+A run begins at **Start** and comes back there after each album, until you
+quit. Start offers:
+
+- **rip the disc** in the drive (the default when there is one; otherwise
+  cdport waits for a disc),
+- **continue an unfinished album** from the working folder, with its next
+  open step,
+- **open an album folder**, any folder with audio files, to go through its
+  open steps (an album already in the library, say),
+- **edit the tags of an album folder**: only the tag editor, then back to
+  Start. Nothing is written into the folder but the tags you save.
+
+Within an album the steps follow in order (cover, tags, lyrics, finish).
+On the page any of them can be chosen instead (see below), and the order
+goes on after it. Finishing an album counts the steps left out as skipped.
+`--step` does the same from the command line, and `--edit-tags` is the
+tag editor alone, as Gatefold's **Edit Tags** uses it.
 
 ### Updates
 
@@ -126,6 +148,17 @@ question as buttons or a field; the terminal's keys work there too. Only
 this computer can open the page, and only with the address cdport
 prints. Closing the tab stops cdport at its next question, never during
 a rip. On the page:
+
+- **You don't have to go in order.** While an album is open, a bar above
+  the steps shows its cover and folder, and **Tags**, **Lyrics** and
+  **Finish** in the step bar go straight to that step (Tags opens the
+  editor at once), done or not; **Cover…** changes the cover and comes
+  back. **Start** in the header leaves the album as it is, resumable, for
+  another disc or album. None of this works while a tool runs (a rip, or
+  lyrembed). Unsaved changes in the tag editor are asked about first.
+- **Start shows the unfinished albums with their covers**, and asking for
+  an album folder lists folders to click through (the working folder, the
+  library, home).
 
 - **Releases, albums and covers show their pictures** (from the Cover Art
   Archive; cdport fetches only the pictures its questions name).
@@ -184,12 +217,16 @@ The interface (`io.github.sobakah.cdport1` on `/io/github/sobakah/cdport`):
 | `GetInfo() → a{sv}` | `Version`, `InterfaceVersion` (1), `LibraryDir`, `WorkDir`, `Editor` from the settings |
 | `UnfinishedAlbums() → as` | albums in the working folder with steps still open |
 | `Import(a{sv} options) → (s run, s url)` | starts a run on its own page (as `cdport --web --no-browser`) and answers with the page's address, for the caller to open; options `Library` (as `-l`) and `Folder` (one of `UnfinishedAlbums`, to continue it) |
+| `EditTags(s folder, a{sv} options) → (s run, s url)` | cdport's tag editor on one album, on its own page (as `cdport FOLDER --edit-tags --web --no-browser`); the folder must hold FLAC files and lie inside cdport's library, its working folder or the music folder; no options yet. Since 1.4.0 |
 | `Runs() → a(ss)` | the runs still going, with their addresses |
 | `Stop(s run)` | as Ctrl+C: a running rip finishes first (a second Stop changes nothing) |
-| signal `Finished(s run, i exit_code, s album)` | a run ended; `album` is the folder it finished, or empty |
+| signal `Finished(s run, i exit_code, s album)` | a run ended; `album` is the folder it finished (after `EditTags`: the album's folder, renamed if its name changed), or empty |
 
-It has no call that runs a command or works on any folder the caller names,
-so it gives a sandboxed program no way out. A run whose page nobody opens
+It has no call that runs a command or works on any folder the caller names
+(an import continues only an album `UnfinishedAlbums` lists, the tag editor
+opens only inside the library, working or music folder), so it gives a
+sandboxed program no way out. The tag editor writes only what you save on
+its page. A run whose page nobody opens
 within 10 minutes ends. Without calls or runs for a minute, the service
 ends (never while a run is going); the bus starts it again at the next call. Needs the
 Python package `jeepney`, which pipx installs with cdport.
@@ -197,6 +234,8 @@ Python package `jeepney`, which pipx installs with cdport.
 ```bash
 gdbus call --session -d io.github.sobakah.cdport -o /io/github/sobakah/cdport \
   -m io.github.sobakah.cdport1.Import "{'Library': <'$HOME/Musik'>}"
+gdbus call --session -d io.github.sobakah.cdport -o /io/github/sobakah/cdport \
+  -m io.github.sobakah.cdport1.EditTags "$HOME/Musik/IU/Lilac" "{}"
 ```
 
 ### Fast and secure rips

@@ -18,16 +18,30 @@ class AlbumState:
     folder: Path
     done: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    # Kept in memory only: an album opened just to edit its tags (one in the
+    # library, say) must not get a state file it would keep.
+    transient: bool = False
 
     @property
     def path(self) -> Path:
         return self.folder / STATE_FILE_NAME
 
-    def next_step(self) -> str | None:
-        for name in STEPS:
-            if name not in self.done and name not in self.skipped:
+    def next_step(self, after: str | None = None) -> str | None:
+        """The first open step, or the first one after *after*: the user may
+        jump to a step out of order, and the guided flow goes on from there."""
+        names = STEPS[STEPS.index(after) + 1:] if after in STEPS else STEPS
+        for name in names:
+            if self.is_open(name):
                 return name
         return None
+
+    def is_open(self, step: str) -> bool:
+        return step not in self.done and step not in self.skipped
+
+    def step_states(self) -> dict[str, str]:
+        """Each step's state for a front end: "done", "skipped" or "open"."""
+        return {name: "done" if name in self.done else "skipped" if name in self.skipped else "open"
+                for name in STEPS}
 
     def mark(self, step: str, skipped: bool = False) -> None:
         """Record a step and save right away, so Ctrl+C a moment later loses nothing."""
@@ -40,6 +54,8 @@ class AlbumState:
         self.save()
 
     def save(self) -> None:
+        if self.transient:
+            return
         data = {"cdport": 1, "done": self.done, "skipped": self.skipped,
                 "updated": datetime.now().isoformat(timespec="seconds")}
         tmp = self.path.with_suffix(".tmp")

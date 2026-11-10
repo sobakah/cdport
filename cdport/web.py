@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import parse_qs, urlsplit
 
-from . import app, config, cover, proc, tageditor, ui
+from . import app, config, cover, proc, tageditor, tags, ui
 
 log = logging.getLogger(__name__)
 
@@ -109,6 +109,12 @@ class WebFront(ui.Front):
         # flow, so it stops after a tool it let finish instead of asking on.
         self._stopping = False
         self._tags_moved: Callable[[Path], None] | None = None  # the open tag editor's edit_tags(moved=...)
+        # Where the flow is (ui.navigation): the album and its steps, and the
+        # places the page may jump to instead of answering (ui.Jump).
+        self.album: dict | None = None
+        self.targets: tuple[str, ...] = ()
+        self._jump: ui.Jump | None = None  # asked for while nothing was open: the next question or pause takes it
+        self._pausing = False
 
     # recording
     def _bump(self, event: dict) -> None:
@@ -182,6 +188,9 @@ class WebFront(ui.Front):
         with self._cond:
             if self._stopping:
                 raise Cancelled()
+            if self._jump is not None:  # asked for during a pause that ended meanwhile
+                jump, self._jump = self._jump, None
+                raise jump
             self._next_question += 1
             qid = self._next_question
             self.question = {"id": qid, "kind": kind, "prompt": prompt, **details}
@@ -194,6 +203,9 @@ class WebFront(ui.Front):
             self._rev += 1
             self._cond.notify_all()
         if isinstance(answer, Cancelled):
+            raise answer
+        if isinstance(answer, ui.Jump):
+            self.message("answer", f"Went to {TARGET_NAMES.get(answer.target, answer.target)}", prompt=prompt)
             raise answer
         # What was answered stays in the page's history, as in a terminal.
         self.message("answer", _answer_text(kind, answer, details), prompt=prompt)
@@ -239,10 +251,43 @@ class WebFront(ui.Front):
 
     def pause(self, seconds: float) -> None:
         with self._cond:
-            if not self._stopping:
-                self._cond.wait_for(lambda: self._stopping, timeout=seconds)
+            self._pausing = True
+            try:
+                if not self._stopping and self._jump is None:
+                    self._cond.wait_for(lambda: self._stopping or self._jump is not None, timeout=seconds)
+            finally:
+                self._pausing = False
             if self._stopping:
                 raise Cancelled()
+            if self._jump is not None:
+                jump, self._jump = self._jump, None
+                raise jump
+
+    def navigation(self, album: dict | None, targets: tuple[str, ...]) -> None:
+        with self._cond:
+            self.album = album
+            self.targets = tuple(targets)
+            self._jump = None  # a jump asked for elsewhere does not carry over
+            self._rev += 1
+            self._cond.notify_all()
+
+    def jump(self, target: str) -> None:
+        """Go to *target* instead of answering: the open question (or the
+        wait for a disc) raises ui.Jump in the flow, which goes there."""
+        with self._cond:
+            if target not in self.targets:
+                raise ApiError(409, "cdport cannot go there from here.")
+            if self.tool_running:
+                raise ApiError(409, "A tool is running. Wait for it, or stop it first.")
+            if self._stopping:
+                raise ApiError(409, "cdport is stopping.")
+            if self.question is not None:
+                self._answers[self.question["id"]] = ui.Jump(target)
+            elif self._pausing:
+                self._jump = ui.Jump(target)
+            else:
+                raise ApiError(409, "cdport is busy; try again in a moment.")
+            self._cond.notify_all()
 
     def finish(self, code: int) -> None:
         with self._cond:
@@ -272,22 +317,27 @@ class WebFront(ui.Front):
         return self._ask("choose", prompt, options=[[k, d] for k, d in options], default=default, images=images)
 
     def _register_image(self, source: dict) -> str:
-        """An id for a picture the flow names: {"url": ...} or {"file": ...}.
+        """An id for a picture the flow names: {"url": ...}, {"file": ...} or
+        {"album": folder} (its embedded cover, else its cover file).
 
         A file is read now, under a new id each time: the cover preview is
         deleted after its question and rewritten under the same name with
         another cover, which an old id would show from the browser's cache.
         A download keeps its id, so going back and forth costs no requests.
         """
-        if "file" in source:
+        if "file" in source or "album" in source:
             image_id = secrets.token_urlsafe(8)
+            kind = "file" if "file" in source else "album"
             try:
-                data = Path(source["file"]).read_bytes()
-                found = (data, cover.image_type(data)[0])
-            except (OSError, cover.CoverError) as exc:
+                if kind == "file":
+                    data = Path(source["file"]).read_bytes()
+                    found = (data, cover.image_type(data)[0])
+                else:
+                    found = tageditor.album_cover(Path(source["album"]))
+            except (OSError, cover.CoverError, tageditor.TagEditError) as exc:
                 found = exc
             with self._cond:
-                self._images[image_id] = ("file", str(source["file"]))
+                self._images[image_id] = (kind, str(source[kind]))
                 self._image_cache[image_id] = found
             return image_id
         value = str(source["url"])
@@ -307,6 +357,8 @@ class WebFront(ui.Front):
             cached = self._image_cache.get(image_id)
         if source is None:
             raise ApiError(404, "No such picture.")
+        if isinstance(cached, tageditor.TagEditError):  # an album without a cover
+            raise ApiError(404, str(cached))
         if isinstance(cached, Exception):  # the file could not be read
             raise ApiError(502, f"Cannot get the picture: {cached}")
         if cached is not None:
@@ -326,8 +378,14 @@ class WebFront(ui.Front):
     def ask_edit(self, prompt: str, prefill: str = "") -> str:
         return self._ask("ask_path", prompt, prefill=prefill, plain=True)
 
-    def ask_path(self, prompt: str, prefill: str = "") -> str:
-        return self._ask("ask_path", prompt, prefill=prefill)
+    def ask_path(self, prompt: str, prefill: str = "", folders: bool = False) -> str:
+        return self._ask("ask_path", prompt, prefill=prefill, folders=folders)
+
+    def folders_open(self) -> bool:
+        """Whether the open question asks for a folder: only then the page
+        lists folders to pick from."""
+        with self._cond:
+            return self.question is not None and bool(self.question.get("folders"))
 
     def wait_for_enter(self, prompt: str) -> None:
         self._ask("wait", prompt)
@@ -360,6 +418,8 @@ class WebFront(ui.Front):
             if self.question is None or self.question["kind"] != "tag_editor":
                 return
             self.question["folder"] = str(folder)
+            if self.album is not None:  # the album bar follows the folder
+                self.album = {**self.album, "folder": str(folder), "name": folder.name, "path": ui.tilde(folder)}
             self._rev += 1
             self._cond.notify_all()
             moved = self._tags_moved
@@ -389,6 +449,8 @@ class WebFront(ui.Front):
                 "toolRunning": self.tool_running,
                 "finished": self.finished,
                 "restarting": self.restarting,
+                "album": self.album,
+                "targets": list(self.targets),
             })
 
     def wait_for_change(self, since: int, timeout: float) -> None:
@@ -397,6 +459,10 @@ class WebFront(ui.Front):
         with self._cond:
             if self._rev <= since:
                 self._cond.wait(timeout)
+
+
+# What the page's history says when the user went elsewhere (ui.Jump).
+TARGET_NAMES = {"start": "the start", "cover": "the cover", "tags": "Tags", "lyrics": "Lyrics", "finish": "Finish"}
 
 
 def _answer_text(kind: str, answer: object, details: dict) -> str:
@@ -676,6 +742,26 @@ class _Handler(BaseHTTPRequestHandler):
                 raise ApiError(400, str(exc)) from exc
             front.moved_tags(Path(result["folder"]))
             return result
+        if method == "POST" and path == "/api/goto":
+            target = body.get("target")
+            if not isinstance(target, str):
+                raise ApiError(400, "Where to?")
+            front.jump(target)
+            return {"ok": True}
+        if method == "GET" and path == "/api/album-cover":
+            album = front.album
+            if album is None:
+                raise ApiError(404, "No album is open.")
+            try:
+                data, mime = tageditor.album_cover(Path(album["folder"]))
+            except (tageditor.TagEditError, OSError) as exc:
+                raise ApiError(404, str(exc)) from exc
+            self._send(200, data, mime)
+            return None
+        if method == "GET" and path == "/api/folders":
+            if not front.folders_open():
+                raise ApiError(409, "cdport is not asking for a folder.")
+            return folder_listing((query.get("path") or [""])[0], run.session)
         if method == "POST" and path == "/api/stop-tool":
             return {"stopped": proc.interrupt_tool()}
         if method == "POST" and path == "/api/quit":
@@ -688,6 +774,47 @@ class _Handler(BaseHTTPRequestHandler):
         if method == "POST" and path in ("/api/ping", "/api/closing", "/api/close"):
             return {"ok": True}
         raise ApiError(404, "Not found.")
+
+
+MAX_FOLDER_ENTRIES = 500
+
+
+def folder_listing(raw: str, session: app.Session) -> dict:
+    """Subfolders of *raw* for the page's folder picker (a browser cannot
+    hand out paths), and the places to start from: the working folder and
+    the library. Only while the flow asks for a folder (folders_open)."""
+    places = [(name, folder) for name, folder in (("Working folder", session.work_dir),
+                                                   ("Library", session.library_dir)) if folder]
+    places.append(("Home", Path.home()))
+    if raw:
+        path = Path(raw).expanduser()
+    else:
+        path = next((folder for _, folder in places if folder.is_dir()), Path.home())
+    try:
+        path = path.resolve()
+        entries = sorted(path.iterdir(), key=lambda p: p.name.lower())
+    except OSError as exc:
+        raise ApiError(400, f"Cannot open {path}: {exc.strerror or exc}") from exc
+    dirs, audio = [], 0
+    for entry in entries:
+        if entry.name.startswith("."):
+            continue
+        try:
+            if entry.is_dir():
+                # Full paths, so the page never joins them (Windows uses backslashes).
+                dirs.append({"name": entry.name, "path": str(entry)})
+            elif entry.suffix.lower() in tags.AUDIO_EXTENSIONS:
+                audio += 1
+        except OSError:
+            continue
+    return {
+        "path": str(path),
+        "parent": str(path.parent) if path.parent != path else "",
+        "dirs": dirs[:MAX_FOLDER_ENTRIES],
+        "truncated": len(dirs) > MAX_FOLDER_ENTRIES,
+        "audioFiles": audio,
+        "places": [{"name": name, "path": str(folder)} for name, folder in places],
+    }
 
 
 def _say(message: str) -> None:

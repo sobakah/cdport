@@ -180,6 +180,31 @@ def cover(folder: Path, name: str) -> tuple[bytes, str]:
         raise TagEditError("The track has no cover the page can show.") from exc
 
 
+COVER_FILES = ("cover.jpg", "cover.png", "folder.jpg", "folder.png")
+
+
+def album_cover(folder: Path) -> tuple[bytes, str]:
+    """A picture of the album for the page (the start's albums, the album
+    bar): the first track's embedded cover, else a cover file next to it.
+    Only JPEG and PNG. Raises TagEditError when there is none."""
+    for path in _flac(folder)[:1]:
+        data = _picture(_open(path))
+        try:
+            return data, cover_module.image_type(data)[0]
+        except cover_module.CoverError:
+            pass  # none embedded, or not one the page shows: try the files
+    for name in COVER_FILES:
+        try:
+            data = (folder / name).read_bytes()
+        except OSError:
+            continue
+        try:
+            return data, cover_module.image_type(data)[0]
+        except cover_module.CoverError:
+            continue
+    raise TagEditError("The album has no cover the page can show.")
+
+
 # --- checking and planning an edit -----------------------------------------------
 def _text(value: object, what: str) -> str:
     if not isinstance(value, str):

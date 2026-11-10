@@ -731,15 +731,15 @@ def test_existing_folder_to_library(tmp_path, monkeypatch, album_dir):
     assert not (moved / STATE_FILE_NAME).exists()
 
 
-def test_another_run_after_the_summary(tmp_path, monkeypatch, album_dir, capsys):
-    # First run: the folder; then another run, which offers nothing and asks
-    # for an album folder (cyanrip is missing); empty goes back and ends.
-    answers = feed_input(monkeypatch, ["c", "k", "y"])
-    monkeypatch.setattr(app.ui, "ask_path", lambda prompt, prefill="": "")
+def test_after_the_summary_the_start_comes_back(tmp_path, monkeypatch, album_dir, capsys):
+    # First the folder; then the start (no ripping: cyanrip is missing),
+    # where "o" asks for an album folder, empty goes back, and q ends.
+    answers = feed_input(monkeypatch, ["c", "k", "o", "q"])
+    monkeypatch.setattr(app.ui, "ask_path", lambda prompt, prefill="", folders=False: "")
     assert run_cli(tmp_path, monkeypatch, [str(album_dir), "--lyrics", "skip"]) == 0
     assert answers == []
     out = capsys.readouterr().out
-    assert out.count("Summary") == 1 and "only an album ripped earlier" in out
+    assert out.count("Summary") == 1 and out.count("── Start") == 2 and "ripping is off" in out
 
 
 def test_auto_lyrics_failure_falls_back_to_interactive(tmp_path, monkeypatch, album_dir):
@@ -2303,7 +2303,7 @@ def test_reopened_album_gets_the_cover_offer_at_any_step(tmp_path, monkeypatch, 
     offered = []
     monkeypatch.setattr(app, "offer_cover", lambda f: offered.append(f))
     session = app.new_session(default_cfg(), app.Options(), tmp_path / "config.json")
-    monkeypatch.setattr(app, "tags_step", lambda s, a: False)  # stop right after the offer
+    monkeypatch.setattr(app, "tags_step", lambda s, a, direct=False: False)  # stop right after the offer
     monkeypatch.setattr(app, "lyrics_step", lambda s, a: False)
     monkeypatch.setattr(app, "finish_step", lambda s, a: False)
     app.continue_album(session, state.load(folder))
@@ -2517,8 +2517,8 @@ class RecordingFront(ui.Front):
     def choose(self, prompt, options, default=None, info=None):
         return self._answer("choose", prompt, options=options, default=default, info=info)
 
-    def ask_path(self, prompt, prefill=""):
-        return self._answer("ask_path", prompt, prefill=prefill)
+    def ask_path(self, prompt, prefill="", folders=False):
+        return self._answer("ask_path", prompt, prefill=prefill, folders=folders)
 
     def wait_for_enter(self, prompt):
         self._answer("wait", prompt)
@@ -2558,6 +2558,7 @@ def test_tool_output_goes_to_the_front_end(capsys, front, pty):
 
 # --- the browser page ----------------------------------------------------------
 import http.client  # noqa: E402
+from urllib.parse import quote  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
 
@@ -3281,18 +3282,17 @@ def test_tag_editor_refuses_a_name_too_long_before_writing(tmp_path):
 
 def test_a_later_run_without_an_album_keeps_the_finished_one(tmp_path, monkeypatch, album_dir):
     album = state.load(album_dir)
-    found = [album, None]
-    for name in ("ask_missing_folders", "check_tools", "offer_staging_cleanup", "offer_resume"):
+    found = [album, None]   # the album, then quit at the start
+    for name in ("ask_missing_folders", "check_tools", "offer_staging_cleanup"):
         monkeypatch.setattr(app, name, lambda session: None)
-    monkeypatch.setattr(app, "disc_and_rip", lambda session: found.pop(0))
+    monkeypatch.setattr(app, "start", lambda session, returning=False: found.pop(0))
 
-    def finish(session, album):
+    def finish(session, album, first=None):
         while (step := album.next_step()) is not None:
             album.mark(step)
 
     monkeypatch.setattr(app, "continue_album", finish)
     monkeypatch.setattr(app, "summary", lambda session, album: None)
-    monkeypatch.setattr(app.ui, "confirm", lambda prompt, default=True: True)   # start another run
     session = app.new_session(default_cfg(), app.Options(), tmp_path / "config.json")
     assert app.run(session) == 0
     assert session.album is None and session.last_album is album   # what serve's finished line names
@@ -3483,12 +3483,12 @@ def test_musicbrainz_requests_keep_their_distance_across_threads(monkeypatch):
 # --- review of 2026-10-31 --------------------------------------------------------
 def test_a_stopped_album_is_not_reported_as_finished(tmp_path, monkeypatch, album_dir):
     album = state.load(album_dir)
-    for name in ("ask_missing_folders", "check_tools", "offer_staging_cleanup", "offer_resume"):
+    found = [album, None]   # the album, then quit at the start
+    for name in ("ask_missing_folders", "check_tools", "offer_staging_cleanup"):
         monkeypatch.setattr(app, name, lambda session: None)
-    monkeypatch.setattr(app, "disc_and_rip", lambda session: album)
-    monkeypatch.setattr(app, "continue_album", lambda session, album: None)      # stopped at a step
+    monkeypatch.setattr(app, "start", lambda session, returning=False: found.pop(0))
+    monkeypatch.setattr(app, "continue_album", lambda session, album, first=None: None)   # stopped at a step
     monkeypatch.setattr(app, "summary", lambda session, album: None)
-    monkeypatch.setattr(app.ui, "confirm", lambda prompt, default=True: False)
     session = app.new_session(default_cfg(), app.Options(), tmp_path / "config.json")
     app.run(session)
     assert album.next_step() is not None and session.last_album is None
@@ -4249,10 +4249,20 @@ def test_dbus_on_a_real_bus_started_by_the_bus(tmp_path, monkeypatch):
                 call("Stop", "s", (run,))
                 ended = conn.recv_until_filtered(signals, timeout=30)
             assert ended.body == (run, 130, "")   # stopped before the page's first visit
+            album = tmp_path / "Musik" / "IU" / "Palette"
+            album.mkdir(parents=True)
+            make_flac(album / "01.flac", title="A")
+            with conn.filter(finished) as signals:
+                run, url = call("EditTags", "sa{sv}", (str(album), {}))
+                assert url.startswith("http://127.0.0.1:") and "/?token=" in url
+                call("Stop", "s", (run,))
+                ended = conn.recv_until_filtered(signals, timeout=30)
+            assert ended.body == (run, 130, "")
+            assert not (album / STATE_FILE_NAME).exists()
             intro = conn.send_and_get_reply(new_method_call(
                 DBusAddress(dbus_service.OBJECT_PATH, dbus_service.BUS_NAME, "org.freedesktop.DBus.Introspectable"),
                 "Introspect"), timeout=10)
-            assert 'name="Import"' in intro.body[0]
+            assert 'name="Import"' in intro.body[0] and 'name="EditTags"' in intro.body[0]
     finally:
         bus.terminate()
         bus.wait(10)
@@ -4377,3 +4387,300 @@ def test_the_service_waits_for_its_runs_before_it_ends(tmp_path):
     started = time.monotonic()
     dbus_service._outlive_runs(service)
     assert service.runs == {} and time.monotonic() - started >= 0.25
+
+
+# --- 1.4.0: a start to come back to, jumps, the tag editor over D-Bus ----------
+def test_the_start_offers_a_disc_unfinished_albums_and_folders(tmp_path, monkeypatch, front):
+    work = tmp_path / "work"
+    folder = unfinished_album(work)
+    make_flac(folder / "01.flac", title="A")
+    session = app.new_session({**default_cfg(), "work_dir": str(work)}, app.Options(), tmp_path / "config.json")
+    session.cyanrip = "cyanrip"
+    drive = disc.Drive("/dev/sr0", "ASUS", "audio")
+    monkeypatch.setattr(app, "ready_drive", lambda session: drive)
+    recorder = front(["1"])
+    assert app.start(session).folder == folder
+    kind, prompt, details = recorder.questions[0]
+    assert [key for key, _ in details["options"]] == ["d", "1", "o", "t", "q"]
+    assert details["default"] == "d" and "/dev/sr0" in details["options"][0][1]
+    assert details["info"]["images"] == {"1": {"album": str(folder)}}   # its cover on the page
+
+    # Without a disc: the unfinished album first; after an album, quitting.
+    monkeypatch.setattr(app, "ready_drive", lambda session: None)
+    recorder = front(["q", "q"])
+    assert app.start(session) is None and app.start(session, returning=True) is None
+    assert [q[2]["default"] for q in recorder.questions] == ["1", "q"]
+
+
+def test_the_start_goes_straight_to_the_tags_of_any_folder(tmp_path, monkeypatch, front, album_dir):
+    session = app.new_session(default_cfg(), app.Options(), tmp_path / "config.json")
+    edited = []
+    monkeypatch.setattr(app, "tags_step", lambda s, album, direct=False: edited.append((album, direct)) or True)
+    recorder = front(["t", str(tmp_path / "nowhere"), str(album_dir), "q"])
+    assert app.start(session) is None
+    [(album, direct)] = edited
+    assert album.folder == album_dir and album.transient and direct
+    assert not (album_dir / STATE_FILE_NAME).exists()          # only looked at: no state file
+    assert ("error", f"Not a folder: {tmp_path / 'nowhere'}", {}) in recorder.messages
+
+
+def test_edit_tags_only_runs_the_editor_and_leaves_no_trace(tmp_path, monkeypatch, album_dir, capsys):
+    editor = tools.Editor("eartag", "Ear Tag", ["eartag", "{files}"])
+    monkeypatch.setattr(app.tags.proc, "launch",
+                        lambda cmd, settle_seconds=2.0: SimpleNamespace(failure=lambda: None, close=lambda: None))
+    answers = feed_input(monkeypatch, ["", "", "c"])  # open Ear Tag, Enter when done, done
+    assert run_cli(tmp_path, monkeypatch, [str(album_dir), "--edit-tags"], editor=editor) == 0
+    out = capsys.readouterr().out
+    assert answers == [] and "0. Tools" not in out and "Start" not in out and "q  stop" not in out
+    assert not (album_dir / STATE_FILE_NAME).exists()
+
+
+def test_step_option_begins_with_that_step(tmp_path, monkeypatch, album_dir, capsys):
+    # Finish right away: keep it in the working folder; the start: quit.
+    answers = feed_input(monkeypatch, ["k", "q"])
+    assert run_cli(tmp_path, monkeypatch, [str(album_dir), "--step", "finish"]) == 0
+    out = capsys.readouterr().out
+    assert answers == [] and "3. Tags" not in out and "Not done: tags and lyrics" in out
+    assert "– Tags      skipped" in out and "– Lyrics    skipped" in out
+
+
+@pytest.mark.parametrize("argv", [["--step", "tags"], ["--edit-tags"], ["x", "--step", "tags", "--edit-tags"]])
+def test_step_options_need_one_folder(tmp_path, monkeypatch, argv):
+    with pytest.raises(SystemExit) as stop:
+        run_cli(tmp_path, monkeypatch, argv)
+    assert stop.value.code == 2
+
+
+def jump_session(tmp_path, monkeypatch, album_dir, script):
+    """continue_album with steps that only record themselves; *script* maps
+    a step's visit (name, nth) to a jump it makes instead of finishing."""
+    visits = []
+
+    def step(name):
+        def handler(session, album, direct=False):
+            visits.append((name, direct))
+            jump = script.get((name, sum(1 for v in visits if v[0] == name)))
+            if jump:
+                raise ui.Jump(jump)
+            album.mark(name)
+            return True
+        return handler
+    for name in ("tags", "lyrics", "finish"):
+        monkeypatch.setattr(app, f"{name}_step", step(name))
+    monkeypatch.setattr(app, "offer_cover", lambda folder: visits.append(("cover", False)))
+    session = app.new_session(default_cfg(), app.Options(), tmp_path / "config.json")
+    album = state.load(album_dir)
+    album.save()
+    return session, album, visits
+
+
+def test_a_jump_runs_that_step_and_the_order_goes_on_after_it(tmp_path, monkeypatch, album_dir, front):
+    # At tags, the page goes to lyrics; finish follows, tags stays open
+    # (finish_step itself counts it as skipped), and the cover returns to
+    # the step it interrupted.
+    session, album, visits = jump_session(tmp_path, monkeypatch, album_dir,
+                                          {("tags", 1): "lyrics", ("finish", 1): "cover"})
+    recorder = front()
+    app.continue_album(session, album)
+    assert [v[0] for v in visits] == ["cover", "tags", "lyrics", "finish", "cover", "finish"]
+    assert album.done == ["rip", "lyrics", "finish"] and album.is_open("tags")
+    navigation = [m for m in recorder.messages if m[0] == "navigation"]
+    assert navigation == []   # RecordingFront has no navigation of its own: the default does nothing
+
+
+def test_a_jump_to_the_start_leaves_the_album_to_the_caller(tmp_path, monkeypatch, album_dir):
+    session, album, visits = jump_session(tmp_path, monkeypatch, album_dir, {("tags", 1): "start"})
+    with pytest.raises(ui.Jump):
+        app.continue_album(session, album)
+    assert album.next_step() == "tags" and state.load(album_dir).next_step() == "tags"
+
+
+def test_a_done_step_can_be_run_again(tmp_path, monkeypatch, album_dir):
+    session, album, visits = jump_session(tmp_path, monkeypatch, album_dir, {("finish", 1): "tags"})
+    app.continue_album(session, album)
+    assert [v[0] for v in visits] == ["cover", "tags", "lyrics", "finish", "tags", "finish"]
+
+
+def test_finishing_skips_the_steps_jumped_past(tmp_path, monkeypatch, album_dir):
+    session = app.new_session({**default_cfg(), "library_dir": str(tmp_path / "lib")}, app.Options(),
+                              tmp_path / "config.json")
+    album = state.load(album_dir)
+    feed_input(monkeypatch, ["k"])
+    assert app.finish_step(session, album)
+    assert album.skipped == ["tags", "lyrics"] and album.next_step() is None
+
+
+def test_web_front_jumps_only_where_the_flow_lets_it(tmp_path):
+    front = web.WebFront()
+    asked = []
+
+    def flow():
+        ui.use(front)
+        ui.navigation(tmp_path, {"rip": "done", "tags": "open"}, now="tags", targets=("start", "tags"))
+        try:
+            ui.confirm("Continue?")
+        except ui.Jump as jump:
+            asked.append(jump.target)
+        ui.navigation()
+        try:
+            ui.pause(5)
+        except ui.Jump as jump:
+            asked.append(jump.target)
+
+    thread = threading.Thread(target=flow, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 5
+    while front.question is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    snapshot = front.snapshot(0)
+    assert snapshot["album"]["name"] == tmp_path.name and snapshot["album"]["steps"]["rip"] == "done"
+    assert snapshot["targets"] == ["start", "tags"]
+    with pytest.raises(web.ApiError) as refused:
+        front.jump("lyrics")
+    assert refused.value.status == 409
+    front.jump("tags")
+    while not front._pausing and time.monotonic() < deadline:
+        time.sleep(0.01)
+    with pytest.raises(web.ApiError):
+        front.jump("start")   # no targets any more
+    with front._cond:
+        front.targets = ("start",)
+    front.jump("start")       # the wait for a disc ends too
+    thread.join(5)
+    assert asked == ["tags", "start"]
+    assert any(e["kind"] == "answer" and e["text"] == "Went to Tags" for e in front.events)
+    ui.use(None)
+
+
+def test_web_front_does_not_jump_while_a_tool_runs():
+    front = web.WebFront()
+    front.navigation(None, ("start",))
+    front.message("tool_start", "cyanrip", name="cyanrip")
+    with pytest.raises(web.ApiError, match="tool is running"):
+        front.jump("start")
+
+
+def test_web_front_album_bar_follows_a_renamed_folder(tmp_path):
+    front = web.WebFront()
+    front.navigation({"folder": str(tmp_path / "A"), "name": "A", "path": "A", "steps": {}, "now": "tags"}, ())
+    front.question = {"id": 1, "kind": "tag_editor", "folder": str(tmp_path / "A")}
+    front.moved_tags(tmp_path / "B")
+    assert front.album["folder"] == str(tmp_path / "B") and front.album["name"] == "B"
+
+
+def _flac_with_cover(folder, data=b"\xff\xd8\xff a cover"):
+    from mutagen.flac import FLAC, Picture
+    folder.mkdir(parents=True, exist_ok=True)
+    track = make_flac(folder / "01.flac", title="A")
+    audio = FLAC(track)
+    picture = Picture()
+    picture.type, picture.mime, picture.data = 3, "image/jpeg", data
+    audio.add_picture(picture)
+    audio.save()
+    return folder
+
+
+def test_album_cover_is_the_embedded_one_else_a_cover_file(tmp_path):
+    assert tageditor.album_cover(_flac_with_cover(tmp_path / "A")) == (b"\xff\xd8\xff a cover", "image/jpeg")
+    plain = tmp_path / "B"
+    plain.mkdir()
+    make_flac(plain / "01.flac", title="A")
+    with pytest.raises(tageditor.TagEditError):
+        tageditor.album_cover(plain)
+    (plain / "cover.png").write_bytes(b"\x89PNG\r\n\x1a\n a png")
+    assert tageditor.album_cover(plain)[1] == "image/png"
+
+
+@pytest.fixture
+def folder_page(monkeypatch, tmp_path):
+    """A running page whose flow asks for a folder, with an album open."""
+    album = _flac_with_cover(tmp_path / "work" / "Album")
+
+    def flow(session):
+        ui.navigation(album, {"rip": "done"}, now="tags", targets=("start",))
+        try:
+            return 0 if ui.ask_path("Album folder", folders=True) else 1
+        except ui.Jump as jump:
+            return 5 if jump.target == "start" else 6
+
+    monkeypatch.setattr(app, "run", flow)
+    session = app.new_session({**default_cfg(), "work_dir": str(tmp_path / "work"),
+                               "library_dir": str(tmp_path / "lib")}, app.Options(), tmp_path / "config.json")
+    run = web.Run(session)
+    server = web._Server(run, "test-token")
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    yield server, album
+    if run.started:
+        run.stop()
+        run.thread.join(2)
+    ui.use(None)
+    server.shutdown()
+    server.server_close()
+
+
+def test_web_folder_picker_and_album_cover(folder_page, tmp_path):
+    server, album = folder_page
+    response, body = _http(server, "GET", "/api/folders")
+    assert response.status == 409                      # nothing asks for a folder before the flow runs
+    deadline = time.monotonic() + 5
+    state = {}
+    while not state.get("question") and time.monotonic() < deadline:
+        state = _http(server, "GET", "/api/state?since=0")[1]
+    assert state["question"]["folders"] and state["album"]["name"] == "Album"
+    response, listing = _http(server, "GET", "/api/folders")
+    assert response.status == 200 and listing["path"] == str((tmp_path / "work").resolve())
+    assert listing["dirs"] == [{"name": "Album", "path": str((tmp_path / "work" / "Album").resolve())}]
+    assert [p["name"] for p in listing["places"]] == ["Working folder", "Library", "Home"]
+    inside = _http(server, "GET", "/api/folders?path=" + quote(listing["dirs"][0]["path"]))[1]
+    assert inside["audioFiles"] == 1 and inside["dirs"] == []
+    response, data = _http(server, "GET", "/api/album-cover?v=1")
+    assert response.status == 200 and data == b"\xff\xd8\xff a cover"
+    assert _http(server, "POST", "/api/goto", {"target": "lyrics"})[0].status == 409
+    assert _http(server, "POST", "/api/goto", {"target": "start"})[0].status == 200
+    while state.get("finished") is None and time.monotonic() < deadline:
+        state = _http(server, "GET", "/api/state?since=0")[1]
+    assert state["finished"] == 5   # the flow went to the start
+
+
+def test_dbus_edits_tags_only_where_cdport_and_the_caller_keep_music(tmp_path, monkeypatch):
+    music = tmp_path / "home" / "Musik"
+    monkeypatch.setattr(config, "music_dir_suggestion", lambda: str(music))
+    write_user_config(tmp_path, work_dir=str(tmp_path / "work"), library_dir=str(tmp_path / "lib"))
+    in_library = _flac_with_cover(tmp_path / "lib" / "IU" / "Palette")
+    in_music = _flac_with_cover(music / "Other")
+    service, started = bus_service(tmp_path, FakePageRun([PAGE_LINE]), FakePageRun([PAGE_LINE]))
+    assert service.call("EditTags", "sa{sv}", (str(in_library), {}), "call") is None
+    assert started[0][-6:] == [str(in_library.resolve()), "--edit-tags", "--web", "--no-browser",
+                               "--unvisited-timeout", "600"]
+    assert drain(service) == [("return", "call", "ss", ("1", "http://127.0.0.1:43210/?token=abc_DEF-1"))]
+    service.call("EditTags", "sa{sv}", (str(in_music), {}), "call")
+
+    empty = tmp_path / "lib" / "Empty"
+    empty.mkdir()
+    (tmp_path / "elsewhere").mkdir()
+    _flac_with_cover(tmp_path / "elsewhere" / "Album")
+    for folder, options, error in ((str(in_library), {}, "Busy"),
+                                   ("relative/Album", {}, "InvalidArgs"),
+                                   (str(tmp_path / "elsewhere" / "Album"), {}, "NotAllowed"),
+                                   (str(tmp_path / "lib" / ".." / "elsewhere" / "Album"), {}, "NotAllowed"),
+                                   ("/etc", {}, "NotAllowed"),
+                                   (str(tmp_path / "lib" / "Gone"), {}, "NoFolder"),
+                                   (str(empty), {}, "NoAlbum"),
+                                   (str(in_music), {"Command": ("s", "rm")}, "InvalidArgs")):
+        with pytest.raises(dbus_service.ServiceError) as refused:
+            service.call("EditTags", "sa{sv}", (folder, options), "call")
+        assert refused.value.name.endswith(error), (folder, refused.value)
+    assert len(started) == 2
+
+
+def test_dbus_never_edits_the_whole_home_folder(tmp_path, monkeypatch):
+    # No XDG_MUSIC_DIR and no ~/Music: the suggestion would be the home folder.
+    monkeypatch.setattr(config, "music_dir_suggestion", lambda: str(Path.home()))
+    service, _ = bus_service(tmp_path)
+    assert Path.home().resolve() not in service.editable_places()
+
+
+def test_dbus_edit_tags_page_command():
+    command = dbus_service.page_command("/m/Album", edit_tags=True)
+    assert command[-6:] == ["/m/Album", "--edit-tags", "--web", "--no-browser", "--unvisited-timeout", "600"]
+    assert "EditTags" in dbus_service.INTROSPECTION

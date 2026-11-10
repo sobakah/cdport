@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 NAME = "cdport"
 # The name before 1.3.0. The command stays as an alias: lyrembed and Gatefold

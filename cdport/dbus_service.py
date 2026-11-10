@@ -11,7 +11,9 @@ The service starts each import as a page run of its own (``cdport --web
 --no-browser``, a child process) and hands back the page's address, which
 the caller opens in the browser. It offers fixed operations only: no
 command and no arbitrary folder to work on (an album is continued only when
-it is one of UnfinishedAlbums), so it is no way out of a sandbox.
+it is one of UnfinishedAlbums, and its tags are edited only inside the
+library, the working folder or the music folder), so it is no way out of a
+sandbox. The tag editor writes only what the user saves on its page.
 
 The bus name is the app ID cdport would have as a Flatpak, whose own
 service file would then take over.
@@ -25,6 +27,12 @@ Interface ``io.github.sobakah.cdport1`` on ``/io/github/sobakah/cdport``:
 - ``Import(a{sv} options) -> (s run, s url)``: start a page run; options
   ``Library`` (s, as -l) and ``Folder`` (s, one of UnfinishedAlbums). The
   answer comes once the page is up.
+- ``EditTags(s folder, a{sv} options) -> (s run, s url)``: cdport's tag
+  editor on one album (``cdport FOLDER --edit-tags``), a page run like
+  Import's. The folder must hold FLAC files and lie inside cdport's library,
+  its working folder or the music folder (XDG_MUSIC_DIR); no options yet
+  (unknown ones are refused). Finished's album is the folder afterwards,
+  renamed when the album's name changed. Since cdport 1.4.0.
 - ``Runs() -> a(ss)``: the runs still going, with their page addresses.
 - ``Stop(s run)``: as Ctrl+C: a running tool finishes first (cyanrip its log).
   Only the first Stop of a run sends it: a second Ctrl+C would cut the rip off.
@@ -79,6 +87,12 @@ INTROSPECTION = f"""<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Intr
       <arg name="run" type="s" direction="out"/>
       <arg name="url" type="s" direction="out"/>
     </method>
+    <method name="EditTags">
+      <arg name="folder" type="s" direction="in"/>
+      <arg name="options" type="a{{sv}}" direction="in"/>
+      <arg name="run" type="s" direction="out"/>
+      <arg name="url" type="s" direction="out"/>
+    </method>
     <method name="Runs"><arg name="runs" type="a(ss)" direction="out"/></method>
     <method name="Stop"><arg name="run" type="s" direction="in"/></method>
     <signal name="Finished">
@@ -123,7 +137,7 @@ class ServiceError(Exception):
 class PageRun:
     id: str
     process: Any                  # subprocess.Popen, or a test's stand-in
-    folder: str = ""              # the album it continues, if any
+    folder: str = ""              # the album it continues or edits, if any
     url: str = ""
     album: str = ""               # from the "finished" line
     waiting: Any = None           # the Import call still waiting for url
@@ -131,13 +145,15 @@ class PageRun:
     started: float = field(default_factory=time.monotonic)
 
 
-def page_command(folder: str = "", library: str = "") -> list[str]:
+def page_command(folder: str = "", library: str = "", edit_tags: bool = False) -> list[str]:
     """A page run of the cdport this service runs from (pipx launcher or
-    checkout), like Gatefold's `cdimport --web --no-browser [-l LIB]`."""
+    checkout), like Gatefold's `cdimport --web --no-browser [-l LIB]`;
+    *edit_tags*: only the tag editor on *folder*."""
     from .desktop import launch_command
 
-    return [*launch_command(), *([folder] if folder else []), "--web", "--no-browser",
-            "--unvisited-timeout", f"{UNVISITED_TIMEOUT:.0f}", *(["-l", library] if library else [])]
+    return [*launch_command(), *([folder] if folder else []), *(["--edit-tags"] if edit_tags else []),
+            "--web", "--no-browser", "--unvisited-timeout", f"{UNVISITED_TIMEOUT:.0f}",
+            *(["-l", library] if library else [])]
 
 
 def spawn_page_run(command: list[str]) -> subprocess.Popen:
@@ -168,7 +184,8 @@ class Service:
     def call(self, member: str, signature: str, args: tuple, caller: Any) -> tuple[str, tuple] | None:
         """(signature, body) of the reply, or None when it comes later
         (Import, once the page is up). Raises ServiceError."""
-        expected = {"GetInfo": "", "UnfinishedAlbums": "", "Import": "a{sv}", "Runs": "", "Stop": "s"}
+        expected = {"GetInfo": "", "UnfinishedAlbums": "", "Import": "a{sv}", "EditTags": "sa{sv}",
+                    "Runs": "", "Stop": "s"}
         if member not in expected:
             raise ServiceError("org.freedesktop.DBus.Error.UnknownMethod", f"No method {member} in {INTERFACE}.")
         if signature != expected[member]:
@@ -180,6 +197,9 @@ class Service:
             return "as", ([str(a.folder) for a in self.unfinished()],)
         if member == "Import":
             self.start(args[0], caller)
+            return None
+        if member == "EditTags":
+            self.edit_tags(args[0], args[1], caller)
             return None
         if member == "Runs":
             return "a(ss)", ([(r.id, r.url) for r in self.runs.values() if r.url],)
@@ -225,10 +245,70 @@ class Service:
             if not folder:
                 raise ServiceError(ERROR + ".NotUnfinished",
                                    f"{options['Folder'][1]} is not an unfinished album in cdport's working folder.")
-            if any(r.folder == folder for r in self.runs.values()):
+            if self._busy_with(Path(folder)):
                 raise ServiceError(ERROR + ".Busy", f"A run is already working on {folder}.")
+        return self._spawn_run(page_command(folder, library), folder, caller)
+
+    def editable_places(self) -> list[Path]:
+        """Where EditTags may open an album: cdport's library and working
+        folder, and the music folder a sandboxed caller sees anyway (not the
+        home folder it falls back to: far too wide)."""
+        cfg = self._config()
+        places = [config.expand(cfg[key]) for key in ("library_dir", "work_dir") if cfg[key]]
+        places.append(config.expand(config.music_dir_suggestion()))
+        home = Path.home().resolve()
+        found = []
+        for place in places:
+            try:
+                resolved = place.resolve()
+            except OSError:
+                continue
+            if resolved != home and resolved not in found:
+                found.append(resolved)
+        return found
+
+    def edit_tags(self, folder: str, options: dict[str, tuple[str, Any]], caller: Any) -> PageRun:
+        if options:
+            raise ServiceError("org.freedesktop.DBus.Error.InvalidArgs",
+                               f"Unknown option {sorted(options)[0]} (EditTags has none yet).")
+        path = Path(folder)
+        if not path.is_absolute():
+            raise ServiceError("org.freedesktop.DBus.Error.InvalidArgs", f"The folder must be an absolute path: {folder}")
         try:
-            process = self._spawn(page_command(folder, library))
+            resolved = path.resolve()
+        except OSError as exc:
+            raise ServiceError(ERROR + ".NoFolder", f"Cannot open {folder}: {exc}") from exc
+        if not resolved.is_dir():
+            raise ServiceError(ERROR + ".NoFolder", f"There is no folder {folder}.")
+        places = self.editable_places()
+        if not any(resolved == place or place in resolved.parents for place in places):
+            # The interface must not let a caller point cdport at any folder it likes.
+            raise ServiceError(ERROR + ".NotAllowed",
+                               f"{folder} is not inside cdport's library, its working folder or the music folder "
+                               f"({', '.join(map(str, places)) or 'none set'}).")
+        try:
+            flac = any(p.is_file() and p.suffix.lower() == ".flac" for p in resolved.iterdir())
+        except OSError as exc:
+            raise ServiceError(ERROR + ".NoFolder", f"Cannot open {folder}: {exc}") from exc
+        if not flac:
+            raise ServiceError(ERROR + ".NoAlbum", f"{folder} holds no FLAC files; the tag editor edits FLAC only.")
+        if self._busy_with(resolved):
+            raise ServiceError(ERROR + ".Busy", f"A run is already working on {resolved}.")
+        return self._spawn_run(page_command(str(resolved), edit_tags=True), str(resolved), caller)
+
+    def _busy_with(self, folder: Path) -> bool:
+        """Whether a run was started on *folder* (continuing it, or editing
+        its tags): two pages writing one album's files would trip over each
+        other. A guard, not a lock: a run may get to other albums later."""
+        try:
+            wanted = folder.resolve()
+            return any(r.folder and Path(r.folder).resolve() == wanted for r in self.runs.values())
+        except OSError:
+            return False
+
+    def _spawn_run(self, command: list[str], folder: str, caller: Any) -> PageRun:
+        try:
+            process = self._spawn(command)
         except OSError as exc:
             raise ServiceError(ERROR + ".Failed", f"Could not start cdport: {exc}") from exc
         run = PageRun(str(next(self._ids)), process, folder=folder, waiting=caller, started=self._clock())

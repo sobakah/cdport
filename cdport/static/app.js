@@ -1,6 +1,8 @@
 // cdport's page: what the flow in app.py shows, and its open question.
 // Everything comes from /api/state (cdport/web.py); answers go back to
-// /api/answer. The flow itself is the terminal's, step for step.
+// /api/answer. The flow itself is the terminal's, step for step, but the
+// page can go elsewhere instead of answering (/api/goto): back to the start,
+// or to any step of the album being worked on.
 import { html, render, useState, useEffect, useRef } from '/static/vendor/preact-htm.js';
 import { Icon } from '/static/icons.js';
 
@@ -22,8 +24,13 @@ async function api(path, body) {
   return data;
 }
 
-const STEPS = [[0, 'Tools', 'tools'], [1, 'Disc', 'disc'], [2, 'Rip', 'down'], [3, 'Tags', 'tag'], [4, 'Lyrics', 'lyrics'], [5, 'Finish', 'folder']];
+// [number, name, icon, the album step it shows and goes to]
+const STEPS = [[0, 'Tools', 'tools', null], [1, 'Disc', 'disc', null], [2, 'Rip', 'down', 'rip'],
+  [3, 'Tags', 'tag', 'tags'], [4, 'Lyrics', 'lyrics', 'lyrics'], [5, 'Finish', 'folder', 'finish']];
 const STEP_ICONS = Object.fromEntries(STEPS.map(([n, , icon]) => [n, icon]));
+const ALBUM_STEP_NUMBERS = { tags: 3, lyrics: 4, finish: 5 };
+// Headings without a number.
+const HEADING_ICONS = { Start: 'home', Cover: 'image' };
 // The same links ui.py underlines: never ending in sentence punctuation.
 const URL_PATTERN = /(?:https?):\/\/[^\s)\]]*[^\s)\].,;:!?'"]/g;
 
@@ -152,7 +159,7 @@ function Chips({ names, onChange, label, id }) {
   </div>`;
 }
 
-function TagEditor({ question, onAnswer }) {
+function TagEditor({ question, onAnswer, onDirty }) {
   const [loaded, setLoaded] = useState(null);
   const [edit, setEdit] = useState(null);
   const [plan, setPlan] = useState(null);
@@ -173,6 +180,10 @@ function TagEditor({ question, onAnswer }) {
     }
   };
   useEffect(() => { load(); }, []);
+  // Unsaved changes: going elsewhere asks first.
+  const unsaved = Boolean(edit && loaded && JSON.stringify(edit) !== JSON.stringify(loaded));
+  useEffect(() => { onDirty(unsaved); }, [unsaved]);
+  useEffect(() => () => onDirty(false), []);
   // What a save would rename, worked out by the server while typing.
   useEffect(() => {
     if (!edit) return undefined;
@@ -183,7 +194,7 @@ function TagEditor({ question, onAnswer }) {
   if (error && !edit) return html`<p class="line k-error"><span class="mark">✗</span>${error}</p>`;
   if (!edit) return html`<p class="muted">Reading the tags…</p>`;
 
-  const dirty = JSON.stringify(edit) !== JSON.stringify(loaded);
+  const dirty = unsaved;
   const set = (change) => setEdit({ ...edit, ...change });
   const setTrack = (i, change) => setEdit({ ...edit, tracks: edit.tracks.map((t, j) => (j === i ? { ...t, ...change } : t)) });
   const planFor = (file) => (plan && plan.files ? plan.files.find((f) => f.file === file) : null);
@@ -331,7 +342,37 @@ function TagEditor({ question, onAnswer }) {
   </div>`;
 }
 
-function Question({ question, onAnswer }) {
+// Folders to pick an album from: the browser cannot hand out paths, so
+// cdport lists them (only while it asks for a folder).
+function FolderPicker({ path, onPath, onPick, disabled }) {
+  const [listing, setListing] = useState(null);
+  const [error, setError] = useState('');
+  const load = (target) => api('/folders?path=' + encodeURIComponent(target))
+    .then((l) => { setListing(l); setError(''); onPath(l.path); })
+    .catch((err) => setError(err.message));
+  useEffect(() => { load(path || ''); }, []);
+  if (!listing) return error ? html`<p class="line k-warn"><span class="mark">!</span>${error}</p>` : null;
+  return html`<div class="stack-tight picker">
+    <div class="row-wrap">
+      <button class="btn btn-small" type="button" disabled=${!listing.parent} onClick=${() => load(listing.parent)}><${Icon} name="up" size=${14} /> Up</button>
+      ${listing.places.map((p) => html`<button class="btn btn-small" type="button" key=${p.path} onClick=${() => load(p.path)}>
+        <${Icon} name=${p.name === 'Home' ? 'home' : p.name === 'Library' ? 'note' : 'folder'} size=${14} /> ${p.name}</button>`)}
+      <span class="muted small">${listing.audioFiles
+        ? `${listing.audioFiles} audio file${listing.audioFiles === 1 ? '' : 's'} in this folder`
+        : 'No audio files directly in this folder'}</span>
+    </div>
+    ${error && html`<p class="line k-warn"><span class="mark">!</span>${error}</p>`}
+    <div class="folders">
+      ${listing.dirs.map((d) => html`<button class="list-row" type="button" key=${d.path} onClick=${() => load(d.path)}
+        onDblClick=${() => onPick(d.path)} disabled=${disabled}><${Icon} name="folder" /> ${d.name}</button>`)}
+      ${!listing.dirs.length && html`<p class="muted small pad-row">No subfolders.</p>`}
+      ${listing.truncated && html`<p class="muted small pad-row">Only the first 500 folders are listed.</p>`}
+    </div>
+    <span class="muted small">Click a folder to look inside, double-click to take it.</span>
+  </div>`;
+}
+
+function Question({ question, onAnswer, onDirty }) {
   const [text, setText] = useState(question.kind === 'ask_path' ? question.prefill || '' : '');
   const [sending, setSending] = useState(false);
   const answer = async (value) => {
@@ -369,7 +410,7 @@ function Question({ question, onAnswer }) {
   let body;
   const images = question.images || {};
   if (question.kind === 'tag_editor') {
-    body = html`<${TagEditor} question=${question} onAnswer=${onAnswer} />`;
+    body = html`<${TagEditor} question=${question} onAnswer=${onAnswer} onDirty=${onDirty} />`;
   } else if (question.kind === 'choose' && Object.keys(images).length) {
     // Options with a picture as cards (releases, covers), the rest as usual.
     const pictured = question.options.filter(([key]) => images[key]);
@@ -406,11 +447,13 @@ function Question({ question, onAnswer }) {
       <label class="sr" for="answer">${question.prompt}</label>
       <input id="answer" type="text" class=${question.kind === 'ask_path' && !question.plain ? 'mono' : ''} value=${text} autofocus
         placeholder=${question.default || ''} onInput=${(e) => setText(e.target.value)} />
-      <button class="btn btn-primary" type="submit" disabled=${sending}><${Icon} name="check" /> OK</button>
+      <button class="btn btn-primary" type="submit" disabled=${sending}><${Icon} name="check" /> ${question.folders ? 'Take this folder' : 'OK'}</button>
+      ${question.folders && html`<button class="btn" type="button" disabled=${sending} onClick=${() => answer('')}>Back</button>`}
     </form>
+    ${question.folders && html`<${FolderPicker} path=${text} onPath=${setText} onPick=${answer} disabled=${sending} />`}
     ${question.kind === 'ask' && question.default && html`<span class="muted small">Empty: ${question.default}</span>`}`;
   }
-  return html`<section class=${'question' + (question.kind === 'tag_editor' ? ' wide' : '')} aria-live="polite">
+  return html`<section class=${'question' + (question.kind === 'tag_editor' || question.folders ? ' wide' : '')} aria-live="polite">
     <h2><${Linked} text=${question.prompt} /></h2>
     ${body}
   </section>`;
@@ -428,6 +471,11 @@ function App() {
   // tab reloads once it answers (its instance differs).
   const [restarting, setRestarting] = useState(false);
   const [restartLost, setRestartLost] = useState(false);
+  // Where the flow is: the album worked on, and where the page may go instead
+  // of answering (cdport's ui.navigation).
+  const [album, setAlbum] = useState(null);
+  const [targets, setTargets] = useState([]);
+  const editorDirty = useRef(false);
   const instance = useRef(null);
   const waiting = useRef(false);
   const end = useRef(null);
@@ -462,6 +510,8 @@ function App() {
             });
           }
           setQuestion(state.question);
+          setAlbum(state.album);
+          setTargets(state.targets || []);
           setToolRunning(state.toolRunning);
           setFinished(state.finished);
           if (state.returnUrl) setBack({ url: state.returnUrl, name: state.returnName });
@@ -520,6 +570,12 @@ function App() {
       setError(err.message);
     }
   };
+  // Somewhere else instead of the open question: the flow goes there.
+  const canGo = (target) => targets.includes(target) && !toolRunning && finished === null && !restarting;
+  const goto = async (target) => {
+    if (editorDirty.current && !confirm('The tag editor has unsaved changes. Leave without saving them?')) return;
+    try { await api('/goto', { target }); } catch (err) { setError(err.message); }
+  };
   const quit = async () => {
     if (!confirm('Stop cdport here? Finished steps are saved; start it again to continue.')) return;
     try { await api('/quit', {}); } catch (err) { setError(err.message); }
@@ -544,30 +600,62 @@ function App() {
   const reached = sections.map((s) => s.step).filter(Boolean);
   const current = reached.length ? reached[reached.length - 1].number : null;
   const seen = new Set(reached.map((s) => s.number));
+  // Only an album's tags (cdport FOLDER --edit-tags, or the start's "t"):
+  // the workflow's steps do not apply.
+  const editingOnly = Boolean(album && album.steps && !Object.keys(album.steps).length);
+  // A step's look in the header: the one running now; with an album open,
+  // its steps as the album records them; otherwise only the tools are done.
+  const stepState = (n, step) => {
+    const now = album && ALBUM_STEP_NUMBERS[album.now] !== undefined ? ALBUM_STEP_NUMBERS[album.now] : current;
+    if (n === now && finished === null) return 'now';
+    if (n === 0) return seen.has(0) ? 'done' : '';
+    if (!album || !album.steps) return '';
+    if (n === 1) return album.steps.rip === 'done' ? 'done' : '';
+    const recorded = album.steps[step];
+    return recorded === 'done' ? 'done' : recorded === 'skipped' ? 'skipped' : '';
+  };
 
   return html`
     <header class="topbar">
       <div><span class="brand"><img src="/static/logo.svg" alt="" width="28" height="28" /><span class="brand-name">cdport</span></span></div>
-      <ol class="steps" aria-label="Workflow">
-        ${STEPS.map(([n, name, icon]) => {
-          // The summary has no number: once it shows, every step reached is done.
-          const state = n === current && finished === null ? 'now' : seen.has(n) ? 'done' : '';
-          return html`<li class=${'step ' + state} key=${n}><span class="step-go" aria-current=${state === 'now' ? 'step' : null}>
-            <span class="dot"><${Icon} name=${state === 'done' ? 'check' : icon} size=${14} /></span>
-            <span class="step-name">${name}</span></span></li>`;
+      ${editingOnly ? html`<div class="steps"><span class="step now"><span class="step-go"><span class="dot"><${Icon} name="tag" size=${14} /></span>
+        <span class="step-name">Tag editor</span></span></span></div>` : html`<ol class="steps" aria-label="Workflow">
+        ${STEPS.map(([n, name, icon, step]) => {
+          const state = stepState(n, step);
+          const target = step && step !== 'rip' && canGo(step) ? step : null;
+          const inner = html`<span class="dot"><${Icon} name=${state === 'done' ? 'check' : state === 'skipped' ? 'right' : icon} size=${14} /></span>
+            <span class="step-name">${name}</span>`;
+          return html`<li class=${'step ' + state} key=${n}>${target
+            ? html`<button class="step-go" type="button" aria-current=${state === 'now' ? 'step' : null}
+                title=${`Go to ${name}` + (state === 'done' ? ' (done; again)' : state === 'skipped' ? ' (skipped)' : '')}
+                onClick=${() => goto(target)}>${inner}</button>`
+            : html`<span class="step-go" aria-current=${state === 'now' ? 'step' : null}>${inner}</span>`}</li>`;
         })}
-      </ol>
+      </ol>`}
       <div class="topbar-end">
+        ${canGo('start') && html`<button class="btn btn-flat" title="Back to the start: another disc or album (what is done stays done)"
+          onClick=${() => goto('start')}><${Icon} name="home" /><span class="btn-text">Start</span></button>`}
         ${finished === null && html`<button class="btn btn-flat" disabled=${toolRunning} title=${toolRunning ? 'A tool is running: stop it first' : 'Stop cdport'}
           onClick=${quit}><${Icon} name="stop" /><span class="btn-text">Stop cdport</span></button>`}
       </div>
     </header>
+    ${album && finished === null && html`<div class="album-bar">
+      <img class="album-thumb" src=${`/api/album-cover?v=${encodeURIComponent(album.folder)}-${coverRev(events)}`} alt=""
+        onError=${(e) => { e.target.style.visibility = 'hidden'; }} onLoad=${(e) => { e.target.style.visibility = ''; }} />
+      <div class="stack-tight grow">
+        <b class="album-name">${album.name}</b>
+        <span class="mono small muted album-path">${album.path}</span>
+      </div>
+      ${targets.includes('cover') && html`<button class="btn btn-small" type="button" disabled=${!canGo('cover')}
+        onClick=${() => goto('cover')}><${Icon} name="image" size=${14} /> Cover…</button>`}
+    </div>`}
     <main>
       ${sections.map((s, i) => html`<section class=${'section' + (i < sections.length - 1 ? ' old' : '')} key=${i}>
-        ${s.step && html`<h2><span class="dot"><${Icon} name=${STEP_ICONS[s.step.number] || 'flag'} size=${14} /></span>${s.step.text}</h2>`}
+        ${s.step && html`<h2><span class="dot"><${Icon} name=${STEP_ICONS[s.step.number] || HEADING_ICONS[s.step.text] || 'flag'} size=${14} /></span>${s.step.text}</h2>`}
         ${s.items.map((e) => html`<${Item} key=${e.id} event=${e} />`)}
       </section>`)}
-      ${question && html`<${Question} key=${question.id} question=${question} onAnswer=${answer} />`}
+      ${question && html`<${Question} key=${question.id} question=${question} onAnswer=${answer}
+        onDirty=${(dirty) => { editorDirty.current = dirty; }} />`}
       ${restarting && !restartLost && html`<p class="note note-info row-wrap"><span class="spinner" aria-hidden="true"></span>
         Starting the new cdport… this page reloads once it answers.</p>`}
       ${restartLost && html`<p class="note note-error">The new cdport did not answer on this address. Start cdport
@@ -587,6 +675,13 @@ function App() {
       <p class="muted">You can close this tab.</p>
     </div></div>`}
   `;
+}
+
+// The album bar's cover is asked for again when its folder changes, or a
+// cover was embedded or changed (covertool.offer says so): not at every
+// revision.
+function coverRev(events) {
+  return events.filter((e) => e && e.kind === 'success' && e.text.startsWith('Cover ')).length;
 }
 
 render(html`<${App} />`, document.getElementById('app'));

@@ -21,6 +21,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("folder", nargs="?", type=Path,
                         help="continue with an album ripped earlier (tags, lyrics, finish) instead of a disc")
     parser.add_argument("--version", action="version", version=f"cdport {__version__}")
+    jump = parser.add_mutually_exclusive_group()
+    jump.add_argument("--step", choices=STEP_CHOICES,
+                      help="with FOLDER: begin with this step instead of the next open one; the others follow in order")
+    jump.add_argument("--edit-tags", action="store_true",
+                      help="with FOLDER: only edit its tags (and cover), then end; leaves no trace in the folder")
     parser.add_argument("-c", "--config", type=Path, metavar="FILE",
                         help=f"config file (default: {config.default_config_path()})")
     parser.add_argument("-w", "--work-dir", metavar="DIR", help="working folder for this run (default: config work_dir, asked on first use)")
@@ -60,6 +65,10 @@ def build_parser() -> argparse.ArgumentParser:
     service.add_argument("--dbus", action="store_true",
                          help="serve the D-Bus interface until idle (what the bus starts)")
     return parser
+
+
+# The steps --step can begin with: the album's, and its cover.
+STEP_CHOICES = ("cover", "tags", "lyrics", "finish")
 
 
 def local_page(url: str) -> bool:
@@ -137,6 +146,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--return-url must be a page on this computer, such as http://127.0.0.1:8000/")
     if args.unvisited_timeout and not args.web:
         parser.error("--unvisited-timeout only applies together with --web")
+    if (args.step or args.edit_tags) and not args.folder:
+        parser.error(f"--{'step' if args.step else 'edit-tags'} needs an album FOLDER")
     if args.update and args.return_url:
         parser.error("--update does not apply with --return-url")
     if args.editor and args.editor != "skip" and args.editor not in cfg["editors"]:
@@ -151,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
     options = app.Options(folder=args.folder, device=args.device or "",
                           lyrics=args.lyrics or "", editor=args.editor or "",
                           install_cyanrip=args.install_cyanrip, rip_mode=args.rip_mode or "",
+                          step=args.step or "", edit_tags=args.edit_tags,
                           # Started by another program's page: that one stays in charge.
                           self_update="now" if args.update else "never" if args.return_url
                           else "start" if cfg["check_for_updates"] else "never")

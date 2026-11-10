@@ -11,6 +11,18 @@ next line's tag.
 
 ## [Unreleased]
 
+### Added
+
+- **A run is no longer one fixed line.** It begins at **Start**, which offers the disc in the drive, the unfinished albums (on the page with their covers), any album folder, or only an album's tags, and it comes back there after each album until you quit. On the page, **Tags**, **Lyrics** and **Finish** in the step bar go straight to that step of the open album (Tags opens the editor at once), done or not, and the steps after it follow in order; **Cover…** in the new album bar changes the cover and comes back; **Start** in the header leaves the album resumable for another disc or album. Nothing of this while a tool runs. Finishing an album counts the steps left out as skipped.
+- **Edit only an album's tags:** `cdport FOLDER --edit-tags` (in the terminal with Ear Tag and co., on the page with cdport's own editor) leaves no trace in the folder but the tags you save, so it also suits albums in the library. `cdport FOLDER --step STEP` begins with that step.
+- **The tag editor over D-Bus:** `EditTags(folder, options)` opens it on its own page and answers with the address, like `Import`. Only for folders inside cdport's library, its working folder or the music folder; `Finished` names the album's folder afterwards, renamed if its name changed. For Gatefold's **Edit Tags**, which can't reach Ear Tag from a Flatpak.
+- On the page, asking for an album folder lists folders to click through (the working folder, the library, home).
+
+### Changed
+
+- The disc step's "continue with an existing album folder" is now "back to the start", where albums are picked; the question "Start another run?" after the summary is gone (Start comes back instead, with quit as its default when there is no disc).
+- The cover question has a heading of its own ("Cover").
+
 ## [1.3.0] — 2026-11-09
 
 ### Added

@@ -41,6 +41,19 @@ LABEL_WIDTH = 10
 _color = False
 
 
+class Jump(Exception):
+    """The user went elsewhere instead of answering (a page's step bar or
+    Start button): raised by the open question, or a pause, and caught by
+    the flow where *target* begins. Targets: "start" (the start of a run:
+    a disc or another album), and the album's "cover", "tags", "lyrics"
+    and "finish". Only a front end raises it, and only for a target the
+    flow offered with navigation(); the terminal has no such way."""
+
+    def __init__(self, target: str) -> None:
+        super().__init__(target)
+        self.target = target
+
+
 class Front:
     """A front end other than the terminal. message() gets every kind of
     output (step, info, success, warn, error, dim, field, check, gap,
@@ -73,7 +86,9 @@ class Front:
     def ask_edit(self, prompt: str, prefill: str = "") -> str:
         raise NotImplementedError
 
-    def ask_path(self, prompt: str, prefill: str = "") -> str:
+    def ask_path(self, prompt: str, prefill: str = "", folders: bool = False) -> str:
+        """*folders*: the answer is a folder, which a page lets the user
+        pick from a list."""
         raise NotImplementedError
 
     def wait_for_enter(self, prompt: str) -> None:
@@ -96,6 +111,11 @@ class Front:
         new folder at once on each save that renames it: the flow may be
         stopped before the editor returns."""
         raise NotImplementedError
+
+    def navigation(self, album: dict | None, targets: tuple[str, ...]) -> None:
+        """Where the flow is: the album it works on (folder, name, and each
+        step's state) and where the user may go instead of answering (see
+        Jump). The terminal has its step headings; a page shows this."""
 
 
 _front: Front | None = None
@@ -139,6 +159,19 @@ def edit_tags(folder: Path, moved: Callable[[Path], None] | None = None) -> tupl
     if _front is None:
         raise RuntimeError("the terminal has no tag editor of its own")
     return _front.edit_tags(folder, moved)
+
+
+def navigation(album: Path | None = None, steps: dict[str, str] | None = None, now: str = "",
+               targets: tuple[str, ...] = ()) -> None:
+    """Tell the front end the album being worked on (None: none), its steps'
+    states ("done", "skipped", "open"), the step running *now*, and the
+    places the user may jump to (Jump). The terminal shows nothing."""
+    if _front is None:
+        return
+    info = None
+    if album is not None:
+        info = {"folder": str(album), "name": album.name, "path": tilde(album), "steps": dict(steps or {}), "now": now}
+    _front.navigation(info, tuple(targets))
 
 
 def wants_pty() -> bool:
@@ -430,14 +463,15 @@ def ask_edit(prompt: str, prefill: str = "") -> str:
         hook(None)
 
 
-def ask_path(prompt: str, prefill: str = "") -> str:
+def ask_path(prompt: str, prefill: str = "", folders: bool = False) -> str:
     """Ask for a path with the answer prefilled and editable, and Tab completion.
 
     Without readline the prefill is shown in brackets and an empty answer
     accepts it. With readline an empty answer means the user cleared the line.
+    *folders*: a folder is asked for; a page offers a list to pick it from.
     """
     if _front is not None:
-        return _front.ask_path(prompt, prefill)
+        return _front.ask_path(prompt, prefill, folders) if folders else _front.ask_path(prompt, prefill)
     hook = getattr(_readline, "set_startup_hook", None)
     insert = getattr(_readline, "insert_text", None)
     if not (hook and insert):

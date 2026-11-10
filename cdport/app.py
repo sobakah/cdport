@@ -35,6 +35,8 @@ class Options:
     editor: str = ""
     install_cyanrip: bool = False
     rip_mode: str = ""  # "fast" or "secure"; empty: config cyanrip.mode
+    step: str = ""  # with folder: begin with this step ("cover", "tags", "lyrics", "finish")
+    edit_tags: bool = False  # with folder: only edit its tags, then end (no state file, no tools step)
     # A newer cdport: "start" (config check_for_updates: at every start,
     # without waiting), "now" (--update: waits for GitHub's answer) or "never"
     # (switched off, or started by another program's page).
@@ -82,35 +84,65 @@ def new_session(cfg: dict[str, Any], options: Options, config_path: Path | None 
 
 
 def run(session: Session) -> int:
-    """The whole program after argument parsing; returns the exit code."""
+    """The whole program after argument parsing; returns the exit code.
+
+    A run begins at the start (a disc to rip, an unfinished album, any album
+    folder, or only an album's tags) and comes back there after each album,
+    until the user quits. Within an album the steps follow in order, but a
+    front end may jump to any of them (ui.Jump), and the order goes on from
+    there."""
+    if session.options.edit_tags:
+        return edit_tags_run(session)
     if session.options.self_update != "never":
         session.update_check = UpdateCheck()
     ask_missing_folders(session)
     check_tools(session)
 
-    folder = session.options.folder
+    folder, first = session.options.folder, session.options.step or None
+    returning = False
     while True:
         offer_staging_cleanup(session)
         session.album = None
         session.logs = []
         session.forget_one_time_offset()
+        ui.navigation()
         if folder:
             album = open_folder(folder)
             folder = None  # the folder from the command line is for the first run only
         else:
-            album = offer_resume(session) or disc_and_rip(session)
+            album = start(session, returning)
+            first = None
         if album is None:
             break
+        returning = True
         session.album = album
-        continue_album(session, album)
+        try:
+            continue_album(session, album, first)
+        except ui.Jump:  # back to the start: the album stays as it is
+            if album.next_step() is not None and album.path.exists():
+                ui.info(f"{album.folder.name} keeps its finished steps; continue it from the start any time.")
+            continue
         if album.next_step() is None:
             session.last_album = album
         summary(session, album)
-        ui.gap()
-        if not ui.confirm("Start another run (next disc or album)?", default=False):
-            break
     late_self_update(session)
     return 1 if session.failed else 0
+
+
+def edit_tags_run(session: Session) -> int:
+    """cdport FOLDER --edit-tags: the tag editor on one album, nothing else
+    (Gatefold's "Edit Tags", over D-Bus). No tools step, no update offer,
+    and no state file: the album may be one in the library."""
+    folder = session.options.folder
+    if folder is None:
+        ui.error("--edit-tags needs an album folder.")
+        return 2
+    album = edit_tags_only(session, folder)
+    if album is None:
+        return 1
+    # The folder follows a changed album name; the "finished" line names it.
+    session.last_album = album
+    return 0
 
 
 # Suggestions for the first-run question; nothing is used without asking.
@@ -398,22 +430,83 @@ def offer_staging_cleanup(session: Session) -> None:
             ui.success("Deleted.")
 
 
-def offer_resume(session: Session) -> AlbumState | None:
-    unfinished = state.unfinished_albums(session.work_dir)
-    if not unfinished:
-        return None
-    ui.gap()
-    ui.info("Unfinished albums in the working folder:")
-    options = [(str(i), f"{a.folder.name}  (next: {a.next_step()})") for i, a in enumerate(unfinished, 1)]
-    options.append(("n", "start with a new disc"))
-    answer = ui.choose("Continue with", options, default="1")
-    if answer == "n":
-        return None
-    return unfinished[int(answer) - 1]
+# Where the user may jump to (ui.Jump): back to the start from a disc, and
+# also to each of an album's steps while one is worked on.
+START = "start"
+ALBUM_TARGETS = (START, "cover", "tags", "lyrics", "finish")
 
 
-def open_folder(folder: Path) -> AlbumState | None:
-    """An album ripped earlier: continue with tags, lyrics and finish."""
+def start(session: Session, returning: bool = False) -> AlbumState | None:
+    """The start of a run, and where it comes back after each album: rip a
+    disc, continue an unfinished album, open any album folder, or only edit
+    an album's tags. None: quit.
+
+    The default follows what is there: a disc in the drive is ripped; else
+    the first unfinished album; else, after an album, quitting.
+    """
+    while True:
+        ui.step(None, "Start")
+        ui.navigation()
+        unfinished = state.unfinished_albums(session.work_dir) if session.work_dir else []
+        drive = ready_drive(session) if session.cyanrip else None
+        options = []
+        if session.cyanrip:
+            options.append(("d", f"rip the disc in {drive.device}" if drive
+                            else "rip a disc (cdport waits for one)"))
+        else:
+            ui.dim("cyanrip is missing, so ripping is off; step 0 above says how to install it.")
+        images = {}
+        for i, album in enumerate(unfinished, 1):
+            options.append((str(i), f"continue {album.folder.name}\n      next: {album.next_step()}"))
+            images[str(i)] = {"album": str(album.folder)}
+        options += [("o", "open an album folder, to continue with its open steps"),
+                    ("t", "edit the tags of an album folder"),
+                    ("q", "quit")]
+        if drive:
+            default = "d"
+        elif returning:
+            default = "q"
+        else:
+            default = "1" if unfinished else "d" if session.cyanrip else "o"
+        answer = ui.choose("What next", options, default=default, info={"images": images})
+        if answer == "q":
+            return None
+        if answer.isdigit():
+            return unfinished[int(answer) - 1]
+        if answer == "d":
+            try:
+                album = disc_and_rip(session)
+            except ui.Jump:  # back to the start
+                continue
+            if album is not None:
+                return album
+            continue
+        folder = ask_folder()
+        if folder is None:
+            continue
+        if answer == "o":
+            album = open_folder(folder)
+            if album is not None:
+                return album
+            continue
+        try:
+            edit_tags_only(session, folder, back=True)
+        except ui.Jump:
+            continue
+
+
+def ready_drive(session: Session) -> disc.Drive | None:
+    """A free drive with an audio CD, the start's default; None when there
+    is none, or detection is not available here."""
+    wanted = _wanted_device(session)
+    drives = disc.find_drives() or []
+    return next((d for d in drives if d.has_audio and (not wanted or d.device == wanted)
+                 and not disc.busy(d.device)), None)
+
+
+def open_folder(folder: Path, transient: bool = False) -> AlbumState | None:
+    """An album ripped earlier: continue with tags, lyrics and finish.
+    *transient*: only looked at (its tags edited), so no state file is written."""
     folder = expand(folder).resolve()
     if not folder.is_dir():
         ui.error(f"Not a folder: {folder}")
@@ -426,31 +519,58 @@ def open_folder(folder: Path) -> AlbumState | None:
     except ValueError as exc:
         ui.error(str(exc))
         return None
+    album.transient = transient
     album.save()
     return album
 
 
-def ask_folder() -> AlbumState | None:
+def ask_folder() -> Path | None:
+    """An album folder (one with audio files) the user names; None to go back."""
     while True:
-        answer = ui.ask_path("Album folder (empty to go back)")
+        answer = ui.ask_path("Album folder (empty to go back)", folders=True)
         if not answer:
             return None
-        album = open_folder(Path(answer))
-        if album:
+        folder = expand(answer)
+        if not folder.is_dir():
+            ui.error(f"Not a folder: {folder}")
+        elif not tags.audio_files(folder):
+            ui.error(f"No audio files in {folder}")
+        else:
+            return folder.resolve()
+
+
+def edit_tags_only(session: Session, folder: Path, back: bool = False) -> AlbumState | None:
+    """Edit an album's tags (and its cover), nothing else; None when the
+    folder is no album. No state file is written or changed. *back*: the
+    start is a jump target (from the start's "t")."""
+    album = open_folder(folder, transient=True)
+    if album is None:
+        return None
+    while True:
+        ui.navigation(album.folder, {}, now="tags", targets=(START, "cover") if back else ("cover",))
+        try:
+            tags_step(session, album, direct=True)
             return album
+        except ui.Jump as jump:
+            if jump.target != "cover":
+                raise
+            ui.step(None, "Cover")
+            offer_cover(album.folder)
 
 
 # --- 1. Disc -----------------------------------------------------------------
 def disc_and_rip(session: Session) -> AlbumState | None:
+    """Find a disc and rip it; None: back to the start."""
     ui.step(1, "Disc")
+    ui.navigation(targets=(START,))
     if not session.cyanrip:
         ui.warn("cyanrip is missing, so only an album ripped earlier can be continued.")
-        return ask_folder()
+        return None
 
     while True:
         found = find_disc(session)
-        if isinstance(found, AlbumState):
-            return found
+        if found is None:
+            return None
         try:
             with disc.hold(found):
                 album = preview_and_rip(session, found)
@@ -465,16 +585,16 @@ def _wanted_device(session: Session) -> str:
     return session.options.device or session.cfg["cyanrip"]["device"]
 
 
-def find_disc(session: Session) -> str | AlbumState:
+def find_disc(session: Session) -> str | None:
     """Wait for an audio CD; returns its device ("" = cyanrip's default
-    drive) or an existing album folder the user picked instead."""
+    drive), or None to go back to the start."""
     while True:
         drives = disc.find_drives()
         wanted = _wanted_device(session)
         if drives is None:
             ui.info("Disc detection is not available on this platform yet.")
             answer = ui.choose("What now", [("r", "rip from " + (wanted or "the default drive")),
-                                            ("f", "continue with an existing album folder"),
+                                            ("b", "back to the start (an album ripped earlier)"),
                                             ("q", "quit")], default="r")
             if answer == "r":
                 return wanted
@@ -499,7 +619,7 @@ def find_disc(session: Session) -> str | AlbumState:
             answer = ui.choose("No free drive with an audio CD" if taken else "No audio CD", [("c", "check again"),
                                                ("w", "wait for a disc or a free drive"
                                                      + (" (Ctrl+C to stop waiting)" if ui.in_terminal() else "")),
-                                               ("f", "continue with an existing album folder"),
+                                               ("b", "back to the start (an album ripped earlier)"),
                                                ("q", "quit")], default="c")
             if answer == "w":
                 device = wait_for_disc(wanted)
@@ -510,9 +630,7 @@ def find_disc(session: Session) -> str | AlbumState:
                 continue
         if answer == "q":
             raise Quit(0)
-        album = ask_folder()
-        if album:
-            return album
+        return None
 
 
 def wait_for_disc(wanted: str) -> str | None:
@@ -912,28 +1030,62 @@ def ask_offset(prompt: str) -> int | None:
 
 
 # --- 3.-5. -------------------------------------------------------------------
-def continue_album(session: Session, album: AlbumState) -> None:
+def show_album(album: AlbumState, now: str) -> None:
+    """The album and its steps for a front end, which lets the user jump."""
+    ui.navigation(album.folder, album.step_states(), now=now, targets=ALBUM_TARGETS)
+
+
+def continue_album(session: Session, album: AlbumState, first: str | None = None) -> None:
+    """The album's open steps in order, from *first* (a step the user picked)
+    or the next open one. A jump (ui.Jump, from a front end) runs that step
+    instead, and the order goes on after it; the cover returns to the step
+    it interrupted. Jump("start") is left to the caller."""
     handlers = {"tags": tags_step, "lyrics": lyrics_step, "finish": finish_step}
-    # Every time an album is worked on: after a rip, and whenever it is opened
-    # again (resumed, or given as a folder), whatever step comes next. Asks
-    # only when tracks lack a cover.
-    if album.next_step() is not None:
-        offer_cover(album.folder)
-    while (step := album.next_step()) is not None:
-        if step == "rip":  # unreachable: folders without a rip have no state file
-            album.mark("rip")
-            continue
-        if not handlers[step](session, album):
-            return  # the step failed or the user stopped; state stays resumable
+    guided = first in (None, "cover")
+    resume = album.next_step() if guided else first
+    if first is None and resume is None:
+        return
+    # The cover comes first every time an album is worked on in order: after
+    # a rip, and whenever it is opened again (resumed, or given as a folder).
+    step = "cover" if guided else first
+    jumped = not guided
+    while step is not None:
+        show_album(album, step)
+        try:
+            if step == "cover":
+                ui.step(None, "Cover")
+                offer_cover(album.folder)
+                step = resume
+                continue
+            if step == "rip":  # unreachable: folders without a rip have no state file
+                album.mark("rip")
+            elif step == "tags":
+                if not tags_step(session, album, direct=jumped):
+                    return
+            elif not handlers[step](session, album):
+                return  # the step failed or the user stopped; state stays resumable
+            jumped = False
+            step = resume = album.next_step(after=step)
+        except ui.Jump as jump:
+            if jump.target not in ALBUM_TARGETS or jump.target == START:
+                raise
+            if jump.target == "cover":
+                resume = step if step != "cover" else resume
+            else:
+                jumped = True
+            step = jump.target
 
 
-def tags_step(session: Session, album: AlbumState) -> bool:
+def tags_step(session: Session, album: AlbumState, direct: bool = False) -> bool:
+    """*direct*: the user asked for the tags (a jump, or only the tags): a
+    front end's own editor opens without the menu first."""
     ui.step(3, "Tags")
     cfg = session.cfg
     key = session.options.editor or cfg["editor"]
     editor = tools.editor_or_fallback(cfg, key) if key != "skip" else None
     edited = False
     builtin = ui.supports("tag_editor")
+    only = album.transient  # nothing comes after; "continue" ends the editing
     while True:
         options = []
         if builtin:
@@ -943,10 +1095,16 @@ def tags_step(session: Session, album: AlbumState) -> bool:
         others = [e for e in tools.available_editors(cfg) if not editor or e.key != editor.key]
         if others:
             options.append(("e", "use another editor"))
-        options += [("c", "continue without editing" if not edited else "continue"),
-                    ("q", "stop here (continue later)")]
+        if only:
+            options += [("c", "done")]
+        else:
+            options += [("c", "continue without editing" if not edited else "continue"),
+                        ("q", "stop here (continue later)")]
         first_choice = "w" if builtin else "o" if editor else "c"
-        answer = ui.choose("Tags", options, default=first_choice if not edited else "c")
+        if direct and builtin and not edited:
+            answer = "w"
+        else:
+            answer = ui.choose("Tags", options, default=first_choice if not edited else "c")
         if answer == "q":
             raise Quit(0)
         if answer == "w":
@@ -974,7 +1132,7 @@ def tags_step(session: Session, album: AlbumState) -> bool:
                 edited = True
             continue
         # "c": check before lyrembed needs the tags.
-        if check_tags(album.folder) or ui.confirm("Continue anyway?", default=False):
+        if check_tags(album.folder) or only or ui.confirm("Continue anyway?", default=False):
             album.mark("tags", skipped=not edited)
             return True
 
@@ -1208,10 +1366,22 @@ def _inside(path: Path, parent: Path) -> bool:
     return True
 
 
+def skip_open_steps(album: AlbumState) -> None:
+    """Steps the user jumped past count as skipped once the album is finished."""
+    for name in ("tags", "lyrics"):
+        if album.is_open(name):
+            album.skipped.append(name)
+
+
 def finish_step(session: Session, album: AlbumState) -> bool:
     ui.step(5, "Finish")
+    passed = [name for name in ("tags", "lyrics") if album.is_open(name)]
+    if passed:
+        ui.dim(f"Not done: {' and '.join(passed)}. Finishing the album skips "
+               f"{'it' if len(passed) == 1 else 'them'}.")
     if _inside(album.folder, session.library_dir):
         ui.info("The album is already in the music library.")
+        skip_open_steps(album)
         album.mark("finish")
         album.remove()
         return True
@@ -1248,6 +1418,7 @@ def finish_step(session: Session, album: AlbumState) -> bool:
                 target = expand(entered)
             continue
         if answer == "k":
+            skip_open_steps(album)
             album.mark("finish")
             album.remove()
             return True
@@ -1268,6 +1439,7 @@ def finish_step(session: Session, album: AlbumState) -> bool:
                 ui.warn(f"The working folder {ui.tilde(album.folder)} stayed ({exc.strerror or exc}); "
                         "the disc's files are in the library.")
         album.folder = target
+        skip_open_steps(album)
         album.mark("finish")
         album.remove()
         ui.success(f"Added disc {', '.join(merge.discs_here)} to {ui.tilde(target)}" if merge

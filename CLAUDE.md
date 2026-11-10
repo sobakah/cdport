@@ -10,11 +10,14 @@ tagged, lyrics-embedded FLAC album by driving existing tools in sequence:
 ```
 cdport
  ├─ 0. Tools      cyanrip, a tag editor, lyrembed: find them, offer to install
+ ├─ Start         a disc, an unfinished album, any album folder, or only its tags
  ├─ 1. Disc       audio CD in the drive? preview the MusicBrainz match
  ├─ 2. Rip        cyanrip → FLAC with tags, cover, AccurateRip log
+ ├─ Cover         offered whenever an album is opened
  ├─ 3. Tags       Ear Tag (or another editor) for manual revision
  ├─ 4. Lyrics     lyrembed, automatic or interactive
- └─ 5. Finish     offer to move the album into the music library, summary
+ └─ 5. Finish     offer to move the album into the music library, summary,
+                  then back to Start
 ```
 
 It replaces the maintainer's manual workflow: copy WAVs off the CD, convert
@@ -79,6 +82,9 @@ update check found.
 1.3.0 (2026-11-09): renamed from cdimport to cdport, with the old name kept
 where other programs depend on it (see "The name" below), and the D-Bus
 interface for Gatefold (`dbus_service.py`, see "D-Bus interface" below).
+1.4.0 (2026-11-10, not released yet): the run is no longer one line (see
+"Not one line" below): a start to come back to, jumps to any of an album's
+steps on the page, `--step`, `--edit-tags`, and `EditTags` over D-Bus.
 
 1.1.0 (2026-10-29): cyanrip installed and updated on the page
 (`install.run_package_manager`, `proc.run_shown`), the app-menu entry
@@ -147,6 +153,37 @@ regenerate it (see `config.write_example`); a test fails until then.
   `Session.lyrembed_page`, `app.page_hint`).
 - **Tag editor**: Ear Tag by default, others selectable (Kid3, Picard),
   configurable as a command template, or skip.
+
+### Not one line (1.4.0)
+
+Asked for by the maintainer on 2026-11-10: as a visual program cdport
+should not be a wrapper that runs one line; the rip stays guided, but it
+must be easy to go straight to the tag editor, for example.
+
+- **Start** (`app.start`) is where a run begins and where it comes back
+  after each album, in the terminal and on the page: `d` the disc (the
+  default when `ready_drive` finds one), the unfinished albums (with
+  `{"album": folder}` pictures on the page), `o` any album folder, `t` only
+  its tags, `q` quit (the default after an album without a disc: it
+  replaced "Start another run?"). The disc step's "continue with an
+  existing album folder" became "back to the start".
+- **Jumps** (`ui.Jump`): a front end may answer the open question (or the
+  disc wait's pause) by going elsewhere, but only to a target the flow
+  offered with `ui.navigation(album, steps, now, targets)`. `continue_album`
+  catches the album's targets: the step runs (done or not; Tags opens the
+  page's editor directly, `direct`), then `AlbumState.next_step(after=…)`
+  goes on in order; `cover` returns to the step it interrupted. `start`
+  goes up to `run`/`start`, leaving the album resumable. The disc step
+  offers only `start`. Step 0, the folder questions and the staging
+  cleanup offer nothing, so a jump never lands where nobody catches it.
+  The terminal has no way to jump; `--step` is its equivalent.
+- `finish_step` marks the steps jumped past as skipped (`skip_open_steps`)
+  and says so.
+- **Editing only** (`edit_tags_only`, `--edit-tags`, the start's `t`):
+  `AlbumState.transient` never writes a state file, so an album in the
+  library stays untouched but for its tags; no tools step, no update check.
+  The run's "finished" line names the folder afterwards (renamed when the
+  album was), which D-Bus `Finished` passes on.
 
 ### The name
 
@@ -697,6 +734,19 @@ A front end that wants live tool progress keeps the pseudo-terminal
   does), actions. `icon.svg` is unreadable below about 64 px: the header and
   the browser tab use `logo.svg`, the full icon appears only at 112 px on
   status pages.
+- **Going elsewhere** (1.4.0): `WebFront.navigation` keeps the album (folder,
+  name, step states, the step now) and the targets for the page; `/api/goto`
+  (`WebFront.jump`) answers the open question with `ui.Jump`, or ends the
+  disc wait's pause, and refuses while a tool runs, while stopping, and for
+  targets not offered. The page's step bar makes Tags/Lyrics/Finish buttons,
+  the header gets **Start**, and an album bar shows the cover
+  (`/api/album-cover`, `tageditor.album_cover`: the embedded front cover,
+  else cover.jpg/.png) and **Cover…**. The tag editor reports unsaved
+  changes (`onDirty`), and a jump asks first. Editing only (`album.steps`
+  empty) shows "Tag editor" instead of the workflow's steps.
+- `ui.ask_path(..., folders=True)` lets the page list folders to pick from
+  (`/api/folders`, only while such a question is open; places: working
+  folder, library, home), like lyrembed's folder picker.
 - `static/vendor/preact-htm.js` is the file lyrembed vendors (htm 3.1.1's
   Preact bundle, checksum and licenses in `LICENSES.txt`).
 
@@ -743,6 +793,21 @@ file and `.cdimport.json` (§10.2 there) has a call:
   --host`): no command, no free folder. `Folder` must be one of
   `UnfinishedAlbums`; `Library` must be an existing absolute folder (as
   `-l`, where the user still confirms the move on the page).
+- **`EditTags(s folder, a{sv} options)`** (1.4.0, the maintainer's request
+  2026-11-10; Gatefold's Flatpak cannot start Ear Tag, its CONCEPT.md
+  "A simple tag editor in Gatefold"): a page run of `cdport FOLDER
+  --edit-tags`, answered with its address like `Import`. The folder must
+  hold FLAC files and resolve inside the config's library or working folder
+  or the music folder (`editable_places`; not the home folder
+  `music_dir_suggestion` may fall back to). No options yet; unknown ones are
+  refused. `_busy_with` refuses a second run on the same album (Import's
+  `Folder` too). The page writes only what the user saves.
+- The token in the returned address opens the page's whole API, and the
+  page can now open any folder (as Import's could before through "continue
+  with an existing album folder"). lyrembed's service opens the browser
+  itself instead and never hands out the address (its `OpenPage`); cdport1
+  keeps returning it, as Gatefold's code expects. Worth changing in a
+  cdport2.
 - `Service` holds the calls and runs without the bus (tests drive it with
   stand-in processes); `serve` is the jeepney loop: `receive`/`send` only,
   never `send_and_get_reply` after start-up, which drops every message that
