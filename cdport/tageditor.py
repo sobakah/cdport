@@ -1,8 +1,9 @@
 """The page's tag editor: read and write an album's tags, and rename what follows them.
 
-FLAC only, as cdport rips. Several artists follow Picard: ARTIST holds
-the credit as one line ("A feat. B"), ARTISTS the single names, and the same
-for ALBUMARTIST and ALBUMARTISTS. cyanrip writes the credit only.
+FLAC, as cdport rips, and MP3, Ogg Vorbis, Opus and M4A (`audiotags` keeps
+the formats apart; an album may mix them). Several artists follow Picard:
+ARTIST holds the credit as one line ("A feat. B"), ARTISTS the single names,
+and the same for ALBUMARTIST and ALBUMARTISTS. cyanrip writes the credit only.
 
 A changed title renames its file, and a changed album the folder, but only
 where cyanrip built the name: "{track} - {title}" (with "{disc}." on
@@ -19,7 +20,7 @@ import os
 import re
 from pathlib import Path
 
-from . import cover as cover_module, tags
+from . import audiotags, cover as cover_module, tags
 
 # cyanrip's default sanitation (src/naming.c, crip_char_replacement, with
 # CRIP_SANITIZE_UNICODE from cyanrip_main.c): look-alikes, and straight
@@ -27,15 +28,7 @@ from . import cover as cover_module, tags
 _CYANRIP_REPLACEMENTS = {"<": "‹", ">": "›", ":": "∶", "|": "│", "?": "？", "*": "∗", "/": "∕", "\\": "⧹"}
 _TRACK_PREFIX = re.compile(r"^(?:\d+\.)?\d+ - ")
 _CUE_FILE = re.compile(r'^(\s*FILE ")(.*)(".*)$')
-ALBUM_ARTIST_KEYS = ("albumartist", "album artist", "album_artist")
 _ALBUM_FIELDS = ("album", "albumArtist", "albumArtists", "date", "genre")
-# Tags with a field of their own in the editor; every other tag is listed as
-# it is in the file ("other"), lyrics excepted: lyrembed's business, and far
-# too long for a field.
-_OWN_FIELDS = {"title", "artist", "artists", "album", "albumartists", "date", "genre",
-               "tracknumber", "discnumber", *ALBUM_ARTIST_KEYS}
-_LYRICS_KEYS = {"lyrics", "unsyncedlyrics", "syncedlyrics"}
-FRONT_COVER = 3  # FLAC picture type
 NAME_MAX = 255  # bytes in a file name, on Linux file systems
 
 
@@ -63,70 +56,52 @@ def credit_from(names: list[str]) -> str:
     return ", ".join(names[:-1]) + " & " + names[-1]
 
 
-def _flac(folder: Path) -> list[Path]:
-    return [f for f in tags.audio_files(folder) if f.suffix.lower() == ".flac"]
+def _editable(folder: Path) -> list[Path]:
+    return audiotags.editable(tags.audio_files(folder))
 
 
-def _open(path: Path):
-    from mutagen.flac import FLAC
-
+def _open(path: Path) -> audiotags.TagFile:
     try:
-        return FLAC(path)
-    except Exception as exc:  # mutagen raises many unrelated types for broken files
-        raise TagEditError(f"{path.name} cannot be read: {exc}") from exc
+        return audiotags.open_file(path)
+    except audiotags.TagError as exc:
+        raise TagEditError(str(exc)) from exc
 
 
-def _values(audio, key: str) -> list[str]:
-    return [str(v).strip() for v in (audio.get(key) or []) if str(v).strip()]
+def _values(audio: audiotags.TagFile, key: str) -> list[str]:
+    return [v.strip() for v in audio.get(key) if v.strip()]
 
 
-def _first(audio, key: str) -> str:
+def _first(audio: audiotags.TagFile, key: str) -> str:
     values = _values(audio, key)
     return values[0] if values else ""
 
 
-def _album_artist(audio) -> list[str]:
-    for key in ALBUM_ARTIST_KEYS:
-        values = _values(audio, key)
-        if values:
-            return values
-    return []
-
-
-def _other(audio) -> dict[str, list[str]]:
-    """The tags without a field of their own, by their name in capitals."""
-    keys = sorted({k.lower() for k in (audio.tags.keys() if audio.tags else [])})
-    return {k.upper(): [str(v) for v in audio.get(k) or []]
-            for k in keys if k not in _OWN_FIELDS and k not in _LYRICS_KEYS}
-
-
-def _picture(audio) -> bytes:
+def _picture(audio: audiotags.TagFile) -> bytes:
     """The embedded front cover, else the first picture; b"" without one."""
-    pictures = list(getattr(audio, "pictures", []) or [])
-    front = [p for p in pictures if p.type == FRONT_COVER]
-    chosen = (front or pictures)[:1]
-    return chosen[0].data if chosen else b""
+    chosen = audiotags.front_cover(audio.pictures())
+    return chosen.data if chosen else b""
 
 
-def _track(path: Path, audio) -> dict:
+def _track(path: Path, audio: audiotags.TagFile) -> dict:
     artist = _values(audio, "artist")
     picture = _picture(audio)
     # One ARTIST is a credit; several (some taggers write it so) are names.
     return {
         "file": path.name,
+        "format": audio.kind,
         "title": _first(audio, "title"),
         "artist": artist[0] if len(artist) == 1 else credit_from(artist),
         "artists": _values(audio, "artists") or (artist if len(artist) > 1 else []),
         "track": _first(audio, "tracknumber"),
         "disc": _first(audio, "discnumber"),
         "cover": hashlib.sha1(picture).hexdigest()[:12] if picture else "",
-        "hasLyrics": any(_values(audio, k) for k in _LYRICS_KEYS),
-        "other": _other(audio),
+        "hasLyrics": audio.has_lyrics(),
+        "other": audio.other(),
     }
 
 
-def _album(audio) -> dict:
-    album_artist = _album_artist(audio)
+def _album(audio: audiotags.TagFile) -> dict:
+    album_artist = _values(audio, "albumartist")
     return {
         "album": _first(audio, "album"),
         "albumArtist": album_artist[0] if len(album_artist) == 1 else credit_from(album_artist),
@@ -140,11 +115,11 @@ def read_album(folder: Path) -> dict:
     """The album's tags for the editor: album fields from the first track
     (*differing* names those the tracks do not agree on), and each track."""
     files = tags.audio_files(folder)
-    flac = _flac(folder)
-    audios = [_open(f) for f in flac]
+    editable = audiotags.editable(files)
+    audios = [_open(f) for f in editable]
     albums = [_album(a) for a in audios]
     first = albums[0] if albums else {k: ([] if k == "albumArtists" else "") for k in _ALBUM_FIELDS}
-    tracks = [_track(f, a) for f, a in zip(flac, audios)]
+    tracks = [_track(f, a) for f, a in zip(editable, audios)]
     # A tag every track has with the same value is the album's (shown once);
     # the rest stay with their tracks.
     shared = {}
@@ -164,13 +139,14 @@ def read_album(folder: Path) -> dict:
         # One cover in every track is the album's.
         "cover": covers.pop() if len(covers) == 1 else "",
         "tracks": tracks,
-        "others": len(files) - len(flac),
+        "formats": sorted({t["format"] for t in tracks}),
+        "others": len(files) - len(editable),
     }
 
 
 def cover(folder: Path, name: str) -> tuple[bytes, str]:
     """The embedded cover of track *name* and its type, for the editor."""
-    path = next((f for f in _flac(folder) if f.name == name), None)
+    path = next((f for f in _editable(folder) if f.name == name), None)
     if path is None:
         raise TagEditError("No such track in the album.")
     data = _picture(_open(path))
@@ -187,7 +163,7 @@ def album_cover(folder: Path) -> tuple[bytes, str]:
     """A picture of the album for the page (the start's albums, the album
     bar): the first track's embedded cover, else a cover file next to it.
     Only JPEG and PNG. Raises TagEditError when there is none."""
-    for path in _flac(folder)[:1]:
+    for path in _editable(folder)[:1]:
         data = _picture(_open(path))
         try:
             return data, cover_module.image_type(data)[0]
@@ -273,7 +249,24 @@ def _checked(folder: Path, edit: dict) -> tuple[dict, dict]:
         clean["tracks"].append(edited)
     if not clean["album"]:
         raise TagEditError("The album needs a name.")
+    _fits_formats(current, clean)
     return current, clean
+
+
+def _fits_formats(current: dict, clean: dict) -> None:
+    """Raise for a value a track's format cannot hold, among those a save
+    would write: one an MP3 would drop, or an M4A refuse halfway through."""
+    date_written = clean["date"] != current["date"] or "date" in current["differing"]
+    for old, new in zip(current["tracks"], clean["tracks"]):
+        writes = [("tracknumber", new["track"]) if new["track"] != old["track"] else None,
+                  ("discnumber", new["disc"]) if new["disc"] != old["disc"] else None,
+                  ("date", clean["date"]) if date_written else None]
+        for others, known in ((clean["other"], current["other"]), (new["other"], old["other"])):
+            writes += [(key, v) for key, values in others.items() if values != known.get(key) for v in values]
+        for key, value in filter(None, writes):
+            problem = audiotags.value_problem(old["format"], key, value)
+            if problem:
+                raise TagEditError(f"{old['file']}: {problem}")
 
 
 def _renames(folder: Path, current: dict, edit: dict) -> tuple[list[dict], str | None]:
@@ -344,13 +337,6 @@ def plan(folder: Path, edit: dict) -> dict:
 
 
 # --- saving ------------------------------------------------------------------------
-def _set(audio, key: str, values: list[str]) -> None:
-    if values:
-        audio[key] = values
-    elif key in audio:
-        del audio[key]
-
-
 def save(folder: Path, edit: dict) -> dict:
     """Rename what follows the tags, then write the tags.
 
@@ -377,7 +363,7 @@ def save(folder: Path, edit: dict) -> dict:
     sidecars = _sidecars(folder, current["album"], clean["album"]) if new_folder != folder else []
     _too_long(_new_names(files, folder_name) + [target.name for _, target in sidecars])
 
-    for path in _flac(folder):
+    for path in _editable(folder):
         if not os.access(path, os.W_OK):
             raise TagEditError(f"{path.name} cannot be written.")
 
@@ -415,44 +401,44 @@ def save(folder: Path, edit: dict) -> dict:
             audio = _open(new_folder / (entry["newFile"] or entry["file"]))
             touched = False
             if new["title"] != old["title"]:
-                _set(audio, "title", [new["title"]])
+                audio.set("title", [new["title"]])
                 touched = True
             if new["artist"] != old["artist"] or new["artists"] != old["artists"]:
-                _set(audio, "artist", [new["artist"]])
-                _set(audio, "artists", new["artists"])
+                audio.set("artist", [new["artist"]])
+                audio.set("artists", new["artists"])
                 touched = True
             if album_changed["album"]:
-                _set(audio, "album", [clean["album"]])
+                audio.set("album", [clean["album"]])
                 touched = True
             if album_changed["albumArtist"] or album_changed["albumArtists"]:
-                for key in ALBUM_ARTIST_KEYS[1:]:  # one spelling, so no stale second one stays
-                    if key in audio:
-                        del audio[key]
-                _set(audio, "albumartist", [clean["albumArtist"]] if clean["albumArtist"] else [])
-                _set(audio, "albumartists", clean["albumArtists"])
+                audio.set("albumartist", [clean["albumArtist"]] if clean["albumArtist"] else [])
+                audio.set("albumartists", clean["albumArtists"])
                 touched = True
             for field, key in (("date", "date"), ("genre", "genre")):
                 if album_changed[field]:
-                    _set(audio, key, [clean[field]] if clean[field] else [])
+                    audio.set(key, [clean[field]] if clean[field] else [])
                     touched = True
             for field, key in (("track", "tracknumber"), ("disc", "discnumber")):
                 if new[field] != old[field]:
-                    _set(audio, key, [new[field]] if new[field] else [])
+                    audio.set(key, [new[field]] if new[field] else [])
                     touched = True
             # The album's shared tags go to every track, a track's own to it alone.
-            for key, values in clean["other"].items():
-                if values != current["other"].get(key):
-                    _set(audio, key.lower(), values)
-                    touched = True
-            for key, values in new["other"].items():
-                if values != old["other"].get(key):
-                    _set(audio, key.lower(), values)
-                    touched = True
+            try:
+                for key, values in clean["other"].items():
+                    if values != current["other"].get(key):
+                        audio.set_other(key, values)
+                        touched = True
+                for key, values in new["other"].items():
+                    if values != old["other"].get(key):
+                        audio.set_other(key, values)
+                        touched = True
+            except audiotags.TagError as exc:
+                raise TagEditError(str(exc)) from exc
             if touched:
                 try:
                     audio.save()
-                except Exception as exc:
-                    raise TagEditError(f"Could not write {entry['file']}: {exc}") from exc
+                except audiotags.TagError as exc:  # named as before the save, as its renames go back
+                    raise TagEditError(f"Could not write {entry['file']}: {exc.__cause__ or exc}") from exc
                 changed += 1
 
     except TagEditError as exc:

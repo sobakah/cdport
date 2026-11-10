@@ -329,7 +329,7 @@ function TagEditor({ question, onAnswer, onDirty }) {
         </div>`;
       })}
     </div>
-    ${loaded.others > 0 && html`<p class="line k-dim">${loaded.others} file(s) in other formats are not edited here.</p>`}
+    ${loaded.others > 0 && html`<p class="line k-dim">${loaded.others} file(s) in other formats are not edited here (only FLAC, MP3, Ogg, Opus and M4A).</p>`}
     ${plan && plan.problem && html`<p class="line k-warn"><span class="mark">!</span>${plan.problem}</p>`}
     ${error && html`<p class="line k-error"><span class="mark">✗</span>${error}</p>`}
     ${note && !dirty && html`<p class="line k-success"><span class="mark">✓</span>${note}</p>`}

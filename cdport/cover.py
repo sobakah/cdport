@@ -19,7 +19,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config
+from . import audiotags, config
 from .config import __version__
 
 MB_SITE = "https://musicbrainz.org"
@@ -28,7 +28,7 @@ CAA_URL = "https://coverartarchive.org"
 USER_AGENT = f"cdport/{__version__}"
 # Ten tracks each carry a copy, so the original (often several MB) is too big.
 THUMBNAIL = "1200"
-FRONT_COVER = 3  # FLAC picture type
+FRONT_COVER = audiotags.FRONT_COVER
 # MusicBrainz allows one request per second per client.
 MB_INTERVAL_SECONDS = 1.1
 _last_mb_request = 0.0
@@ -196,22 +196,17 @@ def image_type(data: bytes) -> tuple[str, str]:
 
 
 def missing(files: list[Path]) -> list[Path]:
-    """FLAC files without an embedded front cover (other formats are not
-    checked). A back cover or booklet page alone is no cover for a player."""
-    from mutagen.flac import FLAC
-
-    return [f for f in files if f.suffix.lower() == ".flac"
-            and not any(p.type == FRONT_COVER for p in FLAC(f).pictures)]
+    """The tracks cdport can tag (`audiotags.EXTENSIONS`) without an embedded
+    front cover. A back cover or booklet page alone is no cover for a player.
+    Raises audiotags.TagError for a broken file."""
+    return [f for f in audiotags.editable(files)
+            if not any(p.type == FRONT_COVER for p in audiotags.open_file(f).pictures())]
 
 
 def current(files: list[Path]) -> str:
     """A short description of the first embedded front cover, e.g. 'JPEG, 103 KB'."""
-    from mutagen.flac import FLAC
-
-    for f in files:
-        if f.suffix.lower() != ".flac":
-            continue
-        for picture in FLAC(f).pictures:
+    for f in audiotags.editable(files):
+        for picture in audiotags.open_file(f).pictures():
             if picture.type == FRONT_COVER:
                 kind = picture.mime.split("/")[-1].upper() if picture.mime else "picture"
                 return f"{kind}, {len(picture.data) // 1024} KB"
@@ -241,12 +236,8 @@ def preview(files: list[Path]) -> Path | None:
     the cover they would keep. cover.jpg may be missing or differ from what
     the tracks carry (a tag editor can change one without the other).
     """
-    from mutagen.flac import FLAC
-
-    for f in files:
-        if f.suffix.lower() != ".flac":
-            continue
-        for picture in FLAC(f).pictures:
+    for f in audiotags.editable(files):
+        for picture in audiotags.open_file(f).pictures():
             if picture.type == FRONT_COVER:
                 try:
                     _, ext = image_type(picture.data)
@@ -263,27 +254,15 @@ def preview(files: list[Path]) -> Path | None:
 def embed(files: list[Path], data: bytes, replace: bool = False) -> int:
     """Embed the picture as front cover; returns how many files changed.
 
-    Without replace only FLAC files without a front cover get it. With replace
-    every FLAC file's front cover is swapped; other pictures (back cover,
-    booklet) stay.
+    Without replace only the tracks without a front cover get it. With
+    replace every track's front cover is swapped; other pictures (back
+    cover, booklet) stay. Raises audiotags.TagError.
     """
-    from mutagen.flac import FLAC, Picture
-
     mime, _ = image_type(data)
-    targets = [f for f in files if f.suffix.lower() == ".flac"] if replace else missing(files)
+    targets = audiotags.editable(files) if replace else missing(files)
     for f in targets:
-        audio = FLAC(f)
-        if replace:
-            keep = [p for p in audio.pictures if p.type != FRONT_COVER]
-            audio.clear_pictures()
-            for p in keep:
-                audio.add_picture(p)
-        picture = Picture()
-        picture.type = FRONT_COVER
-        picture.mime = mime
-        picture.desc = ""
-        picture.data = data
-        audio.add_picture(picture)
+        audio = audiotags.open_file(f)
+        audio.set_front_cover(data, mime)
         audio.save()
     return len(targets)
 

@@ -6,12 +6,12 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import config, cover, tags, ui
+from . import audiotags, config, cover, tags, ui
 from .config import __version__, expand
 
 
 def offer(folder: Path, release_id: str = "") -> None:
-    """Embed a cover in the album's FLAC files, or change the one they have.
+    """Embed a cover in the album's tracks, or change the one they have.
 
     Tracks without a picture get an offer right away. When all have one, the
     user may keep it (the default) or change it. Covers come from the Cover
@@ -19,20 +19,20 @@ def offer(folder: Path, release_id: str = "") -> None:
     MusicBrainz for the album) or from a file the user names.
     """
     files = tags.audio_files(folder)
-    flac = [f for f in files if f.suffix.lower() == ".flac"]
-    if not flac:
-        ui.dim("No FLAC tracks; only FLAC files get covers.")
+    taggable = audiotags.editable(files)
+    if not taggable:
+        ui.dim("No FLAC, MP3, Ogg, Opus or M4A tracks; only those get covers.")
         return
     try:
         without = cover.missing(files)
         first = tags.read_tags(files[0])
-        present = cover.current(flac) if not without else ""
+        present = cover.current(taggable) if not without else ""
     except Exception as exc:  # mutagen missing, or one of its many errors for a broken file
         ui.warn(f"Cover check skipped: {exc}")
         return
     replace = not without
     if replace:
-        shown = _show_preview(flac)
+        shown = _show_preview(taggable)
         try:
             answer = ui.choose(f"Cover ({present} in every track)", [
                 ("k", "keep it"),
@@ -64,7 +64,7 @@ def offer(folder: Path, release_id: str = "") -> None:
                 data = cover.http_get(found[int(answer) - 1].url)
             changed = cover.embed(files, data, replace=replace)
             saved = cover.save_file(folder, data, replace=replace)
-        except (cover.CoverError, OSError) as exc:
+        except (cover.CoverError, audiotags.TagError, OSError) as exc:
             ui.error(f"Cover not embedded: {exc}")
             continue
         verb = "changed" if replace else "embedded"
@@ -72,12 +72,12 @@ def offer(folder: Path, release_id: str = "") -> None:
         return
 
 
-def _show_preview(flac: list[Path]) -> Path | None:
+def _show_preview(files: list[Path]) -> Path | None:
     """A link to the embedded cover, like the one each downloadable cover
     gets; returns the preview file, to delete once the question is answered."""
     try:
-        path = cover.preview(flac)
-    except OSError as exc:
+        path = cover.preview(files)
+    except (OSError, audiotags.TagError) as exc:
         ui.warn(f"Cannot show the current cover: {exc}")
         return None
     if path and ui.in_terminal():  # a page shows the picture itself; it cannot open file:// links
@@ -127,7 +127,7 @@ def album_folders(paths: list[Path], recursive: bool) -> list[Path]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cdport-cover",
-        description="Embed cover art in FLAC albums, from the Cover Art Archive or a picture "
+        description="Embed cover art in albums (FLAC, MP3, Ogg, Opus, M4A), from the Cover Art Archive or a picture "
                     "file. Albums with a cover can keep it or change it.",
     )
     parser.add_argument("folders", nargs="+", type=Path, metavar="FOLDER", help="album folder(s)")

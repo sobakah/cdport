@@ -84,7 +84,11 @@ where other programs depend on it (see "The name" below), and the D-Bus
 interface for Gatefold (`dbus_service.py`, see "D-Bus interface" below).
 1.4.0 (2026-11-10): the run is no longer one line (see
 "Not one line" below): a start to come back to, jumps to any of an album's
-steps on the page, `--step`, `--edit-tags`, and `EditTags` over D-Bus.
+steps on the page, `--step`, `--edit-tags`, and `EditTags` over D-Bus;
+the tag editor and the cover step also for MP3, Ogg Vorbis, Opus and M4A
+(`audiotags.py`, see "Formats" below). Released first without the formats;
+the maintainer had the tag moved onto them the same day ("the release was
+too early"), so 1.4.0 is the version with them.
 
 1.1.0 (2026-10-29): cyanrip installed and updated on the page
 (`install.run_package_manager`, `proc.run_shown`), the app-menu entry
@@ -96,8 +100,11 @@ Layout: `cdport/` package (`app.py` runs the steps, one module per step:
 `config`, `ui`, `cli`, `install`, `cover` (Cover Art Archive/MusicBrainz,
 no UI), `musicbrainz` (release search for discs MusicBrainz does not know,
 no UI), `covertool` (the cover step and the `cdport-cover` command) and
-`desktop` (the app-menu entry), `dbus_service` (the D-Bus interface)),
-`run.py` and `cover.py` launchers, `tests/test_cdport.py`.
+`desktop` (the app-menu entry), `dbus_service` (the D-Bus interface),
+`audiotags` (tags of FLAC, MP3, Ogg, Opus and M4A under one set of names,
+no UI)), `run.py` and `cover.py` launchers, `tests/test_cdport.py` (its
+other formats' files in `tests/data/`: 50 ms of silence, made once with
+FFmpeg, as tests never run it).
 `config.example.json` is generated from `DEFAULT_CONFIG` and `SETTING_HELP`
 in `config.py`. After adding or changing a setting, update both and
 regenerate it (see `config.write_example`); a test fails until then.
@@ -441,7 +448,8 @@ Behaviour depends on third-party tools; re-verify before relying on these.
   rip and each time an album is opened again (resumed or `cdport
   FOLDER`), at whatever step. Tracks without a picture get the offer;
   when all have one, keep (default) or change it. Changing swaps only the
-  front-cover picture (type 3) and replaces cover.jpg/.png.
+  front-cover picture (type 3) and replaces cover.jpg/.png. Since 1.4.0
+  also in MP3, Ogg, Opus and M4A tracks (`audiotags`).
 - Also a separate command, `cdport-cover FOLDER... [-r] [--release ID]`.
   Without a release ID in the tags it searches release groups by the album
   and album-artist tags (again without a trailing "(...)" when nothing is
@@ -691,6 +699,22 @@ A front end that wants live tool progress keeps the pseudo-terminal
   album; the log's content is never changed (its checksum). Everything is
   checked before anything is written, and renames go through temporary
   names, so two tracks that swap titles do not overwrite each other.
+- **Formats** (1.4.0, the maintainer's request 2026-11-10): the editor and
+  the cover step take FLAC, MP3, Ogg Vorbis, Opus and M4A, lyrembed's
+  formats (`audiotags.EXTENSIONS`); WAV, AIFF, WavPack and TTA are only
+  counted ("not edited here"). `audiotags.TagFile` maps cdport's Vorbis
+  names to ID3 frames (Picard's: TPE2 album artist, `TXXX:ARTISTS`) and MP4
+  atoms (`aART`, `----:com.apple.iTunes:ARTISTS`, `trkn` pairs); the other
+  text tags are listed under Picard's name where it has one, else the frame
+  ID, a TXXX's description or the atom. Binary frames and atoms (UFID,
+  PRIV, flags like `cpil`) are not listed and stay. MP3s are saved in the
+  ID3 version they had: 2.3 joins several values with "/" (checked
+  2026-11-10, mutagen 1.48.1), so a 2.3 file's ARTISTS come back as one name.
+  ID3 silently drops a date that is no timestamp, and an M4A's `trkn`
+  needs numbers: `audiotags.value_problem` refuses such values in
+  `tageditor._fits_formats`, before anything is renamed or written. An M4A
+  cover has no type: its first is the front cover. ID3 tells pictures
+  apart by description, so a new front cover takes one no other picture has.
 - The lyrics step hands the tab to lyrembed's page, if lyrembed has
   `--return-url` (`lyrics.probe`, from its `--help`; lyrembed 0.9.0):
   - cdport starts `lyrembed DIR --no-browser --return-url <its own page>
@@ -797,7 +821,8 @@ file and `.cdimport.json` (§10.2 there) has a call:
   2026-11-10; Gatefold's Flatpak cannot start Ear Tag, its CONCEPT.md
   "A simple tag editor in Gatefold"): a page run of `cdport FOLDER
   --edit-tags`, answered with its address like `Import`. The folder must
-  hold FLAC files and resolve inside the config's library or working folder
+  hold files the editor takes (`audiotags.EXTENSIONS`, `GetInfo`'s
+  `TagFormats`) and resolve inside the config's library or working folder
   or the music folder (`editable_places`; not the home folder
   `music_dir_suggestion` may fall back to). No options yet; unknown ones are
   refused. `_busy_with` refuses a second run on the same album (Import's

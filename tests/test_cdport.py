@@ -4684,3 +4684,166 @@ def test_dbus_edit_tags_page_command():
     command = dbus_service.page_command("/m/Album", edit_tags=True)
     assert command[-6:] == ["/m/Album", "--edit-tags", "--web", "--no-browser", "--unvisited-timeout", "600"]
     assert "EditTags" in dbus_service.INTROSPECTION
+
+
+# --- 1.4.0: the tag editor and the cover step for MP3, Ogg Vorbis, Opus and M4A ----
+# Tiny files of silence (made once with FFmpeg; tests never run it).
+TEST_DATA = Path(__file__).resolve().parent / "data"
+OTHER_FORMATS = ("mp3", "ogg", "opus", "m4a")
+
+
+def _album_in(folder: Path, ext: str, titles=("One", "Two"), album="Album", **more) -> Path:
+    """A cyanrip-named album of *ext* files, tagged through audiotags."""
+    from cdport import audiotags
+
+    folder.mkdir(parents=True, exist_ok=True)
+    for n, title in enumerate(titles, 1):
+        path = folder / f"{n:02d} - {title}.{ext}"
+        path.write_bytes((TEST_DATA / f"silence.{ext}").read_bytes())
+        tagged = audiotags.open_file(path)
+        for key, value in {"title": title, "artist": "IU", "album": album, "albumartist": "IU",
+                           "tracknumber": str(n), "date": "2017", **more}.items():
+            tagged.set(key, [value])
+        tagged.save()
+    return folder
+
+
+@pytest.mark.parametrize("ext", OTHER_FORMATS)
+def test_tag_editor_edits_other_formats_like_flac(tmp_path, ext):
+    from cdport import audiotags
+
+    folder = _album_in(tmp_path / "Album", ext)
+    album = tageditor.read_album(folder)
+    assert (album["album"], album["albumArtist"], album["date"], album["others"]) == ("Album", "IU", "2017", 0)
+    assert [t["title"] for t in album["tracks"]] == ["One", "Two"] and album["formats"] == [audiotags.open_file(
+        next(folder.iterdir())).kind]
+    album["album"], album["albumArtists"], album["genre"] = "Album (Deluxe)", ["IU", "Suga"], "K-Pop"
+    album["tracks"][0].update(title="Uno", artist="IU feat. Suga", artists=["IU", "Suga"])
+    album["tracks"][1]["disc"] = "1/2"
+    result = tageditor.save(folder, album)
+    assert result["renamed"] == [[f"01 - One.{ext}", f"01 - Uno.{ext}"]] and result["folderRenamed"]
+    again = tageditor.read_album(Path(result["folder"]))
+    assert (again["album"], again["albumArtists"], again["genre"]) == ("Album (Deluxe)", ["IU", "Suga"], "K-Pop")
+    first, second = again["tracks"]
+    assert (first["file"], first["title"], first["artist"], first["artists"]) == \
+        (f"01 - Uno.{ext}", "Uno", "IU feat. Suga", ["IU", "Suga"])
+    assert (second["title"], second["disc"], second["track"]) == ("Two", "1/2", "2")
+
+
+@pytest.mark.parametrize("ext", OTHER_FORMATS)
+def test_cover_step_embeds_and_changes_covers_in_other_formats(tmp_path, ext):
+    from cdport import audiotags
+
+    folder = _album_in(tmp_path / "A", ext)
+    files = tags.audio_files(folder)
+    assert cover.missing(files) == files and tageditor.read_album(folder)["cover"] == ""
+    assert cover.embed(files, JPEG) == 2 and cover.missing(files) == []
+    assert tageditor.album_cover(folder) == (JPEG, "image/jpeg")
+    png = b"\x89PNG\r\n\x1a\n a png"
+    assert cover.embed(files, png, replace=True) == 2
+    pictures = audiotags.open_file(files[0]).pictures()
+    assert [(p.type, p.mime, p.data) for p in pictures] == [(3, "image/png", png)]
+    assert tageditor.cover(folder, files[0].name) == (png, "image/png")
+
+
+def test_mp3_tags_keep_their_id3_version_and_readable_names(tmp_path):
+    from mutagen.id3 import COMM, TCOM, TXXX
+    from mutagen.mp3 import MP3
+
+    folder = _album_in(tmp_path / "A", "mp3", titles=("One",))
+    path = next(folder.iterdir())
+    audio = MP3(path)
+    audio.tags.add(TCOM(encoding=3, text=["Lee Jong-hoon"]))
+    audio.tags.add(TXXX(encoding=3, desc="MusicBrainz Album Id", text=["album-id"]))
+    audio.tags.add(COMM(encoding=3, lang="eng", desc="", text=["a note"]))
+    audio.save(v2_version=3)
+    album = tageditor.read_album(folder)
+    assert album["tracks"][0]["other"] == {"COMMENT": ["a note"], "COMPOSER": ["Lee Jong-hoon"],
+                                           "MusicBrainz Album Id": ["album-id"]}
+    album["tracks"][0]["other"].update(COMPOSER=["Lee Jong-hoon", "IU"], COMMENT=[])
+    tageditor.save(folder, album)
+    audio = MP3(path)
+    assert audio.tags.version[:2] == (2, 3)                       # not raised to 2.4
+    assert audio.tags["TCOM"].text == ["Lee Jong-hoon/IU"]        # 2.3 joins several values
+    assert not audio.tags.getall("COMM") and audio.tags["TXXX:MusicBrainz Album Id"].text == ["album-id"]
+
+
+def test_m4a_free_form_tags_are_listed_and_numbers_checked(tmp_path):
+    from mutagen.mp4 import MP4, MP4FreeForm
+
+    folder = _album_in(tmp_path / "A", "m4a", titles=("One",))
+    path = next(folder.iterdir())
+    audio = MP4(path)
+    audio["----:com.apple.iTunes:MusicBrainz Album Id"] = [MP4FreeForm(b"album-id")]
+    audio["\xa9wrt"] = ["Lee Jong-hoon"]
+    audio["cpil"] = True                                          # a flag: not text, not listed
+    audio.save()
+    album = tageditor.read_album(folder)
+    assert album["tracks"][0]["other"] == {"COMPOSER": ["Lee Jong-hoon"], "MusicBrainz Album Id": ["album-id"]}
+    album["tracks"][0]["track"] = "A1"
+    assert "only numbers" in tageditor.plan(folder, album)["problem"]
+    with pytest.raises(tageditor.TagEditError, match="only numbers"):
+        tageditor.save(folder, album)
+    album["tracks"][0].update(track="3/12", other={"COMPOSER": ["IU"], "MusicBrainz Album Id": ["other-id"]})
+    tageditor.save(folder, album)
+    audio = MP4(path)
+    assert audio["trkn"] == [(3, 12)] and audio["\xa9wrt"] == ["IU"] and audio["cpil"]
+    assert bytes(audio["----:com.apple.iTunes:MusicBrainz Album Id"][0]) == b"other-id"
+
+
+def test_mp3_dates_are_checked_before_anything_is_written(tmp_path):
+
+    folder = _album_in(tmp_path / "A", "mp3", titles=("One",))
+    album = tageditor.read_album(folder)
+    album["date"], album["tracks"][0]["title"] = "spring 2017", "Uno"
+    assert "2024-05-17" in tageditor.plan(folder, album)["problem"]
+    with pytest.raises(tageditor.TagEditError, match="2024-05-17"):
+        tageditor.save(folder, album)
+    assert [p.name for p in folder.iterdir()] == ["01 - One.mp3"]  # not renamed either
+    album["date"] = "2017-04-21"
+    tageditor.save(folder, album)
+    assert tageditor.read_album(folder.parent / "A")["date"] == "2017-04-21"
+
+
+def test_an_id3_back_cover_without_a_description_stays(tmp_path):
+    from mutagen.id3 import APIC
+    from mutagen.mp3 import MP3
+    from cdport import audiotags
+
+    folder = _album_in(tmp_path / "A", "mp3", titles=("One",))
+    path = next(folder.iterdir())
+    audio = MP3(path)
+    audio.tags.add(APIC(encoding=3, mime="image/jpeg", type=4, desc="", data=b"back"))
+    audio.save()
+    assert cover.missing([path]) == [path]                       # a back cover is no front cover
+    cover.embed([path], JPEG)
+    assert sorted((p.type, p.data) for p in audiotags.open_file(path).pictures()) == [(3, JPEG), (4, b"back")]
+
+
+def test_tag_editor_takes_an_album_of_mixed_formats_and_skips_wav(tmp_path):
+
+    folder = _album_in(tmp_path / "Album", "opus", titles=("One",))
+    _album_in(folder, "mp3", titles=("Skip", "Two"))
+    (folder / "01 - Skip.mp3").unlink()
+    (folder / "03 - Bonus.wav").write_bytes(b"RIFF")
+    album = tageditor.read_album(folder)
+    assert [t["file"] for t in album["tracks"]] == ["01 - One.opus", "02 - Two.mp3"]
+    assert album["formats"] == ["MP3", "Opus"] and album["others"] == 1
+    album["album"] = "B"
+    assert tageditor.save(folder, album)["changed"] == 2
+    assert tageditor.read_album(tmp_path / "B")["differing"] == []
+
+
+def test_dbus_edits_tags_of_mp3_albums_and_says_which_formats(tmp_path, monkeypatch):
+    write_user_config(tmp_path, work_dir=str(tmp_path / "work"), library_dir=str(tmp_path / "lib"))
+    mp3 = _album_in(tmp_path / "lib" / "IU" / "Palette", "mp3")
+    wav = tmp_path / "lib" / "Wav"
+    wav.mkdir()
+    (wav / "01.wav").write_bytes(b"RIFF")
+    service, started = bus_service(tmp_path, FakePageRun([PAGE_LINE]))
+    _, (info,) = service.call("GetInfo", "", (), None)
+    assert info["TagFormats"] == ("as", [".flac", ".mp3", ".ogg", ".opus", ".m4a"])
+    assert service.call("EditTags", "sa{sv}", (str(mp3), {}), "call") is None and len(started) == 1
+    with pytest.raises(dbus_service.ServiceError) as refused:
+        service.call("EditTags", "sa{sv}", (str(wav), {}), "call")
+    assert refused.value.name.endswith("NoAlbum")

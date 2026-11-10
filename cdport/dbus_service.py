@@ -21,7 +21,8 @@ service file would then take over.
 Interface ``io.github.sobakah.cdport1`` on ``/io/github/sobakah/cdport``:
 
 - ``GetInfo() -> a{sv}``: Version, InterfaceVersion, LibraryDir, WorkDir,
-  Editor (the config's; "" when unset).
+  Editor (the config's; "" when unset), TagFormats (as, the file extensions
+  EditTags edits, e.g. ".flac", ".mp3"; since cdport 1.4.0).
 - ``UnfinishedAlbums() -> as``: album folders in the working folder with
   steps still open.
 - ``Import(a{sv} options) -> (s run, s url)``: start a page run; options
@@ -29,9 +30,9 @@ Interface ``io.github.sobakah.cdport1`` on ``/io/github/sobakah/cdport``:
   answer comes once the page is up.
 - ``EditTags(s folder, a{sv} options) -> (s run, s url)``: cdport's tag
   editor on one album (``cdport FOLDER --edit-tags``), a page run like
-  Import's. The folder must hold FLAC files and lie inside cdport's library,
-  its working folder or the music folder (XDG_MUSIC_DIR); no options yet
-  (unknown ones are refused). Finished's album is the folder afterwards,
+  Import's. The folder must hold files of TagFormats and lie inside
+  cdport's library, its working folder or the music folder
+  (XDG_MUSIC_DIR); no options yet (unknown ones are refused). Finished's album is the folder afterwards,
   renamed when the album's name changed. Since cdport 1.4.0.
 - ``Runs() -> a(ss)``: the runs still going, with their page addresses.
 - ``Stop(s run)``: as Ctrl+C: a running tool finishes first (cyanrip its log).
@@ -57,7 +58,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from . import config, state, web
+from . import audiotags, config, state, web
 
 BUS_NAME = "io.github.sobakah.cdport"
 OBJECT_PATH = "/io/github/sobakah/cdport"
@@ -219,7 +220,8 @@ class Service:
                 "InterfaceVersion": ("u", INTERFACE_VERSION),
                 "LibraryDir": ("s", folder("library_dir")),
                 "WorkDir": ("s", folder("work_dir")),
-                "Editor": ("s", cfg["editor"] or "")}
+                "Editor": ("s", cfg["editor"] or ""),
+                "TagFormats": ("as", list(audiotags.EXTENSIONS))}
 
     def unfinished(self) -> list[state.AlbumState]:
         cfg = self._config()
@@ -287,11 +289,12 @@ class Service:
                                f"{folder} is not inside cdport's library, its working folder or the music folder "
                                f"({', '.join(map(str, places)) or 'none set'}).")
         try:
-            flac = any(p.is_file() and p.suffix.lower() == ".flac" for p in resolved.iterdir())
+            taggable = audiotags.editable([p for p in resolved.iterdir() if p.is_file()])
         except OSError as exc:
             raise ServiceError(ERROR + ".NoFolder", f"Cannot open {folder}: {exc}") from exc
-        if not flac:
-            raise ServiceError(ERROR + ".NoAlbum", f"{folder} holds no FLAC files; the tag editor edits FLAC only.")
+        if not taggable:
+            raise ServiceError(ERROR + ".NoAlbum",
+                               f"{folder} holds no FLAC, MP3, Ogg, Opus or M4A files, the formats the tag editor edits.")
         if self._busy_with(resolved):
             raise ServiceError(ERROR + ".Busy", f"A run is already working on {resolved}.")
         return self._spawn_run(page_command(str(resolved), edit_tags=True), str(resolved), caller)

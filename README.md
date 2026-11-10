@@ -163,9 +163,14 @@ a rip. On the page:
 - **Releases, albums and covers show their pictures** (from the Cover Art
   Archive; cdport fetches only the pictures its questions name).
 - **The tags step has its own editor**, offered first; Ear Tag and co.
-  stay as alternatives. It edits album, album artist, date, genre and each
-  track's title, artist, disc and track number, and lists every other tag
-  in the files (MusicBrainz IDs and the like) to change or remove. It shows
+  stay as alternatives. It edits FLAC, MP3 (ID3, kept in its version),
+  Ogg Vorbis, Opus and M4A files, also mixed in one album: album, album
+  artist, date, genre and each track's title, artist, disc and track number,
+  and it lists every other text tag in the files (MusicBrainz IDs and the
+  like) to change or remove, under Picard's names where it has one
+  (`COMPOSER` for an MP3's TCOM). A value a format cannot hold (a date
+  that is no date in an MP3, a track number that is no number in an M4A)
+  is pointed out before anything is saved. It shows
   the embedded cover; **Change the cover…** goes back to the cover step
   and then returns to the editor. Several artists follow Picard: `ARTIST` holds
   the credit ("A feat. B"), `ARTISTS` the single names (and the same for
@@ -214,10 +219,10 @@ The interface (`io.github.sobakah.cdport1` on `/io/github/sobakah/cdport`):
 
 | Call | What it does |
 |---|---|
-| `GetInfo() → a{sv}` | `Version`, `InterfaceVersion` (1), `LibraryDir`, `WorkDir`, `Editor` from the settings |
+| `GetInfo() → a{sv}` | `Version`, `InterfaceVersion` (1), `LibraryDir`, `WorkDir`, `Editor` from the settings; `TagFormats` (`as`, since 1.4.0): the file extensions `EditTags` edits |
 | `UnfinishedAlbums() → as` | albums in the working folder with steps still open |
 | `Import(a{sv} options) → (s run, s url)` | starts a run on its own page (as `cdport --web --no-browser`) and answers with the page's address, for the caller to open; options `Library` (as `-l`) and `Folder` (one of `UnfinishedAlbums`, to continue it) |
-| `EditTags(s folder, a{sv} options) → (s run, s url)` | cdport's tag editor on one album, on its own page (as `cdport FOLDER --edit-tags --web --no-browser`); the folder must hold FLAC files and lie inside cdport's library, its working folder or the music folder; no options yet. Since 1.4.0 |
+| `EditTags(s folder, a{sv} options) → (s run, s url)` | cdport's tag editor on one album, on its own page (as `cdport FOLDER --edit-tags --web --no-browser`); the folder must hold files `TagFormats` names (FLAC, MP3, Ogg, Opus, M4A) and lie inside cdport's library, its working folder or the music folder; no options yet. Since 1.4.0 |
 | `Runs() → a(ss)` | the runs still going, with their addresses |
 | `Stop(s run)` | as Ctrl+C: a running rip finishes first (a second Stop changes nothing) |
 | signal `Finished(s run, i exit_code, s album)` | a run ended; `album` is the folder it finished (after `EditTags`: the album's folder, renamed if its name changed), or empty |
@@ -287,7 +292,8 @@ itself, for you and everyone else.
 If the tracks have no embedded cover (cyanrip only takes an image the Cover
 Art Archive marks as front cover), cdport offers what the archive has for
 the release or another edition of the album, or a picture file of your own.
-It embeds the choice in every FLAC without a front cover and saves it as
+It embeds the choice in every track without a front cover (FLAC, MP3,
+Ogg, Opus and M4A) and saves it as
 `cover.jpg`. When every track has a cover, it asks whether to keep it
 (Enter) or change it, with a link to the embedded cover to look at. Every
 offered cover, and every album a MusicBrainz search finds, comes with a link.
@@ -334,7 +340,8 @@ work as before.
 
 ## Cover art on its own: cdport-cover
 
-The cover step also works as a separate command, for any FLAC album:
+The cover step also works as a separate command, for any album of FLAC,
+MP3, Ogg, Opus or M4A files:
 
 ```bash
 cdport-cover ~/Temp/Album           # or ./cover.py ... in a checkout
