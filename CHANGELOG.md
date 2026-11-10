@@ -11,6 +11,8 @@ next line's tag.
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-11-10
+
 ### Added
 
 - **A run is no longer one fixed line.** It begins at **Start**, which offers the disc in the drive, the unfinished albums (on the page with their covers), any album folder, or only an album's tags, and it comes back there after each album until you quit. On the page, **Tags**, **Lyrics** and **Finish** in the step bar go straight to that step of the open album (Tags opens the editor at once), done or not, and the steps after it follow in order; **Cover…** in the new album bar changes the cover and comes back; **Start** in the header leaves the album resumable for another disc or album. Nothing of this while a tool runs. Finishing an album counts the steps left out as skipped.

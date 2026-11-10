@@ -82,7 +82,7 @@ update check found.
 1.3.0 (2026-11-09): renamed from cdimport to cdport, with the old name kept
 where other programs depend on it (see "The name" below), and the D-Bus
 interface for Gatefold (`dbus_service.py`, see "D-Bus interface" below).
-1.4.0 (2026-11-10, not released yet): the run is no longer one line (see
+1.4.0 (2026-11-10): the run is no longer one line (see
 "Not one line" below): a start to come back to, jumps to any of an album's
 steps on the page, `--step`, `--edit-tags`, and `EditTags` over D-Bus.
 
