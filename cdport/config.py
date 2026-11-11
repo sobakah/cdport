@@ -10,15 +10,15 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-__version__ = "1.4.0"
+__version__ = "1.0.0"
 
 NAME = "cdport"
-# The name before 1.3.0. The command stays as an alias: lyrembed and Gatefold
+# The old name. The command stays as an alias: other programs (Jewelcase) may
 # start it, and read lines in its wording (program_name).
 OLD_NAME = "cdimport"
 
 # File names cdport owns inside the working folder and album folders. They
-# keep the old name: Gatefold looks for .cdimport.json to find unfinished
+# keep the old name: Jewelcase looks for .cdimport.json to find unfinished
 # imports, and older rips carry these names.
 STATE_FILE_NAME = ".cdimport.json"
 STAGING_PREFIX = ".cdimport-rip-"
@@ -96,8 +96,8 @@ SETTING_HELP: dict[str, Any] = {
     ),
     "lyrics_mode": (
         "\"ask\" (each run, automatic preselected), \"auto\" (lyrembed --auto: embed confident "
-        "matches without questions), \"interactive\" (choose for each track; lyrembed 0.8.0 and newer "
-        "do that on a page in the browser) or \"skip\"."
+        "matches without questions), \"interactive\" (choose for each track on lyrembed's page in "
+        "the browser) or \"skip\"."
     ),
     "editor": "Tag editor to offer by default: a key from \"editors\", or \"skip\".",
     "editors": (
@@ -238,7 +238,7 @@ def _config_base() -> Path:
 
 
 def old_config_dir() -> Path:
-    """Where cdimport (before 1.3.0) kept its settings."""
+    """Where cdimport (the old name) kept its settings."""
     return _config_base() / OLD_NAME
 
 
@@ -256,7 +256,7 @@ def config_dir() -> Path:
 
 def move_old_config() -> tuple[bool, str] | None:
     """Move cdimport's config folder to cdport's, once, and leave a symlink
-    in its place: Gatefold reads ~/.config/cdimport/config.json. Returns
+    in its place: Jewelcase may read ~/.config/cdimport/config.json. Returns
     (worked, what to tell the user), or None when there was nothing to move.
     A failed move leaves everything where it was, and config_dir keeps
     using the old folder."""
@@ -273,12 +273,12 @@ def move_old_config() -> tuple[bool, str] | None:
         old.symlink_to(NAME, target_is_directory=True)
     except OSError as exc:
         return False, (f"cdimport is now cdport: moved your settings from {old} to {new}, but could not "
-                       f"leave a link at the old place ({exc}); Gatefold looks for them there.")
+                       f"leave a link at the old place ({exc}); Jewelcase looks for them there.")
     return True, f"cdimport is now cdport: moved your settings from {old} to {new} (the old place links there)."
 
 
 def program_name() -> str:
-    """The name this was started under: the old command (lyrembed and Gatefold
+    """The name this was started under: the old command (other programs may
     start that one) gets the old wording in the lines other programs read
     (web.serve's address and finished lines), everything else the new."""
     return OLD_NAME if Path(sys.argv[0]).stem == OLD_NAME else NAME
@@ -292,8 +292,8 @@ def runtime_dir() -> Path:
     """cdport's per-user folder for short-lived files (drive locks, the
     cover preview): shared by every cdport of that user whatever its
     working folder (-w), private to the user, and emptied at logout. It
-    keeps cdimport's name, so a cdimport 1.2.x still ripping and a cdport
-    see each other's drive locks (disc.hold)."""
+    keeps the old name, cdimport, so an install under that name still
+    ripping and cdport see each other's drive locks (disc.hold)."""
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if runtime and Path(runtime).is_dir():
         return Path(runtime) / OLD_NAME

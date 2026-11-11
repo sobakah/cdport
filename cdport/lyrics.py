@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -66,8 +65,9 @@ def lyrembed_command(lyrembed: str, cfg: dict[str, Any], folder: Path, mode: str
     """mode is "auto" (batch, never prompts) or "interactive".
 
     romanize applies to "auto" only; None leaves it to lyrembed's own
-    settings.auto_romanize. return_url (cdport's page) makes lyrembed's
-    page lead back there instead of opening a tab of its own.
+    settings.auto_romanize. Interactive lyrembed is a page in the browser;
+    return_url (cdport's page) makes it lead back there instead of opening
+    a tab of its own.
     """
     cmd = [lyrembed, str(folder)]
     if mode == "auto":
@@ -85,22 +85,3 @@ def run_lyrembed(lyrembed: str, cfg: dict[str, Any], folder: Path, mode: str,
     output goes to the page, which also reads lyrembed's address from it."""
     return proc.run_shown(lyrembed_command(lyrembed, cfg, folder, mode, romanize, return_url))
 
-
-@dataclass
-class Features:
-    """What the installed lyrembed can do."""
-    page: bool = False        # 0.8.0+: the interactive mode is a page in the browser, not terminal menus
-    romanize: bool = False    # 0.6.0+: --romanize for batch mode; older versions reject it
-    return_url: bool = False  # 0.9.0+: --return-url, its page can lead back to cdport's
-
-
-def probe(lyrembed: str) -> Features:
-    """Read the features from one --help: each start of a pipx tool costs a
-    Python start, and a flag shows exactly what is there, unlike a version
-    number. `--no-browser` came with the page. Either way
-    cdport starts `lyrembed DIR` and waits for it to end; the page only
-    changes what to tell the user."""
-    found = proc.capture([lyrembed, "--help"])
-    usage = found.stdout if found is not None else ""
-    page = "--no-browser" in usage
-    return Features(page, "--romanize" in usage, page and "--return-url" in usage)

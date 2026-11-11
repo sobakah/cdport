@@ -34,8 +34,8 @@ REAL_TOOLS = {"cyanrip", "eject", "udevadm", "lyrembed", "flatpak", "kid3", "pic
 
 @pytest.fixture(autouse=True)
 def no_real_tools(monkeypatch, tmp_path_factory):
-    """Fail a test that would run one of the real tools (seen 2026-10-15: a
-    fake that no longer matched let cyanrip open the drive)."""
+    """Fail a test that would run one of the real tools (a fake that no
+    longer matched once let cyanrip open the drive)."""
     real_popen = subprocess.Popen
     test_dirs = tmp_path_factory.getbasetemp().resolve()
 
@@ -627,7 +627,6 @@ def run_cli(tmp_path, monkeypatch, argv, *, lyrembed=None, editor=None):
     monkeypatch.setattr(install, "choose_route", lambda *a, **k: install.Route("download", "later"))
     # The fake tools only exist as names, and the cover offer has tests of its own.
     monkeypatch.setattr(tools, "start_problem", lambda cmd: None)
-    monkeypatch.setattr(lyrics, "probe", lambda lyrembed: lyrics.Features())
     monkeypatch.setattr(app, "offer_cover", lambda folder: None)
     monkeypatch.setattr(tools, "find_lyrembed", lambda cfg: lyrembed)
     monkeypatch.setattr(tools, "find_editor", lambda cfg, key: editor)
@@ -749,8 +748,8 @@ def test_auto_lyrics_failure_falls_back_to_interactive(tmp_path, monkeypatch, al
         modes.append(mode)
         return lyrics.EXIT_BATCH_FAILURES if mode == "auto" else lyrics.EXIT_OK
     monkeypatch.setattr(app.lyrics, "run_lyrembed", fake_run)
-    # Tags: continue; lyrics: auto; then: interactive; finish: keep.
-    feed_input(monkeypatch, ["c", "a", "i", "k", ""])
+    # Tags: continue; lyrics: auto; romanize: lyrembed's setting; then: interactive; finish: keep.
+    feed_input(monkeypatch, ["c", "a", "", "i", "k", ""])
     code = run_cli(tmp_path, monkeypatch, [str(album_dir)], lyrembed="lyrembed")
     assert code == 0
     assert modes == ["auto", "interactive"]
@@ -761,7 +760,7 @@ def test_ctrl_c_leaves_resumable_state(tmp_path, monkeypatch, album_dir, capsys)
     def interrupted(lyrembed, cfg, folder, mode, romanize=None, return_url=''):
         raise KeyboardInterrupt
     monkeypatch.setattr(app.lyrics, "run_lyrembed", interrupted)
-    feed_input(monkeypatch, ["c"])
+    feed_input(monkeypatch, ["c", ""])  # tags: continue; romanize: lyrembed's setting
     code = run_cli(tmp_path, monkeypatch, [str(album_dir), "--lyrics", "auto"], lyrembed="lyrembed")
     assert code == 130
     assert "continue with Album" in capsys.readouterr().out
@@ -770,7 +769,7 @@ def test_ctrl_c_leaves_resumable_state(tmp_path, monkeypatch, album_dir, capsys)
 
     # Next run without a folder offers the unfinished album first.
     monkeypatch.setattr(app.lyrics, "run_lyrembed", lambda *a: lyrics.EXIT_OK)
-    feed_input(monkeypatch, ["1", "", "k", ""])  # resume; lyrics: continue; keep; no other run
+    feed_input(monkeypatch, ["1", "", "", "k", ""])  # resume; romanize; lyrics: continue; keep; no other run
     assert run_cli(tmp_path, monkeypatch, ["--lyrics", "auto"], lyrembed="lyrembed") == 0
     assert not (album_dir / STATE_FILE_NAME).exists()
 
@@ -2368,46 +2367,23 @@ def test_romanize_flag_only_in_automatic_mode(tmp_path):
     assert lyrics.lyrembed_command("lyrembed", cfg, tmp_path, "interactive", True)[2:] == []
 
 
-def _answers(by_flag):
-    """A fake proc.capture that answers lyrembed's --version and --help."""
-    def capture(cmd, timeout=10):
-        text = by_flag.get(cmd[-1])
-        return None if text is None else subprocess.CompletedProcess(cmd, 0, text, "")
-    return capture
-
-
-def test_probe_reads_lyrembeds_help(monkeypatch):
-    calls = []
-    menus = "  --auto ...\n  --romanize  in --auto mode ..."
-    for usage, page in ((menus + "\n  --no-browser  print the page's address ...", True), (menus, False)):
-        # The version number is not asked.
-        fake = _answers({"--version": "lyrembed 1.0.0\n", "--help": usage})
-        monkeypatch.setattr(lyrics.proc, "capture", lambda cmd, timeout=10: calls.append(cmd[-1]) or fake(cmd))
-        assert lyrics.probe("lyrembed") == lyrics.Features(page=page, romanize=True), usage
-    assert calls == ["--help", "--help"]   # one start each
-    for usage in ("  --dry-run ...", "", None):   # None: does not start
-        monkeypatch.setattr(lyrics.proc, "capture", _answers({"--help": usage}))
-        assert lyrics.probe("lyrembed") == lyrics.Features()
-
-
-@pytest.mark.parametrize("page", [True, False])
-def test_interactive_lyrics_say_how_to_get_back(tmp_path, monkeypatch, capsys, album_dir, page):
+def test_interactive_lyrics_say_how_to_get_back(tmp_path, monkeypatch, capsys, album_dir):
     session = app.new_session(default_cfg(), app.Options(lyrics="ask"), tmp_path / "config.json")
-    session.lyrembed, session.lyrembed_page = "lyrembed", page
+    session.lyrembed = "lyrembed"
     monkeypatch.setattr(app.lyrics, "run_lyrembed", lambda lyr, cfg, folder, mode, romanize=None, return_url='': lyrics.EXIT_OK)
     album = state.load(album_dir)
     album.mark("tags")
     feed_input(monkeypatch, ["i"])
     assert app.lyrics_step(session, album)
     out = capsys.readouterr().out
-    assert ("on lyrembed's page in the browser" in out) is page
-    assert ("Quit it there, or close the tab, to continue here." in out) is page
+    assert "on lyrembed's page in the browser" in out
+    assert "Quit it there, or close the tab, to continue here." in out
 
 
 @pytest.mark.parametrize("answer, expected", [("", None), ("y", True), ("n", False)])
 def test_automatic_lyrics_asks_about_romanization(tmp_path, monkeypatch, album_dir, answer, expected):
     session = app.new_session(default_cfg(), app.Options(lyrics="auto"), tmp_path / "config.json")
-    session.lyrembed, session.lyrembed_romanize = "lyrembed", True
+    session.lyrembed = "lyrembed"
     passed = []
     monkeypatch.setattr(app.lyrics, "run_lyrembed",
                         lambda lyr, cfg, folder, mode, romanize=None, return_url='': passed.append(romanize) or lyrics.EXIT_OK)
@@ -2416,18 +2392,6 @@ def test_automatic_lyrics_asks_about_romanization(tmp_path, monkeypatch, album_d
     feed_input(monkeypatch, [answer, "c"])  # Enter = lyrembed's own setting; then continue without lyrics
     assert app.lyrics_step(session, album)
     assert passed == [expected]
-
-
-def test_old_lyrembed_is_not_asked_and_gets_no_flag(tmp_path, monkeypatch, album_dir):
-    session = app.new_session(default_cfg(), app.Options(lyrics="auto"), tmp_path / "config.json")
-    session.lyrembed = "lyrembed"  # lyrembed_romanize stays False
-    passed = []
-    monkeypatch.setattr(app.lyrics, "run_lyrembed",
-                        lambda lyr, cfg, folder, mode, romanize=None, return_url='': passed.append(romanize) or lyrics.EXIT_OK)
-    album = state.load(album_dir)
-    album.mark("tags")
-    feed_input(monkeypatch, ["c"])  # no lyrics found: continue without them
-    assert app.lyrics_step(session, album) and passed == [None]
 
 
 @pytest.mark.parametrize("batch_code, found, answers, modes, says", [
@@ -2453,7 +2417,7 @@ def test_automatic_lyrics_are_checked_in_the_tags(tmp_path, monkeypatch, capsys,
     monkeypatch.setattr(app.lyrics, "run_lyrembed", fake_run)
     album = state.load(album_dir)
     album.mark("tags")
-    left = feed_input(monkeypatch, answers)
+    left = feed_input(monkeypatch, [""] + answers)   # romanize: lyrembed's own setting
     assert app.lyrics_step(session, album)
     assert left == [] and called == modes
     assert "lyrics" in state.load(album_dir).done
@@ -2792,7 +2756,7 @@ def test_web_flags(capsys):
     assert cli.build_parser().parse_args(["--web", "--install-cyanrip"]).install_cyanrip  # the page builds too
 
 
-# --- app-menu entry (1.1.0) ------------------------------------------------------
+# --- app-menu entry --------------------------------------------------------------
 from cdport import desktop  # noqa: E402
 
 
@@ -3006,12 +2970,7 @@ def test_lyrembed_is_told_where_its_page_leads_back(tmp_path, monkeypatch):
     cmd = lyrics.lyrembed_command("lyrembed", cfg, tmp_path, "interactive", return_url="http://127.0.0.1:41877/")
     assert cmd[2:] == ["--no-browser", "--return-url", "http://127.0.0.1:41877/", "--return-name", "cdport"]
     assert lyrics.lyrembed_command("lyrembed", cfg, tmp_path, "auto", None, "http://127.0.0.1:1/")[2:] == ["--auto"]
-
-    with_return = "  --no-browser\n  --return-url URL  a 'Done' button ..."
-    monkeypatch.setattr(lyrics.proc, "capture", _answers({"--help": with_return}))
-    assert lyrics.probe("lyrembed").return_url
-    monkeypatch.setattr(lyrics.proc, "capture", _answers({"--help": "  --no-browser"}))
-    assert not lyrics.probe("lyrembed").return_url
+    assert lyrics.lyrembed_command("lyrembed", cfg, tmp_path, "interactive")[2:] == []   # in the terminal
 
 
 def test_the_page_follows_lyrembeds_address_once(monkeypatch):
@@ -3044,9 +3003,9 @@ def test_on_the_page_lyrembeds_output_goes_to_the_page(tmp_path, monkeypatch, fr
     assert [kind for kind, _ in ran] == ["run", "run_tail"]
 
 
-def test_the_lyrics_step_hands_over_when_both_can(tmp_path, monkeypatch, capsys, album_dir):
+def test_the_lyrics_step_hands_over_on_the_page(tmp_path, monkeypatch, capsys, album_dir):
     session = app.new_session(default_cfg(), app.Options(lyrics="interactive"), tmp_path / "config.json")
-    session.lyrembed, session.lyrembed_page, session.lyrembed_return = "lyrembed", True, True
+    session.lyrembed = "lyrembed"
     session.page_url = "http://127.0.0.1:41877/"
     passed = []
     monkeypatch.setattr(app.lyrics, "run_lyrembed",
@@ -3166,7 +3125,7 @@ def test_the_editor_can_go_back_to_the_cover_step(tmp_path, monkeypatch, front):
     assert result == [(folder, "cover")]
 
 
-# --- fixes from the review of the page (0.6.2) ---------------------------------
+# --- cyanrip on the page, the tag editor's renames ------------------------------
 def test_the_page_offers_to_install_and_update_cyanrip(tmp_path, monkeypatch, front):
     monkeypatch.setattr(install, "choose_route", lambda *a, **k: install.Route("source", "build"))
     installed, built = [], []
@@ -3228,18 +3187,18 @@ def test_the_page_leaves_the_package_manager_to_a_terminal(monkeypatch, front):
     assert install.install_package(default_cfg(), route) is None
 
 
-def test_old_lyrembed_on_the_page_is_not_offered_interactively(tmp_path, monkeypatch, album_dir, front):
-    session = app.new_session(default_cfg(), app.Options(lyrics="interactive"), tmp_path / "config.json")
-    session.lyrembed = "lyrembed"                         # before 0.8.0: terminal menus the page cannot answer
-    modes = []
+def test_the_page_offers_interactive_lyrics_on_lyrembeds_page(tmp_path, monkeypatch, album_dir, front):
+    session = app.new_session(default_cfg(), app.Options(lyrics="ask"), tmp_path / "config.json")
+    session.lyrembed, session.page_url = "lyrembed", "http://127.0.0.1:41877/"
+    passed = []
     monkeypatch.setattr(app.lyrics, "run_lyrembed",
-                        lambda lyr, cfg, folder, mode, romanize=None, return_url='': modes.append(mode) or 0)
+                        lambda lyr, cfg, folder, mode, romanize=None, return_url='': passed.append((mode, return_url)) or 0)
     album = state.load(album_dir)
     album.mark("tags")
-    recorder = front(["a"])                               # only the mode; no lyrics found asks nothing more
+    recorder = front(["i"])
     assert app.lyrics_step(session, album)
-    assert modes == ["auto"] and len(recorder.questions) == 1
-    assert [key for key, _ in recorder.questions[0][2]["options"]] == ["a", "s"]
+    assert [key for key, _ in recorder.questions[0][2]["options"]] == ["a", "i", "s"]
+    assert passed == [("interactive", "http://127.0.0.1:41877/")]
     assert "lyrics" in state.load(album_dir).done
 
 
@@ -3298,7 +3257,7 @@ def test_a_later_run_without_an_album_keeps_the_finished_one(tmp_path, monkeypat
     assert session.album is None and session.last_album is album   # what serve's finished line names
 
 
-# --- fixes from the second outside review (0.6.3) ------------------------------
+# --- more cases: merges, pictures, the tag editor, the config ------------------
 def test_without_musicbrainz_the_disc_keeps_its_tracks_and_link(tmp_path, monkeypatch, capsys):
     session, previews, ripped = unknown_disc_session(tmp_path, monkeypatch)
 
@@ -3480,7 +3439,7 @@ def test_musicbrainz_requests_keep_their_distance_across_threads(monkeypatch):
     assert slept == pytest.approx([cover.MB_INTERVAL_SECONDS] * 2)   # one after another
 
 
-# --- review of 2026-10-31 --------------------------------------------------------
+# --- more cases: stopped runs, the tag editor, merges, gain tags ----------------
 def test_a_stopped_album_is_not_reported_as_finished(tmp_path, monkeypatch, album_dir):
     album = state.load(album_dir)
     found = [album, None]   # the album, then quit at the start
@@ -3882,7 +3841,7 @@ def test_a_new_cdport_that_cannot_start_is_reported(monkeypatch, capsys):
     assert cli.RESTART_ENV not in os.environ
 
 
-# --- the new name (1.3.0): cdimport is now cdport ------------------------------
+# --- the old name, cdimport -----------------------------------------------------
 def test_cdimports_settings_move_to_cdport_and_the_old_place_links_there(tmp_path, monkeypatch):
     home = tmp_path / "config-home"
     old = home / "cdimport"
@@ -3927,8 +3886,8 @@ def test_the_move_is_reported_at_start(tmp_path, monkeypatch, capsys):
 
 
 def test_started_as_cdimport_the_lines_other_programs_read_keep_the_old_name(tmp_path, monkeypatch):
-    # lyrembed starts `cdimport` and looks for "cdimport is running at" and
-    # "cdimport finished:"; Gatefold also starts `cdimport`.
+    # Other programs may start `cdimport` and look for "cdimport is running at"
+    # and "cdimport finished:".
     monkeypatch.setattr(sys, "argv", ["/home/u/.local/bin/cdimport", "--web"])
     assert config.program_name() == "cdimport"
     assert web.FINISHED_LINE.format(name=config.program_name(), folder="/a") == "cdimport finished: /a"
@@ -3997,7 +3956,7 @@ def test_the_page_repeats_the_move_for_a_start_without_a_terminal(tmp_path, monk
     assert passed["notes"] and "cdimport is now cdport" in passed["notes"][0] and passed["warnings"] == []
 
 
-# --- the D-Bus interface (1.3.0) ------------------------------------------------
+# --- the D-Bus interface ------------------------------------------------------------
 import signal  # noqa: E402
 
 from cdport import dbus_service  # noqa: E402
@@ -4065,7 +4024,7 @@ def unfinished_album(work, name="Album"):
     return folder
 
 
-def test_dbus_info_says_what_gatefold_read_from_the_config(tmp_path):
+def test_dbus_info_says_what_jewelcase_read_from_the_config(tmp_path):
     write_user_config(tmp_path, work_dir=str(tmp_path / "work"), library_dir="~/Musik", editor="kid3")
     service, _ = bus_service(tmp_path)
     signature, (info,) = service.call("GetInfo", "", (), None)
@@ -4190,7 +4149,7 @@ def test_dbus_page_command_continues_an_album_in_a_checkout(monkeypatch, tmp_pat
 
 def test_dbus_on_a_real_bus_started_by_the_bus(tmp_path, monkeypatch):
     """A private dbus-daemon with cdport's service file: the bus starts
-    cdport --dbus at the first call, as the session bus does for Gatefold."""
+    cdport --dbus at the first call, as the session bus does for Jewelcase."""
     import shutil
 
     pytest.importorskip("jeepney")
@@ -4268,7 +4227,7 @@ def test_dbus_on_a_real_bus_started_by_the_bus(tmp_path, monkeypatch):
         bus.wait(10)
 
 
-# --- fixes from the code review of 1.3.0 ------------------------------------
+# --- the old name and the D-Bus service: edge cases ------------------------
 def test_a_symlinked_cdimport_config_folder_is_used_where_it_is(tmp_path):
     # A dotfile manager's link: not moved, and not dropped either.
     dotfiles = tmp_path / "dotfiles" / "cdimport"
@@ -4282,7 +4241,7 @@ def test_a_symlinked_cdimport_config_folder_is_used_where_it_is(tmp_path):
 
 
 def test_the_drive_locks_stay_where_cdimport_looks_for_them():
-    # A cdimport 1.2.x still ripping and a new cdport must see each other's lock.
+    # An install under the old name still ripping and cdport must see each other's lock.
     assert config.runtime_dir().name == "cdimport"
 
 
@@ -4389,7 +4348,7 @@ def test_the_service_waits_for_its_runs_before_it_ends(tmp_path):
     assert service.runs == {} and time.monotonic() - started >= 0.25
 
 
-# --- 1.4.0: a start to come back to, jumps, the tag editor over D-Bus ----------
+# --- a start to come back to, jumps, the tag editor over D-Bus -----------------
 def test_the_start_offers_a_disc_unfinished_albums_and_folders(tmp_path, monkeypatch, front):
     work = tmp_path / "work"
     folder = unfinished_album(work)
@@ -4686,7 +4645,7 @@ def test_dbus_edit_tags_page_command():
     assert "EditTags" in dbus_service.INTROSPECTION
 
 
-# --- 1.4.0: the tag editor and the cover step for MP3, Ogg Vorbis, Opus and M4A ----
+# --- the tag editor and the cover step for MP3, Ogg Vorbis, Opus and M4A ----
 # Tiny files of silence (made once with FFmpeg; tests never run it).
 TEST_DATA = Path(__file__).resolve().parent / "data"
 OTHER_FORMATS = ("mp3", "ogg", "opus", "m4a")

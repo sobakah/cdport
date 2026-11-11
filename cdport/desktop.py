@@ -18,7 +18,7 @@ from pathlib import Path
 
 ICON_SOURCE = Path(__file__).with_name("static") / "icon.svg"
 ENTRY_NAME = "cdport.desktop"
-# What cdimport (before 1.3.0) wrote: replaced by install, removed by remove.
+# What cdimport (the old name) wrote: replaced by install, removed by remove.
 OLD_ENTRY_NAME = "cdimport.desktop"
 OLD_ICON_NAME = "cdimport.svg"
 PAGE_ARGUMENTS = ["--web"]

@@ -10,6 +10,5 @@ dist/
 # Personal config in a checkout
 /config.json
 
-# Personal notes kept outside the repo (~/Software/Claude/Projects/cdimport)
-/COMMIT_MSG*.txt
-/RELEASE_NOTES*.md
+# The owner's setup, read by Claude Code
+/CLAUDE.local.md

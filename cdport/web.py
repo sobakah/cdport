@@ -829,9 +829,9 @@ def _say(message: str) -> None:
 
 # The last line serve prints when the run ends, read by lyrembed's "Import a
 # CD" to open the imported album: keep the wording. {name} is the name it was
-# started under (config.program_name): lyrembed starts and looks for cdimport.
+# started under (config.program_name): started as cdimport, it says cdimport.
 FINISHED_LINE = "{name} finished: {folder}"
-# The page's address, read by lyrembed, Gatefold and dbus_service.
+# The page's address, read by lyrembed, Jewelcase and dbus_service.
 RUNNING_LINE = "{name} is running at {url}"
 
 

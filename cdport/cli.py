@@ -57,7 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
     entry.add_argument("--install-desktop-entry", action="store_true",
                        help="add cdport to the app menu (Linux/BSD), starting this cdport's page, then exit")
     entry.add_argument("--remove-desktop-entry", action="store_true", help="remove cdport from the app menu, then exit")
-    bus = parser.add_argument_group("D-Bus (for Gatefold and other programs, also from a Flatpak)")
+    bus = parser.add_argument_group("D-Bus (for Jewelcase and other programs, also from a Flatpak)")
     service = bus.add_mutually_exclusive_group()
     service.add_argument("--install-dbus-service", action="store_true",
                          help="let the session bus start this cdport when a program calls it, then exit")
@@ -85,7 +85,7 @@ def local_page(url: str) -> bool:
 # and token, so its open tab still fits. Taken out of the environment at once,
 # as tools started from the page must not see the token.
 RESTART_ENV = "CDPORT_RESTART"
-# What cdimport 1.2.x sets when it updates itself to cdport on the page.
+# What cdimport (the old name) set when it updated itself to cdport on the page.
 OLD_RESTART_ENV = "CDIMPORT_RESTART"
 
 

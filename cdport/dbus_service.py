@@ -1,6 +1,6 @@
-"""cdport on the D-Bus session bus, for Gatefold and other programs.
+"""cdport on the D-Bus session bus, for Jewelcase and other programs.
 
-Why: a sandboxed program (Gatefold as a Flatpak) can neither start host
+Why: a sandboxed program (Jewelcase as a Flatpak) can neither start host
 programs nor read cdport's config or working folder, but it may talk to a
 bus name it is allowed (``--talk-name=io.github.sobakah.cdport``). The bus
 starts this service when it is called (a service file in
@@ -22,7 +22,7 @@ Interface ``io.github.sobakah.cdport1`` on ``/io/github/sobakah/cdport``:
 
 - ``GetInfo() -> a{sv}``: Version, InterfaceVersion, LibraryDir, WorkDir,
   Editor (the config's; "" when unset), TagFormats (as, the file extensions
-  EditTags edits, e.g. ".flac", ".mp3"; since cdport 1.4.0).
+  EditTags edits, e.g. ".flac", ".mp3").
 - ``UnfinishedAlbums() -> as``: album folders in the working folder with
   steps still open.
 - ``Import(a{sv} options) -> (s run, s url)``: start a page run; options
@@ -32,8 +32,8 @@ Interface ``io.github.sobakah.cdport1`` on ``/io/github/sobakah/cdport``:
   editor on one album (``cdport FOLDER --edit-tags``), a page run like
   Import's. The folder must hold files of TagFormats and lie inside
   cdport's library, its working folder or the music folder
-  (XDG_MUSIC_DIR); no options yet (unknown ones are refused). Finished's album is the folder afterwards,
-  renamed when the album's name changed. Since cdport 1.4.0.
+  (XDG_MUSIC_DIR); no options yet (unknown ones are refused). Finished's
+  album is the folder afterwards, renamed when the album's name changed.
 - ``Runs() -> a(ss)``: the runs still going, with their page addresses.
 - ``Stop(s run)``: as Ctrl+C: a running tool finishes first (cyanrip its log).
   Only the first Stop of a run sends it: a second Ctrl+C would cut the rip off.
@@ -148,7 +148,7 @@ class PageRun:
 
 def page_command(folder: str = "", library: str = "", edit_tags: bool = False) -> list[str]:
     """A page run of the cdport this service runs from (pipx launcher or
-    checkout), like Gatefold's `cdimport --web --no-browser [-l LIB]`;
+    checkout), as `cdport --web --no-browser [-l LIB]`;
     *edit_tags*: only the tag editor on *folder*."""
     from .desktop import launch_command
 

@@ -19,7 +19,7 @@ dev = ["pytest>=7", "pyflakes>=3"]
 [project.scripts]
 cdport = "cdport.cli:main"
 cdport-cover = "cdport.covertool:main"
-# The names before 1.3.0: lyrembed and Gatefold start cdimport.
+# The old names, kept as aliases: other programs may still start cdimport.
 cdimport = "cdport.cli:main"
 cdimport-cover = "cdport.covertool:main"
 

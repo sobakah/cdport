@@ -54,9 +54,6 @@ class Session:
     cyanrip_version: str | None = None  # None when cyanrip -h says nothing readable
     lyrembed: str | None = None
     lyrembed_problem: str = ""  # found, but does not start
-    lyrembed_romanize: bool = False  # lyrembed has --romanize for batch mode
-    lyrembed_page: bool = False  # lyrembed 0.8+: the interactive mode is a page in the browser
-    lyrembed_return: bool = False  # lyrembed 0.9+: its page can lead back to cdport's (--return-url)
     page_url: str = ""  # cdport's own page, when it runs on one (web.serve)
     album: AlbumState | None = None  # the album being worked on, for the Ctrl+C message
     # The newest album of any run that got through its steps, so the page's
@@ -131,7 +128,7 @@ def run(session: Session) -> int:
 
 def edit_tags_run(session: Session) -> int:
     """cdport FOLDER --edit-tags: the tag editor on one album, nothing else
-    (Gatefold's "Edit Tags", over D-Bus). No tools step, no update offer,
+    (Jewelcase's "Edit Tags", over D-Bus). No tools step, no update offer,
     and no state file: the album may be one in the library."""
     folder = session.options.folder
     if folder is None:
@@ -230,9 +227,6 @@ def check_tools(session: Session) -> None:
         session.lyrembed, session.lyrembed_problem = None, problem
     elif session.lyrembed:
         ui.check("lyrembed", ui.tilde(session.lyrembed), True)
-        features = lyrics.probe(session.lyrembed)
-        session.lyrembed_romanize, session.lyrembed_page = features.romanize, features.page
-        session.lyrembed_return = features.return_url
     else:
         ui.check("lyrembed", "not found: the lyrics step is disabled", False,
                  f"To install: {tools.LYREMBED_INSTALL_HINT}")
@@ -1208,16 +1202,11 @@ def lyrics_step(session: Session, album: AlbumState) -> bool:
         return True
     if len(taggable) < len(files):
         ui.dim(f"lyrembed leaves {len(files) - len(taggable)} file(s) in other formats alone.")
-    if mode == "interactive" and not interactive_lyrics(session):
-        ui.warn(NO_INTERACTIVE_LYRICS)
-        mode = "ask"
     if mode == "ask":
-        options = [("a", "automatic: embed confident matches, no questions")]
-        if interactive_lyrics(session):
-            options.append(("i", "interactive: choose for each track" + (" on lyrembed's page in the browser"
-                                                                         if session.lyrembed_page else "")))
-        mode = {"a": "auto", "i": "interactive", "s": "skip"}[ui.choose("Lyrics", options + [("s", "skip")],
-                                                                        default="a")]
+        options = [("a", "automatic: embed confident matches, no questions"),
+                   ("i", "interactive: choose for each track on lyrembed's page in the browser"),
+                   ("s", "skip")]
+        mode = {"a": "auto", "i": "interactive", "s": "skip"}[ui.choose("Lyrics", options, default="a")]
     romanize = ask_romanize(session) if mode == "auto" else None
     while True:
         if mode == "skip":
@@ -1276,12 +1265,7 @@ def after_automatic_lyrics(session: Session, album: AlbumState, files: list[Path
     for f in left:
         ui.dim(f"  {f.name}")
     ui.dim("lyrembed's output above says why. Instrumental tracks stay without lyrics.")
-    if not interactive_lyrics(session):
-        ui.dim(NO_INTERACTIVE_LYRICS)
-        album.mark("lyrics")
-        return True
-    where = "its page in the browser shows every track" if session.lyrembed_page else "lyrembed shows every track"
-    answer = ui.choose("Then", [("i", f"go through them interactively ({where})"),
+    answer = ui.choose("Then", [("i", "go through them interactively (its page in the browser shows every track)"),
                                 ("c", "continue without them")], default="i")
     if answer == "i":
         return False
@@ -1292,16 +1276,13 @@ def after_automatic_lyrics(session: Session, album: AlbumState, files: list[Path
 def offer_lyrics_check(session: Session, album: AlbumState) -> None:
     """After automatic mode, let the user look over what it embedded.
 
-    Interactive lyrembed (its page, from 0.8.0) shows every track, including
-    those that now have lyrics, so it doubles as the review. The step is already marked done:
-    the lyrics are embedded whatever happens in the check.
+    Interactive lyrembed (its page) shows every track, including those that
+    now have lyrics, so it doubles as the review. The step is already marked
+    done: the lyrics are embedded whatever happens in the check.
     """
-    if not interactive_lyrics(session):
-        return
     answer = ui.choose("Lyrics embedded", [
         ("c", "continue"),
-        ("l", "check them: open the album " + ("on lyrembed's page in the browser" if session.lyrembed_page
-                                                else "in lyrembed (interactive)")),
+        ("l", "check them: open the album on lyrembed's page in the browser"),
     ], default="c")
     if answer == "c":
         return
@@ -1317,29 +1298,19 @@ def offer_lyrics_check(session: Session, album: AlbumState) -> None:
         ui.warn(f"lyrembed ended with exit code {code}; the lyrics embedded before stay.")
 
 
-NO_INTERACTIVE_LYRICS = ("Going through tracks interactively needs lyrembed 0.8.0 or newer on this page, "
-                         "or cdport in a terminal.")
-
-
-def interactive_lyrics(session: Session) -> bool:
-    """Whether interactive lyrembed can be used: lyrembed before 0.8.0 asks in
-    terminal menus, which the page shows but cannot answer."""
-    return ui.in_terminal() or session.lyrembed_page
-
-
 def handoff_url(session: Session) -> str:
     """cdport's page, for lyrembed's to lead back to: only when cdport
-    runs on a page and lyrembed can do it."""
-    return session.page_url if session.page_url and session.lyrembed_return else ""
+    runs on a page."""
+    return session.page_url
 
 
 def page_hint(session: Session) -> None:
-    """lyrembed 0.8.0 and newer open a page and waits; without this the terminal only
-    shows an address, and it is not obvious how to get back to cdport."""
+    """Interactive lyrembed opens a page and waits; without this the terminal
+    only shows an address, and it is not obvious how to get back to cdport."""
     if handoff_url(session):
         ui.dim("This tab now switches to lyrembed's page with the album. "
                "When you're done there, \"Done – back to cdport\" brings you back here.")
-    elif session.lyrembed_page:
+    else:
         ui.dim("lyrembed opens the album on its page in your browser. "
                "Quit it there, or close the tab, to continue here.")
 
@@ -1347,9 +1318,6 @@ def page_hint(session: Session) -> None:
 def ask_romanize(session: Session) -> bool | None:
     """Whether automatic mode romanizes; None (Enter) leaves it to lyrembed's
     own settings.auto_romanize, so its config stays the default."""
-    if not session.lyrembed_romanize:
-        ui.dim("This lyrembed cannot romanize in automatic mode; update it for that.")
-        return None
     answer = ui.choose("Romanize the lyrics", [
         ("l", "as set in lyrembed (settings.auto_romanize, off unless changed there)"),
         ("y", "yes: romanized, layout from lyrembed's settings.romanization_layout"),
