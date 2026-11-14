@@ -6,6 +6,16 @@ All notable changes to cdport are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Fedora Silverblue, Bluefin and other image-based systems:** cdport runs in a toolbox or
+  distrobox, where it builds cyanrip. Its app menu entry and D-Bus service start it in the
+  container, so Jewelcase on the host reaches it; the page opens in the host's browser, and
+  Ear Tag and the other Flatpak editors are the host's. On the host itself, the cyanrip step
+  says to use a toolbox instead of offering dnf. The README has a section for these systems.
+- In a container, a lyrembed installed only on the host is reported as such, not as a broken
+  pipx install.
+
 ## [1.0.0] — 2026-11-11
 
 The first release. cdport rips an audio CD into a tagged, lyrics-embedded FLAC

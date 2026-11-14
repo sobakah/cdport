@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import proc
+from . import container, proc
 from .config import expand
 
 
@@ -57,7 +57,10 @@ def start_problem(cmd: list[str]) -> str | None:
         return None  # it started; slowness is not this check's business
     except OSError as exc:
         reason = exc.strerror or str(exc)
-        if "pipx" in str(Path(cmd[0]).resolve()):
+        if container.container() is not None:
+            # The home folder is shared: a pipx install from the host is on PATH here, its Python isn't.
+            reason += f" - it is installed outside this container: install {Path(cmd[0]).name} inside it too"
+        elif "pipx" in str(Path(cmd[0]).resolve()):
             reason += f" - its pipx environment is broken; repair it with: pipx reinstall {Path(cmd[0]).name}"
         return reason
     if result.returncode == 0:
@@ -92,10 +95,14 @@ def _flatpak_app_id(cmd: list[str]) -> str | None:
 
 def command_available(cmd: list[str]) -> bool:
     """Whether a command template can run: the program exists, and for
-    'flatpak run APP' the app is installed."""
+    'flatpak run APP' the app is installed. In a toolbox or distrobox,
+    Flatpak is the host's (container.flatpak_on_host)."""
+    app_id = _flatpak_app_id(cmd)
+    if app_id is not None and container.container() is not None:
+        result = proc.capture(container.host_command(["flatpak", "info", app_id]))
+        return result is not None and result.returncode == 0
     if not shutil.which(cmd[0]):
         return False
-    app_id = _flatpak_app_id(cmd)
     if app_id is None:
         return True
     result = proc.capture(["flatpak", "info", app_id])

@@ -57,6 +57,31 @@ def no_update_check(monkeypatch):
     monkeypatch.setattr(selfupdate, "latest", offline)
 
 
+@pytest.fixture(autouse=True)
+def not_in_a_container(monkeypatch, tmp_path):
+    """The suite runs alike on the host and in a toolbox: no container and
+    no image-based host, unless a test makes them (toolbox)."""
+    from cdport import container
+    for name in ("TOOLBOX_ENV", "CONTAINER_ENV", "HOST_ROOT", "OSTREE_BOOTED"):
+        monkeypatch.setattr(container, name, tmp_path / f"not-{name.lower()}")
+    monkeypatch.delenv("CONTAINER_ID", raising=False)
+
+
+@pytest.fixture
+def toolbox(monkeypatch, tmp_path):
+    """Running in a toolbox called "my box", with toolbox in the host's /usr/bin."""
+    from cdport import container
+    (tmp_path / "toolboxenv").touch()
+    (tmp_path / "containerenv").write_text('engine="podman-5.6"\nname="my box"\nid="abc"\n')
+    host_bin = tmp_path / "host" / "usr" / "bin"
+    host_bin.mkdir(parents=True)
+    (host_bin / "toolbox").touch()
+    monkeypatch.setattr(container, "TOOLBOX_ENV", tmp_path / "toolboxenv")
+    monkeypatch.setattr(container, "CONTAINER_ENV", tmp_path / "containerenv")
+    monkeypatch.setattr(container, "HOST_ROOT", tmp_path / "host")
+    return container
+
+
 def default_cfg():
     return copy.deepcopy(config.DEFAULT_CONFIG)
 
@@ -3791,7 +3816,7 @@ def test_the_new_process_takes_over_the_address_and_opens_no_second_tab(tmp_path
         port = probe.getsockname()[1]
     session = app.new_session(default_cfg(), app.Options(), tmp_path / "config.json")
     opened = []
-    monkeypatch.setattr(web.webbrowser, "open", opened.append)
+    monkeypatch.setattr(web.container, "open_url", opened.append)
     monkeypatch.setattr(web, "_say", lambda message: None)
     servers = []
 
@@ -4806,3 +4831,71 @@ def test_dbus_edits_tags_of_mp3_albums_and_says_which_formats(tmp_path, monkeypa
     with pytest.raises(dbus_service.ServiceError) as refused:
         service.call("EditTags", "sa{sv}", (str(wav), {}), "call")
     assert refused.value.name.endswith("NoAlbum")
+
+
+# --- toolbox and distrobox (Fedora Silverblue, Bluefin) ------------------------
+def test_in_a_toolbox_the_menu_entry_and_the_service_enter_it(toolbox, tmp_path, monkeypatch):
+    """The desktop and the session bus (Jewelcase's way in) read these files
+    on the host, where the container's Python and cyanrip aren't."""
+    from cdport import dbus_service, desktop
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setattr(desktop, "_refresh", lambda folder: None)
+    monkeypatch.setattr(dbus_service, "_reload_bus", lambda: None)
+    shim = tmp_path / "bin" / "cdport"
+    shim.parent.mkdir()
+    shim.write_text("", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", [str(shim)])
+    entry, _, command, _ = desktop.install()
+    assert command == ["/usr/bin/toolbox", "run", "--container", "my box", str(shim)]
+    assert f'Exec=/usr/bin/toolbox run --container "my box" {shim} --web %f\n' in entry.read_text()
+    path, _, _ = dbus_service.install_service_file()
+    assert f"Exec=/usr/bin/toolbox run --container 'my box' {shim} --dbus\n" in path.read_text()
+
+
+def test_in_a_toolbox_flatpak_editors_run_on_the_host(toolbox, tmp_path, monkeypatch):
+    """Flatpak isn't in the container: Ear Tag is checked for and started on the host."""
+    asked, started = [], []
+    monkeypatch.setattr(tools.proc, "capture", lambda cmd, timeout=10: asked.append(cmd) or SimpleNamespace(returncode=0))
+    monkeypatch.setattr(tools.shutil, "which", lambda name: None)
+    assert tools.command_available(["flatpak", "run", "app.drey.EarTag", "{files}"])
+    assert asked == [["flatpak-spawn", "--host", "flatpak", "info", "app.drey.EarTag"]]
+    make_flac(tmp_path / "01.flac")
+    monkeypatch.setattr(tags.proc, "launch", lambda cmd: started.append(cmd))
+    tags.open_editor(tools.Editor("eartag", "Ear Tag", ["flatpak", "run", "app.drey.EarTag", "{files}"]), tmp_path)
+    assert started == [["flatpak-spawn", "--host", "flatpak", "run", "app.drey.EarTag", str(tmp_path / "01.flac")]]
+
+
+def test_in_a_toolbox_the_page_opens_in_the_hosts_browser(toolbox, monkeypatch):
+    """A toolbox has no xdg-open: Python's webbrowser asks gio there, which
+    finds no browser and still reports success."""
+    started = []
+    monkeypatch.setattr(toolbox.subprocess, "Popen", lambda argv, **kw: started.append(argv))
+    monkeypatch.setattr(toolbox.webbrowser, "open", lambda url: pytest.fail("webbrowser in a container"))
+    assert toolbox.open_url("http://127.0.0.1:1/") is True
+    assert started == [["flatpak-spawn", "--host", "xdg-open", "http://127.0.0.1:1/"]]
+
+
+def test_in_a_toolbox_a_tool_from_the_host_is_named_as_such(toolbox, tmp_path):
+    """The home folder is shared, so a lyrembed installed on the host is on
+    PATH in the container, but its Python isn't there."""
+    launcher = tmp_path / "lyrembed"
+    launcher.write_text("#!/nonexistent/python3\n")
+    launcher.chmod(0o755)
+    assert "installed outside this container: install lyrembed inside it too" in tools.start_problem([str(launcher)])
+
+
+def test_on_an_image_based_system_cyanrip_is_not_installed_with_dnf(tmp_path, monkeypatch):
+    """Silverblue's dnf can't install: cdport says to use a toolbox instead."""
+    from cdport import container
+    (tmp_path / "ostree-booted").touch()
+    monkeypatch.setattr(container, "OSTREE_BOOTED", tmp_path / "ostree-booted")
+    route = install.choose_route({"ID": "fedora", "VARIANT_ID": "silverblue"}, "linux")
+    assert route.kind == "elsewhere" and "toolbox" in route.description and route.command is None
+    assert install.choose_route({"ID": "fedora"}, "linux", channel="master").kind == "elsewhere"
+
+
+def test_in_a_distrobox_the_entry_enters_it(monkeypatch):
+    from cdport import container
+    monkeypatch.setenv("CONTAINER_ID", "arch")
+    assert container.on_host(["/x/cdport"]) == ["distrobox-enter", "-n", "arch", "--", "/x/cdport"]
+    assert container.flatpak_on_host(["kid3", "x"]) == ["kid3", "x"]

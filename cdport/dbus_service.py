@@ -511,9 +511,11 @@ def service_file_text(command: list[str]) -> str:
 def install_service_file() -> tuple[Path, list[str], str | None]:
     """Write the service file for the cdport that runs this; returns its
     path, the command, and why the bus could not be told (None when it was)."""
+    from . import container
     from .desktop import launch_command
 
-    command = launch_command()
+    # In a toolbox or distrobox the bus on the host starts the service.
+    command = container.on_host(launch_command())
     path = service_file_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(service_file_text(command), encoding="utf-8")

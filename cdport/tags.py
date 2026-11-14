@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from . import proc
+from . import container, proc
 from .tools import Editor
 
 AUDIO_EXTENSIONS = {".flac", ".mp3", ".ogg", ".opus", ".m4a", ".wav", ".aiff", ".wv", ".tta"}
@@ -31,8 +31,9 @@ def expand_command(template: list[str], folder: Path, files: list[Path]) -> list
 
 
 def open_editor(editor: Editor, folder: Path) -> proc.Launched:
-    """Start the editor on the album; raises OSError when it cannot start."""
-    return proc.launch(expand_command(editor.command, folder, audio_files(folder)))
+    """Start the editor on the album; raises OSError when it cannot start.
+    A Flatpak runs on the host from a toolbox or distrobox."""
+    return proc.launch(container.flatpak_on_host(expand_command(editor.command, folder, audio_files(folder))))
 
 
 class TagReadError(Exception):

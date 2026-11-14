@@ -21,13 +21,12 @@ import secrets
 import sys
 import threading
 import time
-import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable
 from urllib.parse import parse_qs, urlsplit
 
-from . import app, config, cover, proc, tageditor, tags, ui
+from . import app, config, container, cover, proc, tageditor, tags, ui
 
 log = logging.getLogger(__name__)
 
@@ -869,7 +868,7 @@ def serve(session: app.Session, open_browser: bool = True, port: int = 0,
     thread = threading.Thread(target=server.serve_forever, name="cdport-web", daemon=True)
     thread.start()
     _say(RUNNING_LINE.format(name=config.program_name(), url=url))
-    opened = open_browser and webbrowser.open(url)
+    opened = open_browser and container.open_url(url)
     if back:
         _say(f"When the run is done, its page leads back to {back[1] or 'the previous page'}.")
     else:

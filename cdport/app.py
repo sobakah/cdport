@@ -363,6 +363,9 @@ def offer_cyanrip_install(session: Session) -> None:
     page as in the terminal: a page leaves only the package manager's
     commands, which ask for a password, to a terminal (install.run_package_manager)."""
     route = install.choose_route(channel=session.cfg["cyanrip"]["channel"])
+    if route.kind == "elsewhere":
+        ui.info(f"{INDENT}{route.description}")
+        return
     if not session.options.install_cyanrip:
         ui.dim(f"{INDENT}To install: {install.route_hint(route)}")
         if route.kind == "download" or not ui.confirm("Install cyanrip now?", default=True):

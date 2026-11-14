@@ -16,6 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from . import container
+
 ICON_SOURCE = Path(__file__).with_name("static") / "icon.svg"
 ENTRY_NAME = "cdport.desktop"
 # What cdimport (the old name) wrote: replaced by install, removed by remove.
@@ -121,7 +123,8 @@ def install() -> tuple[Path, Path, list[str], str | None]:
     why cdimport's old entry is still there (None when it is not)."""
     if not supported():
         raise DesktopError("App-menu entries are written for Linux and BSD desktops only.")
-    command = launch_command()
+    # In a toolbox or distrobox the desktop reads the entry on the host.
+    command = container.on_host(launch_command())
     entry, icon = entry_path(), icon_path()
     try:
         icon.parent.mkdir(parents=True, exist_ok=True)

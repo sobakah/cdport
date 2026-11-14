@@ -84,6 +84,32 @@ distribution's cyanrip package) asks for your password and a yes, which a
 page cannot pass on. The page shows that command to run in a terminal, waits
 until you say it has finished, and then checks what it installed.
 
+### Fedora Silverblue, Bluefin and other image-based systems
+
+cyanrip has to be built, and the system image has no compiler, so install cdport **in a
+toolbox** (or a distrobox), where it builds cyanrip as on Fedora:
+
+```bash
+toolbox create cdport && toolbox enter cdport
+sudo dnf install pipx systemd-udev
+pipx install git+https://github.com/sobakah/cdport.git
+pipx install "lyrembed[all] @ git+https://github.com/sobakah/lyrembed.git"
+cdport --install-desktop-entry
+cdport --install-dbus-service
+```
+
+- **The app menu entry and the D-Bus service** made inside the container start cdport in it
+  (`toolbox run --container cdport …`, `distrobox-enter -n …` for a distrobox), so Jewelcase on
+  the host imports CDs as usual. Start cdport from the menu or from a terminal in the
+  container: pipx's folders are in the home folder, which the host shares, so `cdport` is on
+  the host's `PATH` too, but there it finds no cyanrip and says so.
+- **The page opens in the host's browser**, and Ear Tag (a Flatpak) is the host's.
+- **The drive** is seen in the container as on the host. `systemd-udev` lets cdport name its
+  model; without it, cdport still finds the disc.
+- **lyrembed** runs where it is started. Make its app menu entry and D-Bus service in the same
+  container (`lyrembed --install-desktop-entry`, `lyrembed --install-dbus-service`), so its
+  *Import a CD* starts cdport there.
+
 ## Using it
 
 ```bash

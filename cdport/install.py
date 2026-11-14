@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from . import config, proc, tools, ui
+from . import config, container, proc, tools, ui
 
 REPO_URL = "https://github.com/cyanreg/cyanrip.git"
 DEFAULT_SOURCE_DIR = "~/.local/src/cyanrip"
@@ -70,9 +70,14 @@ SUSE_TOOLS = {"git": "git", "pkg-config": "pkgconf-pkg-config", "meson": "meson"
 _MIN_VERSIONS = {name: version for name, version, *_ in REQUIRED_LIBS + OPTIONAL_LIBS}
 
 
+IMAGE_BASED = ("cyanrip can't be built on an image-based system such as Fedora Silverblue or Bluefin: "
+               "install cdport in a toolbox and start it there, as its app menu entry made there does "
+               "(see cdport's README)")
+
+
 @dataclass
 class Route:
-    kind: str  # "package", "source" or "download"
+    kind: str  # "package", "source", "download" or "elsewhere" (cdport can't install it here)
     description: str
     command: list[str] | None = None
 
@@ -97,6 +102,8 @@ def choose_route(os_release: dict[str, str] | None = None, platform: str | None 
                                      "set \"channel\": \"release\"")
         return Route("download", "Download the latest cyanrip.exe from "
                                  "https://github.com/cyanreg/cyanrip/releases (automatic download comes later)")
+    if platform.startswith("linux") and container.image_based_host():
+        return Route("elsewhere", IMAGE_BASED)
     if channel == "master":
         # Packages are releases; master only comes from source.
         return Route("source", "master is built from source into ~/.local")
@@ -420,7 +427,7 @@ def install_cyanrip(cfg: dict[str, Any], config_path: Path, os_release: dict[str
     if os_release is None:
         os_release = tools.read_os_release()
     route = choose_route(os_release, platform, channel=cfg["cyanrip"]["channel"])
-    if route.kind == "download":
+    if route.kind in ("download", "elsewhere"):
         ui.info(route.description)
         return None
     if route.kind == "package":
