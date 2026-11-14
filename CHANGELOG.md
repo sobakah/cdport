@@ -4,7 +4,7 @@ All notable changes to cdport are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.1] — 2026-11-14
 
 ### Added
 
@@ -71,5 +71,6 @@ after each album.
   `config.example.json`; a wrong value falls back to its default and is
   reported.
 
-[Unreleased]: https://github.com/sobakah/cdport/compare/1.0.0...HEAD
+[Unreleased]: https://github.com/sobakah/cdport/compare/1.0.1...HEAD
+[1.0.1]: https://github.com/sobakah/cdport/compare/1.0.0...1.0.1
 [1.0.0]: https://github.com/sobakah/cdport/releases/tag/1.0.0
