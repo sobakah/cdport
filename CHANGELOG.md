@@ -6,6 +6,8 @@ All notable changes to cdport are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-11-20
+
 ### Added
 
 - **`--install`** writes the app menu entry and the D-Bus service in one go, **`--uninstall`**
