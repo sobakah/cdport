@@ -403,7 +403,20 @@ def serve(service: Service | None = None, idle_exit: float = IDLE_EXIT) -> int:
         try:
             return _answer(conn, service, idle_exit)
         finally:
+            if service.runs:
+                _let_go(conn)
             _outlive_runs(service)
+
+
+def _let_go(conn: Any) -> None:
+    """Give up the name before waiting for the runs: this process answers no more
+    calls, so the bus starts a new cdport for the next one instead of letting it wait."""
+    try:
+        from jeepney.bus_messages import message_bus
+
+        conn.send(message_bus.ReleaseName(BUS_NAME))
+    except Exception:   # the bus may be gone already
+        pass
 
 
 def _outlive_runs(service: Service) -> None:
@@ -416,7 +429,13 @@ def _outlive_runs(service: Service) -> None:
 
 
 def _answer(conn: Any, service: Service, idle_exit: float) -> int:
-    """The loop: take the name, answer calls, pass on what the runs report."""
+    """The loop: take the name, answer calls, pass on what the runs report.
+
+    Idle, it releases the name first and ends only once the bus confirmed
+    that and nothing came meanwhile: a call routed to this process just
+    before would otherwise go unanswered, while after the release the bus
+    starts a new cdport for the next one. A call that started a run
+    meanwhile takes the name back, so the run can still be found."""
     from jeepney import DBusAddress, HeaderFields, MessageType, new_error, new_method_return, new_signal
     from jeepney.bus_messages import message_bus
 
@@ -430,7 +449,24 @@ def _answer(conn: Any, service: Service, idle_exit: float) -> int:
         return 0
     emitter = DBusAddress(OBJECT_PATH, interface=INTERFACE)
     last = time.monotonic()
+    releasing: int | None = None   # the ReleaseName's serial, once sent
+    released = False
+    lost = False                   # another cdport has the name now
     while True:
+        if released and service.runs and not lost:
+            try:
+                owner, early = _request_name(conn, message_bus.RequestName(BUS_NAME, 4))
+            except (OSError, EOFError, ValueError, TimeoutError) as exc:
+                print(f"cdport: could not take the name {BUS_NAME} back: {exc}", file=sys.stderr)
+                owner, early = 0, []
+            inbox.extend(early)
+            if owner in (1, 4):
+                releasing, released = None, False
+                last = time.monotonic()
+            else:
+                lost = True
+                print(f"cdport: another cdport has {BUS_NAME} now; the runs here go on, "
+                      "but can't be found over D-Bus.", file=sys.stderr)
         for item in service.outgoing():
             if item[0] == "return":
                 conn.send(new_method_return(item[1], item[2], item[3]))
@@ -440,14 +476,20 @@ def _answer(conn: Any, service: Service, idle_exit: float) -> int:
                 conn.send(new_signal(emitter, item[1], item[2], item[3]))
         if service.runs:
             last = time.monotonic()
-        elif time.monotonic() - last > idle_exit:
-            return 0
+        elif time.monotonic() - last > idle_exit and releasing is None:
+            releasing = next(conn.outgoing_serial)
+            conn.send(message_bus.ReleaseName(BUS_NAME), serial=releasing)
         try:
             msg = inbox.pop(0) if inbox else conn.receive(timeout=0.25)
         except TimeoutError:
+            if released and not service.runs:
+                return 0
             continue
         except (OSError, EOFError, ValueError):   # the bus went away (logout)
             return 0
+        if releasing is not None and msg.header.fields.get(HeaderFields.reply_serial) == releasing:
+            released = True
+            continue
         if msg.header.message_type != MessageType.method_call:
             continue   # signals such as NameAcquired
         last = time.monotonic()

@@ -4,6 +4,19 @@ All notable changes to cdport are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`--install`** writes the app menu entry and the D-Bus service in one go, **`--uninstall`**
+  removes both again (before `pipx uninstall cdport`).
+
+### Fixed
+
+- A call to the D-Bus service just as it ended after a minute without calls could fail, and
+  while it waited for its imports at the end, calls waited for their timeout; they are answered
+  now, or start a new service.
+
 ## [1.0.1] — 2026-11-14
 
 ### Added

@@ -4164,6 +4164,44 @@ def test_dbus_service_file_starts_this_cdport(tmp_path, monkeypatch, capsys):
     assert cli.main(["--remove-dbus-service"]) == 0 and "There was no" in capsys.readouterr().out
 
 
+@pytest.fixture
+def installing(tmp_path, monkeypatch):
+    """--install and --uninstall in the test's own data folder, without a bus or a menu to refresh."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setattr(dbus_service, "_reload_bus", lambda: None)
+    monkeypatch.setattr(desktop, "_refresh", lambda folder: None)
+    shim = tmp_path / "bin" / "cdport"
+    shim.parent.mkdir()
+    shim.write_text("", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", [str(shim)])
+    return desktop.entry_path(), desktop.icon_path(), dbus_service.service_file_path()
+
+
+def test_install_and_uninstall_do_the_app_menu_entry_and_the_dbus_service(installing, capsys):
+    entry, icon, service = installing
+    assert cli.main(["--install"]) == 0
+    assert entry.is_file() and icon.is_file() and service.is_file()
+    assert cli.main(["--uninstall"]) == 0
+    assert not entry.exists() and not icon.exists() and not service.exists()
+    capsys.readouterr()
+    assert cli.main(["--uninstall"]) == 0
+    out = capsys.readouterr().out
+    assert "There was no app-menu entry." in out and "There was no D-Bus service file." in out
+
+
+def test_uninstall_removes_the_service_also_when_the_entry_cannot_go(installing, capsys):
+    entry, _, service = installing
+    assert cli.main(["--install-dbus-service"]) == 0
+    entry.mkdir(parents=True)                        # can't be unlinked
+    assert cli.main(["--uninstall"]) == 2
+    assert not service.exists() and "Could not remove" in "".join(capsys.readouterr())
+
+
+def test_install_and_uninstall_go_alone():
+    with pytest.raises(SystemExit):
+        cli.main(["--install", "--uninstall"])
+
+
 def test_dbus_page_command_continues_an_album_in_a_checkout(monkeypatch, tmp_path):
     launcher = tmp_path / "run.py"
     launcher.write_text("", encoding="utf-8")
@@ -4315,27 +4353,39 @@ def test_import_answers_before_d_bus_clients_give_up():
 
 
 class FakeBus:
-    """Just enough of a jeepney connection for dbus_service._answer."""
+    """Just enough of a jeepney connection for dbus_service._answer: the bus
+    answers RequestName and ReleaseName; *before_reply* comes before
+    RequestName's answer, *after* before ReleaseName's; then *end*."""
 
-    def __init__(self, before_reply=(), after=()):
+    def __init__(self, before_reply=(), after=(), end=OSError("the bus went away")):
         self.outgoing_serial = itertools.count(1)
-        self.sent, self.before_reply, self.after = [], list(before_reply), list(after)
+        self.sent, self.before_reply, self.after, self.end = [], list(before_reply), list(after), end
+        self.answered = 0
 
     def send(self, message, serial=None):
-        self.sent.append((message, serial))
+        message.header.serial = serial or next(self.outgoing_serial)
+        self.sent.append(message)
+
+    def _bus_call(self):
+        from jeepney import HeaderFields
+
+        calls = [m for m in self.sent if m.header.fields.get(HeaderFields.destination) == "org.freedesktop.DBus"]
+        return calls[self.answered] if self.answered < len(calls) else None
 
     def receive(self, timeout=None):
         from jeepney import new_method_return
 
         if self.before_reply:
             return self.before_reply.pop(0)
-        if len(self.sent) == 1:   # RequestName: answered "now the owner"
-            request = self.sent[0][0]
-            request.header.serial = self.sent[0][1]
-            return new_method_return(request, "u", (1,))
+        if self.answered == 0 and self._bus_call() is not None:   # RequestName: "now the owner"
+            self.answered += 1
+            return new_method_return(self._bus_call() or self.sent[0], "u", (1,))
         if self.after:
             return self.after.pop(0)
-        raise OSError("the bus went away")
+        if (release := self._bus_call()) is not None:              # ReleaseName, or RequestName again
+            self.answered += 1
+            return new_method_return(release, "u", (1,))
+        raise self.end
 
 
 import itertools  # noqa: E402
@@ -4356,10 +4406,72 @@ def test_the_service_survives_a_failing_call_and_keeps_the_one_that_started_it(t
     service = dbus_service.Service()
     service.unfinished = lambda: (_ for _ in ()).throw(PermissionError(13, "Permission denied"))
     assert dbus_service._answer(bus, service, idle_exit=60) == 0   # ended by the bus going away
-    replies = [m for m, _ in bus.sent[1:]]
+    replies = bus.sent[1:]
     assert [m.header.message_type for m in replies] == [MessageType.method_return, MessageType.error,
                                                         MessageType.method_return]
     assert "PermissionError" in replies[1].body[0] and "Traceback" in capsys.readouterr().err
+
+
+def _call(method, signature=None, body=(), serial=7):
+    from jeepney import DBusAddress, new_method_call
+
+    msg = new_method_call(DBusAddress(dbus_service.OBJECT_PATH, dbus_service.BUS_NAME, dbus_service.INTERFACE),
+                          method, signature, body)
+    msg.header.serial = serial
+    return msg
+
+
+def test_the_service_answers_what_came_while_it_let_go_of_its_name():
+    # Idle, the service releases its name before it ends: a call the bus
+    # routed to it just before is still answered, the next one starts a new one.
+    pytest.importorskip("jeepney")
+    from jeepney import HeaderFields, MessageType
+
+    bus = FakeBus(after=[_call("Runs")], end=TimeoutError())
+    assert dbus_service._answer(bus, dbus_service.Service(), idle_exit=-1) == 0
+    assert [m.header.fields.get(HeaderFields.member) for m in bus.sent[:2]] == ["RequestName", "ReleaseName"]
+    assert bus.sent[2].header.message_type == MessageType.method_return
+    assert bus.sent[2].header.fields[HeaderFields.reply_serial] == 7
+
+
+def test_a_run_started_while_letting_go_of_the_name_takes_it_back(tmp_path):
+    """Or Stop and Runs would reach a new cdport that doesn't know the run."""
+    pytest.importorskip("jeepney")
+    from jeepney import HeaderFields, MessageType
+
+    process = FakePageRun([PAGE_LINE])
+    service, _ = bus_service(tmp_path, process)
+    bus = FakeBus(after=[_call("Import", "a{sv}", ({},))], end=TimeoutError())
+    threading.Timer(1.0, process.release.set).start()
+    assert dbus_service._answer(bus, service, idle_exit=-1) == 0
+    members = [m.header.fields.get(HeaderFields.member) for m in bus.sent
+               if m.header.message_type == MessageType.method_call]
+    assert members == ["RequestName", "ReleaseName", "RequestName", "ReleaseName"]
+    reply = next(m for m in bus.sent if m.header.fields.get(HeaderFields.reply_serial) == 7)
+    assert reply.body[0] == "1"
+
+
+def test_the_service_lets_go_of_its_name_before_waiting_for_its_runs(tmp_path, monkeypatch):
+    pytest.importorskip("jeepney")
+    import contextlib
+    import jeepney.io.blocking
+    from jeepney import HeaderFields
+
+    class Conn(contextlib.nullcontext):
+        sent = []
+
+        def send(self, message, serial=None):
+            self.sent.append(message)
+    process = FakePageRun([PAGE_LINE])
+    service, _ = bus_service(tmp_path, process)
+    service.call("Import", "a{sv}", ({},), "call")
+    drain(service)
+    monkeypatch.setattr(jeepney.io.blocking, "open_dbus_connection", lambda bus: Conn())
+    monkeypatch.setattr(dbus_service, "_answer", lambda conn, service, idle_exit: 0)   # the bus went away
+    threading.Timer(0.3, process.release.set).start()
+    assert dbus_service.serve(service) == 0
+    assert [m.header.fields.get(HeaderFields.member) for m in Conn.sent] == ["ReleaseName"]
+    assert service.runs == {}
 
 
 def test_the_service_waits_for_its_runs_before_it_ends(tmp_path):

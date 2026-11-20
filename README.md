@@ -21,8 +21,7 @@ Python 3.10 or newer · Linux (Windows later)
 
 ```bash
 pipx install git+https://github.com/sobakah/cdport.git
-cdport --install-desktop-entry   # optional: cdport (its page) in the app menu
-cdport --install-dbus-service    # optional: for Jewelcase and other programs
+cdport --install                 # optional: the app menu entry and the D-Bus service for Jewelcase
 ```
 
 pipx installs the Python packages cdport needs (`mutagen` for tags, `jeepney`
@@ -94,8 +93,7 @@ toolbox create cdport && toolbox enter cdport
 sudo dnf install pipx systemd-udev
 pipx install git+https://github.com/sobakah/cdport.git
 pipx install "lyrembed[all] @ git+https://github.com/sobakah/lyrembed.git"
-cdport --install-desktop-entry
-cdport --install-dbus-service
+cdport --install
 ```
 
 - **The app menu entry and the D-Bus service** made inside the container start cdport in it
@@ -107,7 +105,7 @@ cdport --install-dbus-service
 - **The drive** is seen in the container as on the host. `systemd-udev` lets cdport name its
   model; without it, cdport still finds the disc.
 - **lyrembed** runs where it is started. Make its app menu entry and D-Bus service in the same
-  container (`lyrembed --install-desktop-entry`, `lyrembed --install-dbus-service`), so its
+  container (`lyrembed --install`), so its
   *Import a CD* starts cdport there.
 
 ## Using it
@@ -214,7 +212,9 @@ desktops: `~/.local/share/applications/cdport.desktop` and an icon under
 your default browser (`--web`). The entry starts the cdport that wrote it
 (a pipx installation, or the Python and `run.py` of a checkout), so run the
 command again after installing cdport somewhere else.
-`--remove-desktop-entry` removes both files.
+`--remove-desktop-entry` removes both files. `cdport --install` writes the
+entry and the D-Bus service together, `cdport --uninstall` removes both
+(before `pipx uninstall cdport`).
 
 ### Updates
 
@@ -432,7 +432,8 @@ host programs nor read cdport's settings (it needs
 `--talk-name=io.github.sobakah.cdport`). The command writes
 `~/.local/share/dbus-1/services/io.github.sobakah.cdport.service`, starting
 the cdport that wrote it with `--dbus`; run it again after installing cdport
-somewhere else. `--remove-dbus-service` removes it.
+somewhere else. `--remove-dbus-service` removes it (`--uninstall` with the
+app menu entry).
 
 The interface (`io.github.sobakah.cdport1` on `/io/github/sobakah/cdport`):
 

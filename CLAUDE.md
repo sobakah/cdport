@@ -404,7 +404,11 @@ folder, so everything a caller needs has a call. The calls are in
   cyanrip included. A call failing with anything but a `ServiceError` is
   answered with `org.freedesktop.DBus.Error.Failed`, traceback to stderr; it
   never ends the service. `IDLE_EXIT` (60 s) without calls or runs ends it,
-  so an old version does not keep running after a pipx update.
+  so an old version does not keep running after a pipx update: the loop sends
+  `ReleaseName` and ends only once that is answered and nothing came meanwhile;
+  a call that started a run meanwhile takes the name back. When the loop ends
+  with runs going, `_let_go` releases the name before `_outlive_runs` waits.
+  (lyrembed's and keepbest's loops do the same.)
 - `Folder` (Import) must be one of `UnfinishedAlbums`; `Library` an existing
   absolute folder. `EditTags`' folder must hold files of
   `audiotags.EXTENSIONS` (`GetInfo`'s `TagFormats`) and resolve inside the
@@ -414,6 +418,8 @@ folder, so everything a caller needs has a call. The calls are in
   the same album.
 - `Service` holds the calls and runs without the bus (tests drive it with
   stand-in processes); `serve` is the jeepney loop: `receive`/`send` only.
+- `--install` / `--uninstall` = `--install-desktop-entry` and
+  `--install-dbus-service` (or their removal), both tried, the worse exit code.
 - `--install-dbus-service` writes
   `~/.local/share/dbus-1/services/io.github.sobakah.cdport.service`
   (`Exec=` the launcher, as the desktop entry's, plus `--dbus`) and asks the

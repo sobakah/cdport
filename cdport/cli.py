@@ -64,6 +64,13 @@ def build_parser() -> argparse.ArgumentParser:
     service.add_argument("--remove-dbus-service", action="store_true", help="undo --install-dbus-service, then exit")
     service.add_argument("--dbus", action="store_true",
                          help="serve the D-Bus interface until idle (what the bus starts)")
+    both = parser.add_argument_group("app menu and D-Bus together")
+    setup = both.add_mutually_exclusive_group()
+    setup.add_argument("--install", action="store_true",
+                       help="both of --install-desktop-entry and --install-dbus-service, then exit")
+    setup.add_argument("--uninstall", action="store_true",
+                       help="remove what --install wrote, then exit (cdport itself stays: "
+                            "pipx uninstall cdport removes it)")
     return parser
 
 
@@ -115,6 +122,8 @@ def main(argv: list[str] | None = None) -> int:
     port, token = _take_restart()
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.install or args.uninstall:
+        return _install(install=args.install)
     if args.install_desktop_entry or args.remove_desktop_entry:
         return _desktop_entry(install=args.install_desktop_entry)
     if args.dbus:
@@ -200,6 +209,12 @@ def _desktop_entry(install: bool) -> int:
         ui.error(str(exc))
         return 2
     return 0
+
+
+def _install(install: bool) -> int:
+    """--install / --uninstall: the app-menu entry and the D-Bus service; both are
+    tried, and the exit code is the worse one."""
+    return max(_desktop_entry(install), _dbus_service(install))
 
 
 def _dbus_service(install: bool) -> int:
