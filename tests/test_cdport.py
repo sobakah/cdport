@@ -1597,6 +1597,32 @@ def test_unknown_disc_with_typed_tags(tmp_path, monkeypatch):
 
 
 
+def test_unknown_disc_is_looked_up_again_after_adding_it(tmp_path, monkeypatch, capsys):
+    session, previews, ripped = unknown_disc_session(tmp_path, monkeypatch)
+    known = rip.parse_preview(0, ["MusicBrainz URL:", UNKNOWN_DISC[2], "Album: Added", "AccurateRip: found"])
+    plain = []
+
+    def preview(cyanrip, cfg, **kwargs):
+        previews.append(kwargs)
+        if not (kwargs["release"] or kwargs["tags"] or kwargs["no_musicbrainz"]):
+            plain.append(kwargs)
+            # Unknown at first and at the first new look; added to MusicBrainz then.
+            return known if len(plain) > 2 else rip.parse_preview(1, UNKNOWN_DISC)
+        return rip.parse_preview(0, ["The disc isn't on MusicBrainz yet, consider attaching it.",
+                                     UNKNOWN_DISC[2]])
+    monkeypatch.setattr(app.rip, "preview", preview)
+    # Tags typed in, look again (still unknown), look again (found), rip.
+    answers = feed_input(monkeypatch, ["t", "Album", "X", "", "", "", "", "", "", "", "l", "l", "r"])
+    assert app.preview_and_rip(session, "/dev/sr0") is not None and answers == []
+    assert len(plain) == 3 and previews[-1] == plain[-1]
+    assert ripped[0]["release"] == "" and ripped[0]["tags"] is None and not ripped[0]["no_musicbrainz"]
+    out = capsys.readouterr().out
+    assert "MusicBrainz knows this disc now" in out
+    # Once known, the link and the l option are gone.
+    last = out.rsplit("MusicBrainz knows this disc now", 1)[1]
+    assert UNKNOWN_DISC[2] not in last and "look the disc up" not in last
+
+
 def test_older_cyanrip_gets_no_release_for_an_unknown_disc(tmp_path, monkeypatch, capsys):
     session, previews, ripped = unknown_disc_session(tmp_path, monkeypatch)
     session.cyanrip_version = "0.9.3.1"  # Debian 13's

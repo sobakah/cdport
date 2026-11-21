@@ -51,6 +51,12 @@ const MARKS = { success: '✓', warn: '!', error: '✗' };
 
 // Whether a scroll position is at (or within a few pixels of) the end.
 const atEnd = (bottom, height) => bottom >= height - 40;
+// Whether to keep following after a scroll event. Only the reader's own
+// scrolling decides: the event of the page's own scrolling arrives a frame
+// later (much later in a tab in the background), when more output may have
+// made the box taller, and would count as the reader leaving the end.
+const stillAtEnd = (sticking, own, top, bottom, height) =>
+  atEnd(bottom, height) || (sticking && own !== null && Math.abs(top - own) < 1);
 const CHECK_MARKS = { true: ['✓', 'k-success'], false: ['!', 'k-warn'], null: ['–', 'k-dim'] };
 
 function Item({ event }) {
@@ -84,11 +90,16 @@ function Tool({ event }) {
   const body = useRef(null);
   // Like a terminal: follow new output only while scrolled to its end.
   const stick = useRef(true);
+  const own = useRef(null);
   const [stopping, setStopping] = useState(false);
   useEffect(() => {
-    if (stick.current && body.current) body.current.scrollTop = body.current.scrollHeight;
+    const box = body.current;
+    if (stick.current && box) { box.scrollTop = box.scrollHeight; own.current = box.scrollTop; }
   });
-  const scrolled = (e) => { stick.current = atEnd(e.target.scrollTop + e.target.clientHeight, e.target.scrollHeight); };
+  const scrolled = (e) => {
+    const box = e.target;
+    stick.current = stillAtEnd(stick.current, own.current, box.scrollTop, box.scrollTop + box.clientHeight, box.scrollHeight);
+  };
   const stop = async () => {
     if (!confirm(`Stop ${event.name}? It finishes its log first, as on Ctrl+C; cdport then asks what to do.`)) return;
     setStopping(true);
@@ -481,7 +492,7 @@ function App() {
   const end = useRef(null);
   const stick = useRef(true);
   const lastHeight = useRef(0);
-  const ownScroll = useRef(false);
+  const ownScroll = useRef(null);
 
   useEffect(() => {
     let alive = true;
@@ -539,20 +550,20 @@ function App() {
 
   // Like a terminal: new content scrolls the page only for a reader who was
   // at its end; one who scrolled up to read stays where they are.
-  // Only the reader's own scrolling decides: by the time the page's own
-  // scroll arrives, a loading picture may have made the page taller again.
+  // Only the reader's own scrolling decides (stillAtEnd): by the time the
+  // page's own scroll arrives, a loading picture may have made it taller.
   const follow = () => {
     const height = document.documentElement.scrollHeight;
     if (height !== lastHeight.current && stick.current) {
-      ownScroll.current = true;
       scrollTo(0, height);
+      ownScroll.current = scrollY;
     }
     lastHeight.current = height;
   };
   useEffect(() => {
     const onScroll = () => {
-      if (ownScroll.current) { ownScroll.current = false; return; }
-      stick.current = atEnd(scrollY + innerHeight, document.documentElement.scrollHeight);
+      stick.current = stillAtEnd(stick.current, ownScroll.current, scrollY, scrollY + innerHeight,
+        document.documentElement.scrollHeight);
     };
     addEventListener('scroll', onScroll, { passive: true });
     // Pictures (covers in a question) make the page taller after it was

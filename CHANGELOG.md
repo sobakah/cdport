@@ -6,6 +6,16 @@ All notable changes to cdport are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- For a disc MusicBrainz does not know, **`l` looks it up again** once you have added it there,
+  without going back to disc detection.
+
+### Fixed
+
+- On the page, a tool's output (cyanrip's) sometimes stopped following new lines although you
+  had not scrolled up, more often while the tab was in the background.
+
 ## [1.0.2] — 2026-11-20
 
 ### Added

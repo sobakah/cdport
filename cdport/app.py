@@ -688,6 +688,11 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
             disc_tracks = shown.tracks or disc_tracks
             if shown.disc_unknown and shown.submission_url:
                 submission_url = shown.submission_url
+            elif not (release or no_mb or typed) and (shown.code == 0 or shown.releases):
+                # A plain lookup found the disc: it was added to MusicBrainz meanwhile.
+                if submission_url:
+                    ui.success("MusicBrainz knows this disc now.")
+                submission_url = ""
         if shown.needs_tags:
             ui.warn("MusicBrainz does not know this disc, and cyanrip does not rip it without tags.")
         elif shown.releases:
@@ -712,6 +717,8 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
             ui.dim(f"cyanrip {session.cyanrip_version} takes a MusicBrainz release only for discs "
                    f"MusicBrainz knows ({install.RELEASE_FOR_UNKNOWN_DISC} or newer: for any disc); "
                    "type the tags in instead.")
+        if submission_url:
+            options.append(("l", "look the disc up on MusicBrainz again (after adding it there)"))
         options += [
             ("t", "type in the tags (album, artist, year, track titles)"),
             ("n", "rip without MusicBrainz metadata"),
@@ -743,6 +750,10 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
                     release, no_mb = found, False
                 else:
                     ui.warn("That is neither a list number nor a MusicBrainz release ID or link.")
+            continue
+        if answer == "l":
+            # As a new disc detection would: by the disc ID alone.
+            release, no_mb, typed = "", False, None
             continue
         if answer == "t":
             typed = ask_tags(typed, disc_tracks)
@@ -860,8 +871,9 @@ def explain_submission(url: str) -> None:
             "     (the edition with the same number of tracks) and attach the disc ID.\n"
             "     If it is not, add the release there.")
     ui.info("  3. Enter an edit note (e.g. barcode or catalog number) and submit.")
-    ui.dim("The edit may need up to 7 days of voting; after that cyanrip finds the disc by itself.\n"
-           "Until then, s or m below rips with the release's tags all the same.")
+    ui.dim("Once MusicBrainz has the disc ID, l below looks the disc up again. An edit that\n"
+           "attaches it to an existing release may need up to 7 days of voting; until then,\n"
+           "s or m below rips with the release's tags all the same.")
 
 
 def search_release(typed: rip.ManualTags | None, tracks: tuple[int, int] | None) -> str:

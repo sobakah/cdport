@@ -285,7 +285,8 @@ MusicBrainz account). Open it while logged in, search for the release, select
 the edition with the same number of tracks and attach the disc ID; if the
 release is missing, add it there. Enter an edit note and submit. Once the edit
 is applied (it may wait up to 7 days for votes), cyanrip finds the disc by
-itself, for you and everyone else.
+itself, for you and everyone else. `l` looks the disc up again without
+detecting it anew, for when you have just added it.
 
 ## Covers
 
