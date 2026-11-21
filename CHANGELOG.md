@@ -6,6 +6,11 @@ All notable changes to cdport are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- On the page, answering a question makes the page follow what comes next again, also when you
+  had scrolled up a little before (for example past the top of a list of releases).
+
 ## [1.1.0] — 2026-11-21
 
 ### Added

@@ -575,6 +575,9 @@ function App() {
   useEffect(follow);
 
   const answer = async (id, value) => {
+    // Whoever answers is at the question, the page's end: what comes next
+    // follows, even after a nudge upwards (scrolling past a list's top).
+    stick.current = true;
     try {
       await api('/answer', { id, value });
     } catch (err) {
