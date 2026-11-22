@@ -49,6 +49,21 @@ def no_real_tools(monkeypatch, tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def no_real_drive(monkeypatch, tmp_path_factory):
+    """Fail a test that would open the real drive's tray: disc.eject tries
+    the ioctl before util-linux's eject, which no_real_tools catches, so a
+    fast rip whose eject was not faked once reached /dev/sr0."""
+    real_ioctl_eject = disc._ioctl_eject
+    test_dirs = tmp_path_factory.getbasetemp().resolve()
+
+    def guarded(device):
+        if not Path(device).resolve().is_relative_to(test_dirs):
+            raise AssertionError(f"test tried to eject the real drive {device}")
+        return real_ioctl_eject(device)
+    monkeypatch.setattr(disc, "_ioctl_eject", guarded)
+
+
+@pytest.fixture(autouse=True)
 def no_update_check(monkeypatch):
     """The check for a newer cdport asks GitHub: never in tests, unless a
     test fakes its answer itself (the cache is private_dirs' business)."""
@@ -1566,6 +1581,8 @@ def unknown_disc_session(tmp_path, monkeypatch):
         return folder, None
     monkeypatch.setattr(app.rip, "preview", preview)
     monkeypatch.setattr(app.rip, "rip", fake_rip)
+    # A disc found on AccurateRip is ripped fast and ejected after the check.
+    monkeypatch.setattr(app.disc, "eject", lambda device: None)
     return session, previews, ripped
 
 

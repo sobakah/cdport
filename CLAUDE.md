@@ -435,6 +435,10 @@ folder, so everything a caller needs has a call. The calls are in
   ninja, pipx or pkg-config by name or outside the test's temp folders
   (`REAL_TOOLS`); test doubles are started by path. Fake `proc.run_tail` for
   cyanrip (faking `proc.run` once let the real cyanrip open the drive).
+  `no_real_drive` (autouse) fails `disc._ioctl_eject` on a device outside
+  the temp folders: a fast rip whose `disc.eject` was not faked sent the
+  eject ioctl to `/dev/sr0` before `no_real_tools` caught the `eject`
+  fallback.
 - `no_update_check` (autouse) makes `selfupdate.latest` fail; a test that
   needs an answer fakes it.
 - `make_flac` writes a header-only FLAC mutagen can tag; the other formats
