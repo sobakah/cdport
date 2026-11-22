@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 
 NAME = "cdport"
 # The old name. The command stays as an alias: other programs (Jewelcase) may

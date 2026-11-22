@@ -6,6 +6,8 @@ All notable changes to cdport are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-11-22
+
 ### Added
 
 - **ISRCs from MusicBrainz for new rips**: after a rip, every track without an ISRC gets the ISRCs
