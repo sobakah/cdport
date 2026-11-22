@@ -261,12 +261,16 @@ deletes the R128 tags after each rip; the ReplayGain tags say the same.
 
 cyanrip writes a track's ISRC only when the disc carries it, which few discs
 do. When the rip has a MusicBrainz release, cdport asks MusicBrainz once for
-the release's recordings and gives each track without an ISRC the first one
-MusicBrainz lists for its recording (tag `ISRC`; `TSRC` in MP3, the iTunes
-`ISRC` atom in M4A). An ISRC from the disc is never replaced, and a disc
-whose tracks all have one is not looked up. Players that match streaming
-playlists to your files, Jewelcase among them, find songs by their ISRC
-first. A failed lookup is reported and the album goes on without ISRCs.
+the release's recordings and gives each track without an ISRC all the ISRCs
+MusicBrainz lists for its recording (a recording often has several: a
+reissue, another label), in the tag `ISRC` (`TSRC` in MP3, where an ID3v2.3
+tag holds only the first; the iTunes `ISRC` atom in M4A). An ISRC from the
+disc is never replaced, and a disc whose tracks all have one is not looked
+up. Players that match streaming playlists to your files, Jewelcase among
+them, find songs by their ISRC first. When MusicBrainz is limiting requests
+(MusicBrainz Picard working at the same time counts too), cdport waits and
+asks again, for up to about 4 minutes. A failed lookup is reported and the
+album goes on without ISRCs.
 
 ### Several releases for one disc
 

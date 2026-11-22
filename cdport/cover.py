@@ -65,10 +65,15 @@ def _wait_for_musicbrainz() -> None:
         _last_mb_request = time.monotonic()
 
 
-def http_get(url: str, timeout: float = 20) -> bytes:
-    """The only network access in this module; tests replace it."""
+def http_get(url: str, timeout: float = 20, busy_waits: tuple[float, ...] | None = None,
+             on_busy=None) -> bytes:
+    """The only network access in this module; tests replace it. A 503 from
+    MusicBrainz is asked again after each of *busy_waits* seconds (default:
+    MB_RETRIES times MB_RETRY_SECONDS), or its Retry-After when longer;
+    *on_busy* hears of each wait first."""
     musicbrainz = url.startswith(MB_URL)
-    for attempt in range(MB_RETRIES + 1 if musicbrainz else 1):
+    waits = (busy_waits if busy_waits is not None else (MB_RETRY_SECONDS,) * MB_RETRIES) if musicbrainz else ()
+    for attempt in range(len(waits) + 1):
         if musicbrainz:
             _wait_for_musicbrainz()
         request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
@@ -78,8 +83,15 @@ def http_get(url: str, timeout: float = 20) -> bytes:
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 raise NotFound(url) from exc
-            if musicbrainz and exc.code == 503 and attempt < MB_RETRIES:
-                time.sleep(MB_RETRY_SECONDS)
+            if musicbrainz and exc.code == 503 and attempt < len(waits):
+                try:
+                    asked = float((exc.headers or {}).get("Retry-After") or 0)
+                except (TypeError, ValueError):
+                    asked = 0.0
+                wait = max(waits[attempt], asked)
+                if on_busy is not None:
+                    on_busy(wait)
+                time.sleep(wait)
                 continue
             raise CoverError(f"{url}: HTTP {exc.code}" + (" (MusicBrainz is busy; try again later)"
                                                          if exc.code == 503 else "")) from exc

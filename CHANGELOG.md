@@ -8,9 +8,10 @@ All notable changes to cdport are documented here. The format follows
 
 ### Added
 
-- **ISRCs from MusicBrainz for new rips**: after a rip, every track without an ISRC gets the one
+- **ISRCs from MusicBrainz for new rips**: after a rip, every track without an ISRC gets the ISRCs
   MusicBrainz has for its recording, so players that match streaming playlists to your files
-  (Jewelcase) find them. An ISRC read from the disc stays.
+  (Jewelcase) find them. An ISRC read from the disc stays. When MusicBrainz is limiting requests,
+  cdport waits and asks again.
 
 ## [1.1.1] — 2026-11-21
 

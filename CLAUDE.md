@@ -248,7 +248,7 @@ front).
   tags are lyrembed's and only noted; the rip log's content is never changed
   (its checksum).
 - **MusicBrainz**: at most one request per second (across threads), a 503
-  retried twice, User-Agent `cdport/<version>` without contact details
+  retried twice (the ISRC lookup waits longer, see ISRCs), User-Agent `cdport/<version>` without contact details
   (never add the owner's email without asking).
 
 ## Conventions
@@ -392,18 +392,29 @@ with `WebFront`.
   No question and no setting: it only adds a missing tag. A failed lookup
   is a warning; the album goes on. Only new rips: older albums are
   lyrembed's job (its ISRC mode, in the works there on 2026-11-22).
-- A track gets its recording's **first** ISRC, the one Jewelcase keeps in
-  its database (lofty reads the first value anyway). lyrembed writes all
-  of a recording's ISRCs; the two differ on purpose until the owner says
-  otherwise.
+- A track gets **all** of its recording's ISRCs, as lyrembed writes them
+  (the owner's decision, 2026-11-22): Jewelcase matches by any of them
+  since then. ID3v2.3 gets the first only (`TagFile.add_isrcs`; mutagen
+  would join a list with "/").
 - Matching: the recording ID (cyanrip's `musicbrainz_trackid`) decides;
   without it, disc and track number, only when the title fits (equal
   apart from case and spacing; lyrembed's rule): a wrong ISRC sends a
   Spotify song to the wrong file, a missing one only leaves it unmatched.
+  A track number is the position on the disc or the number printed on the
+  release (`ReleaseTrack.printed`: two five-track discs print 6-10 on the
+  second, and cyanrip numbers the files so); where both fit, the title
+  decides.
+- MusicBrainz IDs are taken out of the tag's value (`isrc._mbid`): a rip
+  had `MUSICBRAINZ_ALBUMID=<id>` as its value.
+- MusicBrainz refusing (503) is waited out longer than in the cover
+  lookups (`isrc.BUSY_WAITS`, 10 s to 2 min, or Retry-After, about 4 min in
+  all, said through `ui` by `app.add_isrcs`): Picard working at the same
+  time is enough, and the owner's lyrembed runs failed with the short
+  retries. Cover lookups keep `MB_RETRIES`: someone waits at the page.
 - Never replaced: any ISRC the file has, also an M4A's iTunes `xid `
   (`provider:isrc:CODE`); `isrc.write` reads each file again first. Tags
-  as Picard writes them (`TagFile.add_isrc`): Vorbis `ISRC`, ID3 `TSRC`,
-  MP4 `----:com.apple.iTunes:ISRC`. `add_isrc` is the one place cdport
+  as Picard writes them (`TagFile.add_isrcs`): Vorbis `ISRC`, ID3 `TSRC`,
+  MP4 `----:com.apple.iTunes:ISRC`. `add_isrcs` is the one place cdport
   adds a key the file did not have.
 
 ### D-Bus

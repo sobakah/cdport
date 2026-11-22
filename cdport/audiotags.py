@@ -144,10 +144,11 @@ class TagFile:
         (an M4A from the iTunes Store has it only in its `xid ` atom)."""
         raise NotImplementedError
 
-    def add_isrc(self, isrc: str) -> None:
-        """Give a file without an ISRC one, under Picard's name for its
-        format, which Jewelcase reads (Vorbis ISRC, ID3 TSRC, MP4
-        ----:com.apple.iTunes:ISRC). Unlike `set_other`, this adds a tag."""
+    def add_isrcs(self, isrcs: list[str]) -> list[str]:
+        """Give a file without an ISRC its recording's, under Picard's name
+        for its format, which Jewelcase reads (Vorbis ISRC, ID3 TSRC, MP4
+        ----:com.apple.iTunes:ISRC); returns those written. Unlike
+        `set_other`, this adds a tag."""
         raise NotImplementedError
 
     def save(self) -> None:
@@ -254,8 +255,9 @@ class VorbisTags(TagFile):
     def isrcs(self) -> list[str]:
         return [v for v in self._get("isrc") if v.strip()]
 
-    def add_isrc(self, isrc: str) -> None:
-        self._set("isrc", [isrc])
+    def add_isrcs(self, isrcs: list[str]) -> list[str]:
+        self._set("isrc", list(isrcs))
+        return list(isrcs)
 
 
 class FlacTags(VorbisTags):
@@ -417,12 +419,17 @@ class Id3Tags(TagFile):
         tags = self.audio.tags
         return [v for f in (tags.getall("TSRC") if tags is not None else []) for v in _clean(f.text) if v.strip()]
 
-    def add_isrc(self, isrc: str) -> None:
+    def add_isrcs(self, isrcs: list[str]) -> list[str]:
         from mutagen.id3 import TSRC
 
+        had_tags = self.audio.tags is not None
         tags = self._tags()
+        # ID3v2.3 has no lists in text frames (mutagen would join them with
+        # "/"): the first only. _save keeps the version the file has.
+        values = list(isrcs) if not had_tags or tags.version[1] != 3 else list(isrcs[:1])
         tags.delall("TSRC")
-        tags.add(TSRC(encoding=3, text=[isrc]))
+        tags.add(TSRC(encoding=3, text=values))
+        return values
 
     def _save(self) -> None:
         version = self.audio.tags.version[1] if self.audio.tags is not None else 4
@@ -566,10 +573,12 @@ class Mp4Tags(TagFile):
                  for m in [_XID_ISRC.search(v)] if m]
         return own + store
 
-    def add_isrc(self, isrc: str) -> None:
+    def add_isrcs(self, isrcs: list[str]) -> list[str]:
         from mutagen.mp4 import AtomDataType, MP4FreeForm
 
-        self._put(self._tags(), _MP4_ISRC, [MP4FreeForm(isrc.encode("utf-8"), dataformat=AtomDataType.UTF8)])
+        self._put(self._tags(), _MP4_ISRC, [MP4FreeForm(code.encode("utf-8"), dataformat=AtomDataType.UTF8)
+                                             for code in isrcs])
+        return list(isrcs)
 
 
 _MP4_ISRC = _FREEFORM + "ISRC"

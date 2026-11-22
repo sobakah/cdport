@@ -867,7 +867,9 @@ def add_isrcs(folder: Path) -> None:
     for release in isrc.releases_to_look_up(tracks):
         ui.dim("Looking up the tracks' ISRCs on MusicBrainz…")
         try:
-            found = isrc.fetch(release)
+            found = isrc.fetch(release, on_busy=lambda seconds: ui.dim(
+                f"MusicBrainz is limiting requests (MusicBrainz Picard working at the same time counts too); "
+                f"asking again in {seconds:g} s…"))
         except cover.NotFound:
             ui.warn(f"MusicBrainz does not have the release {release} (any more), so the tracks get no ISRCs.")
             continue
