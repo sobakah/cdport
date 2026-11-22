@@ -639,6 +639,19 @@ copies see a release as soon as its tag is pushed.
 
 ## Open items
 
+- **ISRCs for new rips** (the owner's idea, 2026-11-22; not designed yet): when the
+  MusicBrainz release is known, fetch its recordings' ISRCs and write one into each track
+  cyanrip left without (the disc's own ISRC, when cyanrip found one, wins). Files already
+  ripped get theirs from lyrembed (its Open items).
+  Why: Jewelcase and Jewelcase Mobile match Spotify playlist songs to library files by ISRC
+  first, and most of the owner's files have none (fewer than one in ten in 2026;
+  cyanrip writes an ISRC only when the CD has it). Jewelcase already looks them up for its own
+  database (its CONCEPT.md §9.5, *As built*: one MusicBrainz request per album,
+  `release/<id>?inc=recordings+isrcs`, matched by disc and track number), but never writes music
+  files, so they stay there. Tags to write (Picard's names, which lofty reads as the ISRC in
+  Jewelcase and Jewelcase Mobile): FLAC/Vorbis `ISRC`, ID3 `TSRC`, MP4
+  `----:com.apple.iTunes:ISRC`. Never replace an ISRC a file already has (nor the iTunes
+  `xid ` atom); keep MusicBrainz's one request a second.
 - Report cyanrip's R128 bug upstream (github.com/cyanreg/cyanrip) or send
   the fix (`+ 5` → `- 5` on both lines): only with the owner's go-ahead.
 - Activation by dbus-broker itself (it starts services as transient systemd
