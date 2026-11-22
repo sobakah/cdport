@@ -8,7 +8,7 @@ does not rip, tag or fetch lyrics itself.
 0. Tools    cyanrip, a tag editor, lyrembed: found or not; offers to install cyanrip
    Start    the disc in the drive, an unfinished album, any album folder, or only its tags
 1. Disc     wait for an audio CD, preview the MusicBrainz match (cyanrip -I)
-2. Rip      cyanrip → FLAC with tags, cover, AccurateRip log
+2. Rip      cyanrip → FLAC with tags, cover, AccurateRip log; ISRCs from MusicBrainz
    Cover    offered whenever an album is opened
 3. Tags     cdport's own editor on the page, or Ear Tag, Kid3, Picard; then a tag check
 4. Lyrics   lyrembed, automatic or interactive (on lyrembed's page in the browser)
@@ -256,6 +256,17 @@ offset that at least 4 tracks confirm is saved without asking.
 cyanrip writes R128 gain tags 10 dB too high next to its correct ReplayGain
 tags, and players that prefer R128 tags would play the album too loud. cdport
 deletes the R128 tags after each rip; the ReplayGain tags say the same.
+
+### ISRCs
+
+cyanrip writes a track's ISRC only when the disc carries it, which few discs
+do. When the rip has a MusicBrainz release, cdport asks MusicBrainz once for
+the release's recordings and gives each track without an ISRC the first one
+MusicBrainz lists for its recording (tag `ISRC`; `TSRC` in MP3, the iTunes
+`ISRC` atom in M4A). An ISRC from the disc is never replaced, and a disc
+whose tracks all have one is not looked up. Players that match streaming
+playlists to your files, Jewelcase among them, find songs by their ISRC
+first. A failed lookup is reported and the album goes on without ISRCs.
 
 ### Several releases for one disc
 

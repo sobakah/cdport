@@ -10,8 +10,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import (config, cover, covertool, disc, install, library, lyrics, musicbrainz, proc, rip, selfupdate,
-               state, tags, tools, ui)
+from . import (config, cover, covertool, disc, install, isrc, library, lyrics, musicbrainz, proc, rip,
+               selfupdate, state, tags, tools, ui)
 from .config import expand
 from .state import AlbumState
 
@@ -800,6 +800,7 @@ def preview_and_rip(session: Session, device: str) -> AlbumState | None:
             ui.warn(f"cyanrip also left files in {leftover}; check them.")
         if fast:
             check_fast_rip(session, folder, device, release=release, no_mb=no_mb, typed=typed)
+        add_isrcs(folder)
         session.forget_one_time_offset()
         if submission_url:
             ui.info(f"To add this disc to MusicBrainz later: {submission_url}")
@@ -855,6 +856,35 @@ def check_fast_rip(session: Session, folder: Path, device: str, *, release: str,
             ui.success("AccurateRip now confirms every track.")
         return  # the re-rip ejected the disc (-Q) if configured
     eject_disc(device, eject)
+
+
+def add_isrcs(folder: Path) -> None:
+    """After a rip (and its secure re-rip): ISRCs from MusicBrainz for the
+    tracks cyanrip left without one. A failed lookup costs only the ISRCs."""
+    tracks, problems = isrc.read(sorted(folder.iterdir()))
+    for problem in problems:
+        ui.warn(f"No ISRC for this file: {problem}")
+    for release in isrc.releases_to_look_up(tracks):
+        ui.dim("Looking up the tracks' ISRCs on MusicBrainz…")
+        try:
+            found = isrc.fetch(release)
+        except cover.NotFound:
+            ui.warn(f"MusicBrainz does not have the release {release} (any more), so the tracks get no ISRCs.")
+            continue
+        except cover.CoverError as exc:
+            ui.warn(f"Cannot look up ISRCs on MusicBrainz, so the tracks get none: {exc}")
+            continue
+        plan = isrc.match(tracks, release, found)
+        written, problems = isrc.write(plan)
+        for problem in problems:
+            ui.warn(f"No ISRC written: {problem}")
+        if written:
+            ui.success(f"Added ISRCs from MusicBrainz to {len(written)} track(s).")
+        if plan.without:
+            ui.dim(f"MusicBrainz has no ISRC for {len(plan.without)} track(s).")
+        if plan.unmatched:
+            ui.warn(f"No ISRC for {', '.join(p.name for p in plan.unmatched)}: no track of the "
+                    "MusicBrainz release has that recording, or disc, number and title.")
 
 
 def eject_disc(device: str, eject: bool) -> None:

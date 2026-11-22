@@ -73,6 +73,16 @@ def no_update_check(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    """Fail a test that would reach MusicBrainz or the Cover Art Archive:
+    since a rip looks up ISRCs, any ripped file with a release ID would.
+    Tests fake cover.http_get, or urlopen themselves to test http_get."""
+    def offline(request, timeout=None):
+        raise AssertionError(f"test tried to go online: {getattr(request, 'full_url', request)}")
+    monkeypatch.setattr(cover.urllib.request, "urlopen", offline)
+
+
+@pytest.fixture(autouse=True)
 def not_in_a_container(monkeypatch, tmp_path):
     """The suite runs alike on the host and in a toolbox: no container and
     no image-based host, unless a test makes them (toolbox)."""
@@ -5054,3 +5064,178 @@ def test_in_a_distrobox_the_entry_enters_it(monkeypatch):
     monkeypatch.setenv("CONTAINER_ID", "arch")
     assert container.on_host(["/x/cdport"]) == ["distrobox-enter", "-n", "arch", "--", "/x/cdport"]
     assert container.flatpak_on_host(["kid3", "x"]) == ["kid3", "x"]
+
+
+# --- ISRCs from MusicBrainz after a rip -----------------------------------------
+RELEASE_ID = "11111111-2222-3333-4444-555555555555"
+
+
+def mb_release(*media):
+    """A MusicBrainz release with recordings and ISRCs: one list of
+    (recording ID, [ISRCs]) or (recording ID, [ISRCs], title) per medium."""
+    return {"id": RELEASE_ID, "media": [
+        {"position": disc, "tracks": [{"position": n, "title": (rest or [""])[0],
+                                       "recording": {"id": rec, "isrcs": isrcs}}
+                                      for n, (rec, isrcs, *rest) in enumerate(tracks, 1)]}
+        for disc, tracks in enumerate(media, 1)]}
+
+
+def fake_musicbrainz(monkeypatch, release):
+    """cover.http_get answering with *release*; returns the URLs asked for."""
+    asked = []
+
+    def http_get(url, timeout=20):
+        asked.append(url)
+        if isinstance(release, Exception):
+            raise release
+        return json.dumps(release).encode()
+    monkeypatch.setattr(cover, "http_get", http_get)
+    return asked
+
+
+def flac_isrcs(path: Path) -> list[str]:
+    import mutagen.flac
+    return mutagen.flac.FLAC(path).get("isrc", [])
+
+
+def isrc_rip_session(tmp_path, monkeypatch, tracks):
+    """A secure rip that leaves work/Album with FLACs tagged as cyanrip tags
+    them; *tracks* holds each file's extra tags."""
+    session = offset_session(tmp_path, offset=6)
+    session.work_dir = tmp_path / "work"
+    monkeypatch.setattr(app.rip, "preview", lambda *a, **k: rip.Preview(0, []))
+
+    def fake_rip(cyanrip, cfg, work_dir, **kwargs):
+        folder = work_dir / "Album"
+        folder.mkdir(parents=True)
+        for n, extra in enumerate(tracks, 1):
+            make_flac(folder / f"{n:02d}.flac", tracknumber=str(n), discnumber="1",
+                      musicbrainz_albumid=RELEASE_ID, **extra)
+        return folder, None
+    monkeypatch.setattr(app.rip, "rip", fake_rip)
+    monkeypatch.setattr(app.disc, "eject", lambda device: None)
+    return session
+
+
+def test_isrc_of_a_recording_is_its_first_valid_one():
+    from cdport import isrc
+    data = mb_release([("REC-A", ["bad", " usrc17607839 ", "GBAYE0000351"]), ("rec-b", []),
+                       ("rec-c", ["TOOSHORT"])])
+    found = isrc.parse_release(data)
+    assert [(t.disc, t.number, t.recording, t.isrc) for t in found] == [
+        (1, 1, "rec-a", "USRC17607839"), (1, 2, "rec-b", ""), (1, 3, "rec-c", "")]
+    assert isrc.parse_release({}) == [] and isrc.parse_release({"media": [{"position": None}]}) == []
+
+
+def test_a_rip_gets_isrcs_from_musicbrainz_and_keeps_the_discs_own(tmp_path, monkeypatch, capsys):
+    session = isrc_rip_session(tmp_path, monkeypatch, [
+        {"isrc": "KRA401700001", "musicbrainz_trackid": "rec-1"},  # read from the disc: stays
+        {"musicbrainz_trackid": "rec-2"},
+        {"musicbrainz_trackid": "rec-merged-since"},               # by its position instead
+        {"musicbrainz_trackid": "rec-4"},                          # MusicBrainz has none
+        {"musicbrainz_trackid": "rec-gone", "title": "Not This"},  # its position has another song
+    ])
+    asked = fake_musicbrainz(monkeypatch, mb_release(
+        [("rec-1", ["USRC17607839"]), ("rec-2", ["GBAYE0000351"]), ("rec-3", ["NLA507900001"]), ("rec-4", []),
+         ("rec-5", ["USRC17607840"], "Song Five")]))
+    feed_input(monkeypatch, ["r"])
+    album = app.preview_and_rip(session, "/dev/sr0")
+    folder = album.folder
+    assert asked == [f"{cover.MB_URL}/release/{RELEASE_ID}?inc=recordings+isrcs&fmt=json"]
+    assert [flac_isrcs(folder / f"0{n}.flac") for n in range(1, 6)] == [
+        ["KRA401700001"], ["GBAYE0000351"], ["NLA507900001"], [], []]
+    out = capsys.readouterr().out
+    assert "Added ISRCs from MusicBrainz to 2 track(s)." in out
+    assert "MusicBrainz has no ISRC for 1 track(s)." in out
+    assert "No ISRC for 05.flac: no track of the MusicBrainz release" in out
+
+
+def test_a_tracks_recording_decides_over_its_position(tmp_path):
+    """MusicBrainz numbering a track differently must not give it the ISRC
+    of another song: without the recording, the title has to fit too; a
+    file without a disc number of a two-disc release gets one only through
+    its recording."""
+    from cdport import isrc
+    folder = tmp_path / "Album"
+    folder.mkdir()
+    make_flac(folder / "01.flac", tracknumber="1", discnumber="2/2", musicbrainz_albumid=RELEASE_ID,
+              musicbrainz_trackid="rec-b")
+    make_flac(folder / "02.flac", tracknumber="2", musicbrainz_albumid=RELEASE_ID)
+    make_flac(folder / "03.flac", tracknumber="1", musicbrainz_albumid=RELEASE_ID, musicbrainz_trackid="rec-a")
+    make_flac(folder / "04.flac", tracknumber="1", musicbrainz_albumid="another-release")
+    make_flac(folder / "05.flac", tracknumber="1", discnumber="2", musicbrainz_albumid=RELEASE_ID,
+              title="Another Song")
+    make_flac(folder / "06.flac", tracknumber="1", discnumber="2", musicbrainz_albumid=RELEASE_ID,
+              title="  the  song")
+    release = isrc.parse_release(mb_release([("rec-a", ["USRC17607839"])],
+                                            [("rec-x", ["GBAYE0000351"], "The Song"),
+                                             ("rec-b", ["NLA507900001"])]))
+    tracks, problems = isrc.read(sorted(folder.iterdir()))
+    plan = isrc.match(tracks, RELEASE_ID.upper(), release)
+    assert problems == []
+    assert {p.name: v for p, v in plan.write.items()} == {
+        "01.flac": "NLA507900001", "03.flac": "USRC17607839", "06.flac": "GBAYE0000351"}
+    assert [p.name for p in plan.unmatched] == ["02.flac", "05.flac"]  # 04 is another release's
+    assert plan.without == []
+
+
+def test_no_isrc_lookup_without_a_release_or_a_track_lacking_one(tmp_path, monkeypatch):
+    fake_musicbrainz(monkeypatch, AssertionError("nothing to look up"))
+    folder = tmp_path / "Album"
+    folder.mkdir()
+    make_flac(folder / "01.flac", tracknumber="1", musicbrainz_albumid=RELEASE_ID, isrc="KRA401700001")
+    make_flac(folder / "02.flac", tracknumber="2")  # typed-in tags or -N: no release
+    (folder / "Album.log").write_text("log")
+    app.add_isrcs(folder)
+    assert flac_isrcs(folder / "02.flac") == []
+
+
+def test_a_failed_isrc_lookup_only_costs_the_isrcs(tmp_path, monkeypatch, capsys):
+    session = isrc_rip_session(tmp_path, monkeypatch, [{}, {}])
+    fake_musicbrainz(monkeypatch, cover.CoverError("musicbrainz.org: timed out"))
+    feed_input(monkeypatch, ["r"])
+    album = app.preview_and_rip(session, "/dev/sr0")
+    assert album is not None and album.done == ["rip"]
+    assert flac_isrcs(album.folder / "01.flac") == []
+    assert "Cannot look up ISRCs on MusicBrainz, so the tracks get none: musicbrainz.org: timed out" in \
+        capsys.readouterr().out
+
+
+def test_isrc_written_meanwhile_is_not_replaced(tmp_path):
+    from cdport import isrc
+    track = make_flac(tmp_path / "01.flac", tracknumber="1")
+    plan = isrc.Plan(write={track: "USRC17607839"})
+    make_flac(track, tracknumber="1", isrc="KRA401700001")
+    assert isrc.write(plan) == ([], []) and flac_isrcs(track) == ["KRA401700001"]
+
+
+@pytest.mark.parametrize("ext", OTHER_FORMATS)
+def test_isrcs_in_other_formats_under_picards_names(tmp_path, ext):
+    import mutagen
+    from cdport import audiotags, isrc
+
+    folder = _album_in(tmp_path / "Album", ext, titles=("One",))
+    path = next(folder.iterdir())
+    tags = audiotags.open_file(path)
+    assert tags.isrcs() == []
+    tags.add_isrc("USRC17607839")
+    tags.save()
+    assert audiotags.open_file(path).isrcs() == ["USRC17607839"]
+    raw = mutagen.File(path).tags
+    key = {"mp3": "TSRC", "m4a": "----:com.apple.iTunes:ISRC"}.get(ext, "isrc")
+    assert key in raw
+    assert audiotags.open_file(path).other()["ISRC"] == ["USRC17607839"]  # as the tag editor lists it
+    tracks, _ = isrc.read([path])
+    assert tracks[0].isrcs == ["USRC17607839"] and tracks[0].number == 1
+
+
+def test_an_itunes_isrc_counts_as_the_files_own(tmp_path):
+    import mutagen
+    from cdport import audiotags
+
+    folder = _album_in(tmp_path / "Album", "m4a", titles=("One",))
+    path = next(folder.iterdir())
+    audio = mutagen.File(path)
+    audio.tags["xid "] = ["Some Label:isrc:USRC17607839"]
+    audio.save()
+    assert audiotags.open_file(path).isrcs() == ["USRC17607839"]

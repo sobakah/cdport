@@ -112,7 +112,8 @@ cdport
  ├─ 0. Tools      cyanrip, a tag editor, lyrembed: find them, offer to install
  ├─ Start         a disc, an unfinished album, any album folder, or only its tags
  ├─ 1. Disc       audio CD in the drive? preview the MusicBrainz match
- ├─ 2. Rip        cyanrip → FLAC with tags, cover, AccurateRip log
+ ├─ 2. Rip        cyanrip → FLAC with tags, cover, AccurateRip log;
+ │                ISRCs from MusicBrainz
  ├─ Cover         offered whenever an album is opened
  ├─ 3. Tags       cdport's editor (page) or Ear Tag/Kid3/Picard
  ├─ 4. Lyrics     lyrembed, automatic or interactive
@@ -126,8 +127,9 @@ cdport
   interrupts), `config`, `ui` (every message and question), `cli`,
   `install` (cyanrip: packages, source build, update check), `selfupdate`
   (cdport's own updates), `cover` (Cover Art Archive/MusicBrainz, no UI),
-  `musicbrainz` (release search for unknown discs, no UI), `covertool` (the
-  cover step and `cdport-cover`), `desktop` (app-menu entry), `web` (the
+  `musicbrainz` (release search for unknown discs, no UI), `isrc` (ISRCs
+  from MusicBrainz after a rip, no UI), `covertool` (the cover step and
+  `cdport-cover`), `desktop` (app-menu entry), `web` (the
   page), `tageditor` (the page's editor, no UI), `audiotags` (FLAC, MP3,
   Ogg, Opus and M4A tags under one set of names, no UI), `dbus_service`,
   `container` (toolbox and distrobox, lyrembed's, unchanged; see the
@@ -380,6 +382,30 @@ with `WebFront`.
   gone by then: `_say` survives the closed pipe, and lyrembed must not end
   cdport, which would cut a rip off.
 
+### ISRCs
+
+- After every rip (after the fast rip's secure re-rip), `app.add_isrcs`:
+  one request `release/<id>?inc=recordings+isrcs` (through
+  `cover.http_get`, so rate limit and 503 retries apply) per
+  `MUSICBRAINZ_ALBUMID` among the tracks still without an ISRC; a disc
+  whose tracks all have one (cyanrip reads the disc's) costs no request.
+  No question and no setting: it only adds a missing tag. A failed lookup
+  is a warning; the album goes on. Only new rips: older albums are
+  lyrembed's job (its ISRC mode, in the works there on 2026-11-22).
+- A track gets its recording's **first** ISRC, the one Jewelcase keeps in
+  its database (lofty reads the first value anyway). lyrembed writes all
+  of a recording's ISRCs; the two differ on purpose until the owner says
+  otherwise.
+- Matching: the recording ID (cyanrip's `musicbrainz_trackid`) decides;
+  without it, disc and track number, only when the title fits (equal
+  apart from case and spacing; lyrembed's rule): a wrong ISRC sends a
+  Spotify song to the wrong file, a missing one only leaves it unmatched.
+- Never replaced: any ISRC the file has, also an M4A's iTunes `xid `
+  (`provider:isrc:CODE`); `isrc.write` reads each file again first. Tags
+  as Picard writes them (`TagFile.add_isrc`): Vorbis `ISRC`, ID3 `TSRC`,
+  MP4 `----:com.apple.iTunes:ISRC`. `add_isrc` is the one place cdport
+  adds a key the file did not have.
+
 ### D-Bus
 
 For Jewelcase, which may run as a Flatpak: the companion tools stay pipx
@@ -440,7 +466,9 @@ folder, so everything a caller needs has a call. The calls are in
   eject ioctl to `/dev/sr0` before `no_real_tools` caught the `eject`
   fallback.
 - `no_update_check` (autouse) makes `selfupdate.latest` fail; a test that
-  needs an answer fakes it.
+  needs an answer fakes it. `no_network` (autouse) makes `urlopen` fail:
+  since a rip looks up ISRCs, a fake rip whose files carry a release ID
+  would go online; fake `cover.http_get`.
 - `make_flac` writes a header-only FLAC mutagen can tag; the other formats
   come from `tests/data/`.
 - `feed_input` answers prompts in order and fails on an unexpected one; the
@@ -643,19 +671,6 @@ copies see a release as soon as its tag is pushed.
 
 ## Open items
 
-- **ISRCs for new rips** (the owner's idea, 2026-11-22; not designed yet): when the
-  MusicBrainz release is known, fetch its recordings' ISRCs and write one into each track
-  cyanrip left without (the disc's own ISRC, when cyanrip found one, wins). Files already
-  ripped get theirs from lyrembed (its Open items).
-  Why: Jewelcase and Jewelcase Mobile match Spotify playlist songs to library files by ISRC
-  first, and most of the owner's files have none (fewer than one in ten in 2026;
-  cyanrip writes an ISRC only when the CD has it). Jewelcase already looks them up for its own
-  database (its CONCEPT.md §9.5, *As built*: one MusicBrainz request per album,
-  `release/<id>?inc=recordings+isrcs`, matched by disc and track number), but never writes music
-  files, so they stay there. Tags to write (Picard's names, which lofty reads as the ISRC in
-  Jewelcase and Jewelcase Mobile): FLAC/Vorbis `ISRC`, ID3 `TSRC`, MP4
-  `----:com.apple.iTunes:ISRC`. Never replace an ISRC a file already has (nor the iTunes
-  `xid ` atom); keep MusicBrainz's one request a second.
 - Report cyanrip's R128 bug upstream (github.com/cyanreg/cyanrip) or send
   the fix (`+ 5` → `- 5` on both lines): only with the owner's go-ahead.
 - Activation by dbus-broker itself (it starts services as transient systemd

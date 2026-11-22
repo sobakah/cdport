@@ -139,6 +139,17 @@ class TagFile:
         booklet) stay."""
         raise NotImplementedError
 
+    def isrcs(self) -> list[str]:
+        """The ISRCs the file has, wherever taggers keep one in its format
+        (an M4A from the iTunes Store has it only in its `xid ` atom)."""
+        raise NotImplementedError
+
+    def add_isrc(self, isrc: str) -> None:
+        """Give a file without an ISRC one, under Picard's name for its
+        format, which Jewelcase reads (Vorbis ISRC, ID3 TSRC, MP4
+        ----:com.apple.iTunes:ISRC). Unlike `set_other`, this adds a tag."""
+        raise NotImplementedError
+
     def save(self) -> None:
         try:
             self._save()
@@ -239,6 +250,12 @@ class VorbisTags(TagFile):
         self._set("coverart", [])
         self._set("coverartmime", [])
         self._set("metadata_block_picture", keep + [base64.b64encode(_flac_picture(data, mime).write()).decode("ascii")])
+
+    def isrcs(self) -> list[str]:
+        return [v for v in self._get("isrc") if v.strip()]
+
+    def add_isrc(self, isrc: str) -> None:
+        self._set("isrc", [isrc])
 
 
 class FlacTags(VorbisTags):
@@ -396,6 +413,17 @@ class Id3Tags(TagFile):
         desc = next(d for d in ("", "Front cover", "Front cover (cdport)") if d not in taken)
         tags.add(APIC(encoding=3, mime=mime, type=FRONT_COVER, desc=desc, data=data))
 
+    def isrcs(self) -> list[str]:
+        tags = self.audio.tags
+        return [v for f in (tags.getall("TSRC") if tags is not None else []) for v in _clean(f.text) if v.strip()]
+
+    def add_isrc(self, isrc: str) -> None:
+        from mutagen.id3 import TSRC
+
+        tags = self._tags()
+        tags.delall("TSRC")
+        tags.add(TSRC(encoding=3, text=[isrc]))
+
     def _save(self) -> None:
         version = self.audio.tags.version[1] if self.audio.tags is not None else 4
         self.audio.save(v2_version=3 if version == 3 else 4)
@@ -530,6 +558,22 @@ class Mp4Tags(TagFile):
 
         kind = MP4Cover.FORMAT_PNG if mime == "image/png" else MP4Cover.FORMAT_JPEG
         self._put(self._tags(), "covr", [MP4Cover(data, imageformat=kind)] + self._raw("covr")[1:])
+
+    def isrcs(self) -> list[str]:
+        own = [v for v in _freeform_text(self._raw(_MP4_ISRC)) or [] if v.strip()]
+        # The iTunes Store's "provider:isrc:CODE" ("label:upc:..." is the album's).
+        store = [m.group(1) for v in self._raw("xid ") if isinstance(v, str)
+                 for m in [_XID_ISRC.search(v)] if m]
+        return own + store
+
+    def add_isrc(self, isrc: str) -> None:
+        from mutagen.mp4 import AtomDataType, MP4FreeForm
+
+        self._put(self._tags(), _MP4_ISRC, [MP4FreeForm(isrc.encode("utf-8"), dataformat=AtomDataType.UTF8)])
+
+
+_MP4_ISRC = _FREEFORM + "ISRC"
+_XID_ISRC = re.compile(r":isrc:([A-Za-z0-9]{12})\b")
 
 
 def _freeform_text(values: list) -> list[str] | None:
